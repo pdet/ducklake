@@ -80,6 +80,16 @@ public:
 	DuckLakeOptionsFunction();
 };
 
+class DuckLakeSetCommitMessage : public TableFunction {
+public:
+	DuckLakeSetCommitMessage();
+};
+
+class DuckLakeCurrentSnapshotFunction : public BaseMetadataFunction {
+public:
+	DuckLakeCurrentSnapshotFunction();
+};
+
 class DuckLakeListFilesFunction : public BaseMetadataFunction {
 public:
 	DuckLakeListFilesFunction();

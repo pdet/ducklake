@@ -69,6 +69,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	} else if (option == "data_inlining_row_limit") {
 		auto data_inlining_row_limit = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 		value = to_string(data_inlining_row_limit);
+	} else if (option == "require_commit_message") {
+		value = val.GetValue<bool>() ? "true" : "false";
 	} else {
 		throw NotImplementedException("Unsupported option %s", option);
 	}

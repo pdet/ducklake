@@ -90,7 +90,8 @@ public:
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	virtual void WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void InsertSnapshot(DuckLakeSnapshot commit_snapshot);
-	virtual void WriteSnapshotChanges(DuckLakeSnapshot commit_snapshot, const SnapshotChangeInfo &change_info);
+	virtual void WriteSnapshotChanges(DuckLakeSnapshot commit_snapshot, const SnapshotChangeInfo &change_info,
+	                                  const DuckLakeSnapshotCommit &commit_info);
 	virtual void UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();

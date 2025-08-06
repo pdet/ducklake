@@ -355,7 +355,7 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 		change_info.changes_made += "compacted_table:";
 		change_info.changes_made += to_string(table_id.index);
 	}
-	metadata_manager->WriteSnapshotChanges(commit_state.commit_snapshot, change_info);
+	metadata_manager->WriteSnapshotChanges(commit_state.commit_snapshot, change_info, commit_info);
 }
 
 void DuckLakeTransaction::CleanupFiles() {
@@ -1198,6 +1198,12 @@ vector<DuckLakeDeletedInlinedDataInfo> DuckLakeTransaction::GetNewInlinedDeletes
 void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                         TransactionChangeInformation &transaction_changes) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
+	if (ducklake_catalog.IsCommitInfoRequired() && !commit_info.is_commit_info_set) {
+		throw InvalidConfigurationException(
+		    "Commit Information for the snapshot is required but has not been provided. \n * Provide the information "
+		    "with \"CALL ducklake.set_commit_message('author_name', 'commit_message'); \n * Set the required commit "
+		    "message to false with \"CALL ducklake.set_option('require_commit_message', False)\" '\"");
+	}
 	// drop entries
 	if (!dropped_tables.empty()) {
 		metadata_manager->DropTables(commit_snapshot, dropped_tables);
@@ -1336,6 +1342,10 @@ bool RetryOnError(const string &original_message) {
 	return false;
 }
 
+void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option) {
+	commit_info = option;
+}
+
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade() && !PerformedCompaction()) {
 		// read-only transactions don't need to do anything
@@ -1461,6 +1471,9 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
 	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
 	query = StringUtil::Replace(query, "{NEXT_FILE_ID}", to_string(snapshot.next_file_id));
+	query = StringUtil::Replace(query, "{AUTHOR}", commit_info.author.ToSQLString());
+	query = StringUtil::Replace(query, "{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
+	query = StringUtil::Replace(query, "{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
 	return Query(std::move(query));
 }
 
