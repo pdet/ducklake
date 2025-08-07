@@ -99,13 +99,23 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table
 CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT);
 UPDATE {METADATA_CATALOG}.ducklake_partition_column SET column_id = (SELECT LIST(column_id ORDER BY column_order) FROM {METADATA_CATALOG}.ducklake_column WHERE table_id = ducklake_partition_column.table_id AND parent_column IS NULL AND end_snapshot IS NULL)[ducklake_partition_column.column_id + 1];
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'version';
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN author VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN commit_message VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN commit_extra_info VARCHAR DEFAULT NULL
 )";
 	auto result = transaction.Query(migrate_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.1 to v0.2:");
+	}
+}
+
+void DuckLakeMetadataManager::MigrateV02() {
+	string migrate_query = R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN author VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN commit_message VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN commit_extra_info VARCHAR DEFAULT NULL;
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.3-dev1' WHERE key = 'version';
+	)";
+	auto result = transaction.Query(migrate_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3:");
 	}
 }
 

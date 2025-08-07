@@ -117,6 +117,8 @@ public:
 
 	virtual void MigrateV01();
 
+	virtual void MigrateV02();
+
 	string LoadPath(string path);
 	string StorePath(string path);
 
