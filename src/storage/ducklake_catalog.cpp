@@ -609,16 +609,16 @@ void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	auto &value = option.option.value;
 	if (option.table_id.IsValid()) {
 		// scoped to a table
-		options.table_options[option.table_id].emplace(key, value);
+		options.table_options[option.table_id][key] = value;
 		return;
 	}
 	if (option.schema_id.IsValid()) {
 		// scoped to a schema
-		options.schema_options[option.schema_id].emplace(key, value);
+		options.schema_options[option.schema_id][key] = value;
 		return;
 	}
 	// scoped globally
-	options.config_options.emplace(key, value);
+	options.config_options[key] = value;
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,

@@ -112,6 +112,10 @@ public:
 	DuckLakeEncryption Encryption() const {
 		return options.encryption;
 	}
+	bool IsCommitInfoRequired() const {
+		auto require = GetConfigOption<string>("require_commit_message", {}, {}, "false");
+		return require == "true" ? true : false;
+	}
 	void SetEncryption(DuckLakeEncryption encryption);
 	// Generate an encryption key for writing (or empty if encryption is disabled)
 	string GenerateEncryptionKey(ClientContext &context) const;

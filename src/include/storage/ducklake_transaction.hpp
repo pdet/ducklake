@@ -119,6 +119,7 @@ public:
 	bool FileIsDropped(const string &path) const;
 
 	string GenerateUUID() const;
+	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 	static string GenerateUUIDv7();
 
 	//! Returns the current version of the catalog:
@@ -179,6 +180,7 @@ private:
 	idx_t local_catalog_id;
 	//! New tables added by this transaction
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
+	DuckLakeSnapshotCommit commit_info;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
 	unordered_map<string, DataFileIndex> dropped_files;

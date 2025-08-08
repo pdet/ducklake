@@ -61,6 +61,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	DuckLakeAddDataFilesFunction add_files;
 	ExtensionUtil::RegisterFunction(instance, add_files);
+	DuckLakeSetCommitMessage set_commit_message;
+	ExtensionUtil::RegisterFunction(instance, set_commit_message);
+
+	DuckLakeCurrentSnapshotFunction current_snapshot;
+	ExtensionUtil::RegisterFunction(instance, current_snapshot);
 
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
