@@ -1,3 +1,4 @@
+#include "../../duckdb/extension/core_functions/include/core_functions/scalar/date_functions.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"

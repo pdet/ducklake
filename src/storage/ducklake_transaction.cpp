@@ -14,6 +14,7 @@
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/common/thread.hpp"
+#include "duckdb/main/database.hpp"
 
 namespace duckdb {
 
@@ -47,6 +48,9 @@ DuckLakeTransaction::~DuckLakeTransaction() {
 }
 
 void DuckLakeTransaction::Start() {
+	auto &connection = GetConnectionBase();
+	auto result = connection.Query("SELECT now() AT TIME ZONE \'UTC\';");
+	transaction_start_timestamp = result->GetValue(0, 0);
 }
 
 void DuckLakeTransaction::Commit() {
@@ -82,6 +86,16 @@ Connection &DuckLakeTransaction::GetConnection() {
 		connection->BeginTransaction();
 	}
 	return *connection;
+}
+
+Connection &DuckLakeTransaction::GetConnectionBase() {
+	lock_guard<mutex> lock(connection_base_lock);
+	if (!connection_base) {
+		// This is hacky
+		DuckDB dbb;
+		connection_base = make_uniq<Connection>(dbb);
+	}
+	return *connection_base;
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() {

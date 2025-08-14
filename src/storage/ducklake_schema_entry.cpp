@@ -312,7 +312,11 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		// get a list of all dependents
 		vector<reference<CatalogEntry>> dependents;
 		for (auto &entry : tables.GetEntries()) {
-			dependents.push_back(*entry.second);
+			const auto &dropped_tables = transaction.GetDroppedTables();
+			const auto &ducklake_table = entry.second->Cast<DuckLakeTableEntry>();
+			if (dropped_tables.find(ducklake_table.GetTableId()) == dropped_tables.end()) {
+				dependents.push_back(*entry.second);
+			}
 		}
 		if (dependents.empty()) {
 			return;

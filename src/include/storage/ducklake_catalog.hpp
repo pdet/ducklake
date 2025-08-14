@@ -142,6 +142,9 @@ public:
 
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
+	bool IsInitialized() const {
+		return initialized;
+	}
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;

@@ -19,6 +19,7 @@
 #include "duckdb/main/database_path_and_type.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/tableref/at_clause.hpp"
 
 namespace duckdb {
 
@@ -530,7 +531,23 @@ optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransactio
 			}
 		}
 	}
-	auto snapshot = duck_transaction.GetSnapshot(at_clause);
+	auto transaction_start_timestamp = duck_transaction.GetStartTimestamp();
+	DuckLakeSnapshot snapshot;
+	if (!at_clause && !transaction_start_timestamp.IsNull()) {
+		// If an at clause is not defined, we use the start timestamp of the start of the transaction
+		BoundAtClause timestamp_at_clause("timestamp", transaction_start_timestamp);
+		at_clause = &timestamp_at_clause;
+		try {
+			snapshot = duck_transaction.GetSnapshot(at_clause);
+			idx_t i = 0;
+		} catch (...) {
+			at_clause = nullptr;
+		}
+	}
+	if (snapshot.IsNotSet()) {
+		snapshot = duck_transaction.GetSnapshot(at_clause);
+	}
+
 	auto &schemas = GetSchemaForSnapshot(duck_transaction, snapshot);
 	auto entry = schemas.GetEntry<SchemaCatalogEntry>(schema_name);
 	if (!entry) {

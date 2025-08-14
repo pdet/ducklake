@@ -65,6 +65,7 @@ public:
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
 	Connection &GetConnection();
+	Connection &GetConnectionBase();
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause);
@@ -133,10 +134,18 @@ public:
 	string GenerateUUID() const;
 	static string GenerateUUIDv7();
 
+	const set<TableIndex> &GetDroppedTables() {
+		return dropped_tables;
+	}
+
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
 	idx_t GetCatalogVersion();
+
+	Value GetStartTimestamp() const {
+		return transaction_start_timestamp;
+	}
 
 protected:
 	void SetMetadataManager(unique_ptr<DuckLakeMetadataManager> metadata_manager) {
@@ -187,11 +196,14 @@ private:
 	DatabaseInstance &db;
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
+	mutex connection_base_lock;
 	unique_ptr<Connection> connection;
+	unique_ptr<Connection> connection_base;
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	idx_t local_catalog_id;
+	Value transaction_start_timestamp;
 	//! New tables added by this transaction
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;
@@ -209,7 +221,6 @@ private:
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
 	//! New set of transaction-local name maps
 	DuckLakeNameMapSet new_name_maps;
-
 	atomic<idx_t> catalog_version;
 };
 

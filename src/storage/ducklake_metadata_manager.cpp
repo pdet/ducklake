@@ -1764,6 +1764,9 @@ WHERE snapshot_id = (
 	FROM {METADATA_CATALOG}.ducklake_snapshot
 	WHERE snapshot_time <= %s);)",
 		                                              val.DefaultCastAs(LogicalType::VARCHAR).ToSQLString()));
+		auto result_2 = transaction.Query(
+		    StringUtil::Format(R"(SELECT snapshot_id, snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot)"));
+		idx_t i = 0;
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
