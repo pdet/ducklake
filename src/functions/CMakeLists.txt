@@ -9,6 +9,7 @@ add_library(
   ducklake_merge_adjacent_files.cpp
   ducklake_set_commit_message.cpp
   ducklake_current_snapshot.cpp
+  ducklake_last_committed_snapshot.cpp
   ducklake_set_option.cpp
   ducklake_options.cpp
   ducklake_table_changes.cpp
