@@ -67,6 +67,9 @@ static void LoadInternal(DatabaseInstance &instance) {
 	DuckLakeCurrentSnapshotFunction current_snapshot;
 	ExtensionUtil::RegisterFunction(instance, current_snapshot);
 
+	DuckLakeLastCommittedSnapshotFunction last_committed;
+	ExtensionUtil::RegisterFunction(instance, last_committed);
+
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
 	ExtensionUtil::RegisterSecretType(instance, secret_type);
