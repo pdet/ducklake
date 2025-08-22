@@ -1242,8 +1242,8 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, REWRITE_DELETES);
-		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files, REWRITE_DELETES);
 		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files);
+		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files, REWRITE_DELETES);
 	}
 }
 
@@ -1281,7 +1281,8 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 						throw InternalException("Only the first compacted file can have existing partial file info");
 					}
 					new_file.partial_file_info = compacted_file.partial_files;
-				} else {
+				} else if (type == MERGE_ADJACENT_TABLES){
+					// If we are doing file deletion we don't need to do this.
 					DuckLakePartialFileInfo partial_info;
 					partial_info.snapshot_id = compacted_file.file.begin_snapshot;
 					partial_info.max_row_count = row_id_limit;
@@ -1295,8 +1296,9 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 				if (!compacted_file.delete_files.empty()) {
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
-					file_info.start_snapshot_id = compacted_file.file.begin_snapshot;
-					file_info.end_snapshot_id = compacted_file.delete_files.back().begin_snapshot;
+					file_info.start_snapshot = compacted_file.file.begin_snapshot;
+					file_info.delete_file_begin_snapshot = compacted_file.delete_files.back().begin_snapshot;
+					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
 				if (row_id_limit > new_file.row_count) {
 					throw InternalException("Compaction error - row id limit is larger than the row count of the file");

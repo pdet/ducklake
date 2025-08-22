@@ -328,16 +328,13 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		switch (type) {
 		case REWRITE_DELETES: {
 			if (!source.delete_files.empty()) {
-				if (source.delete_files.back().end_snapshot.IsValid()) {
-					continue;
-				}
 				result.delete_file = source.delete_files.back().data;
 			}
 			break;
 		}
 		case MERGE_ADJACENT_TABLES: {
 			if (!source.delete_files.empty() && type == MERGE_ADJACENT_TABLES) {
-				// Merge Adjacent Tables does not support compaction
+				// Merge Adjacent Tables does not support compaction on deletes
 				throw InternalException("FIXME: compact deletions");
 			}
 			break;

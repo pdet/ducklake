@@ -103,7 +103,6 @@ query I
 SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
 ----
 1
-2
 
 query I
 SELECT COUNT(*) from test
@@ -162,7 +161,6 @@ SELECT COUNT(*) FROM GLOB('__TEST_DIR__/ducklake_rewrite_data/**/*')
 6
 
 # Let's check every snapshot has the right answer
-#FIXME what should be the changes?
 query II
 SELECT snapshot_id, changes FROM snapshots();
 ----
