@@ -1345,14 +1345,18 @@ void DuckLakeTransaction::CommitCompaction(DuckLakeSnapshot &commit_snapshot,
                                            TransactionChangeInformation &transaction_changes) {
 	auto compaction_merge_adjacent_changes =
 	    GetCompactionChanges(commit_snapshot, CompactionType::MERGE_ADJACENT_TABLES);
-	metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
-	                                   CompactionType::MERGE_ADJACENT_TABLES);
-	metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files);
+	if (!compaction_merge_adjacent_changes.compacted_files.empty()) {
+		metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
+		                                   CompactionType::MERGE_ADJACENT_TABLES);
+		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files);
+	}
 
 	auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, CompactionType::REWRITE_DELETES);
-	metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files);
-	metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
-	                                   CompactionType::REWRITE_DELETES);
+	if (!compaction_rewrite_delete_changes.compacted_files.empty()) {
+		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files);
+		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
+		                                   CompactionType::REWRITE_DELETES);
+	}
 }
 
 bool RetryOnError(const string &original_message) {
