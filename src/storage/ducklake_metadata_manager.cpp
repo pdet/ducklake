@@ -773,7 +773,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    double deletion_threshold) {
 	auto table_id = table.GetTableId();
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
+	                          "data.end_snapshot, data.mapping_id, snapshot.schema_version, data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
@@ -786,9 +786,16 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
 	}
 	auto query = StringUtil::Format(R"(
-WITH snapshot_ranges AS (
-  SELECT
-	@@ -820,13 +828,13 @@ LEFT JOIN (
+SELECT %s,
+FROM {METADATA_CATALOG}.ducklake_data_file data
+JOIN {METADATA_CATALOG}.ducklake_snapshot snapshot ON (data.begin_snapshot = snapshot.snapshot_id)
+LEFT JOIN (
+	SELECT *
+    FROM {METADATA_CATALOG}.ducklake_delete_file
+    WHERE table_id=%d
+) del USING (data_file_id)
+LEFT JOIN (
+   SELECT data_file_id, LIST(partition_value ORDER BY partition_key_index) keys
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)

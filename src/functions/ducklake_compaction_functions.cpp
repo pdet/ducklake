@@ -360,78 +360,78 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	}
 	if (actionable_source_files.empty()) {
 		return nullptr;
-
-		auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
-		auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
-		multi_file_bind_data.file_list = make_uniq<DuckLakeMultiFileList>(read_info, std::move(files_to_scan));
-
-		// generate the LogicalGet
-		auto &columns = table.GetColumns();
-
-		DuckLakeCopyInput copy_input(context, table);
-		// merge_adjacent_files does not use partitioning information - instead we always merge within partitions
-		copy_input.partition_data = nullptr;
-		// if files are adjacent we don't need to write the row-id to the file
-		if (files_are_adjacent) {
-			copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
-		} else {
-			copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
-		}
-
-		auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
-
-		auto virtual_columns = table.GetVirtualColumns();
-		auto ducklake_scan =
-			make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-								  copy_options.names, std::move(virtual_columns));
-		auto &column_ids = ducklake_scan->GetMutableColumnIds();
-		for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
-			column_ids.emplace_back(i);
-		}
-		if (!files_are_adjacent) {
-			column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
-		}
-		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
-
-		// generate the LogicalCopyToFile
-		auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-												 std::move(copy_options.info));
-
-		auto &fs = FileSystem::GetFileSystem(context);
-		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
-		copy->use_tmp_file = copy_options.use_tmp_file;
-		copy->filename_pattern = std::move(copy_options.filename_pattern);
-		copy->file_extension = std::move(copy_options.file_extension);
-		copy->overwrite_mode = copy_options.overwrite_mode;
-		copy->per_thread_output = copy_options.per_thread_output;
-		copy->file_size_bytes = copy_options.file_size_bytes;
-		copy->rotate = copy_options.rotate;
-		copy->return_type = copy_options.return_type;
-
-		copy->partition_output = copy_options.partition_output;
-		copy->write_partition_columns = copy_options.write_partition_columns;
-		copy->write_empty_file = false;
-		copy->partition_columns = std::move(copy_options.partition_columns);
-		copy->names = std::move(copy_options.names);
-		copy->expected_types = std::move(copy_options.expected_types);
-		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
-		copy->file_size_bytes = optional_idx();
-		copy->rotate = false;
-
-		copy->children.push_back(std::move(ducklake_scan));
-
-		optional_idx target_row_id_start;
-		if (files_are_adjacent) {
-			target_row_id_start = source_files[0].file.row_id_start;
-		}
-
-		// followed by the compaction operator (that writes the results back to the
-		auto compaction = make_uniq<DuckLakeLogicalCompaction>(binder.GenerateTableIndex(), table, std::move(actionable_source_files),
-															   std::move(copy_input.encryption_key), partition_id,
-															   std::move(partition_values), target_row_id_start, type);
-		compaction->children.push_back(std::move(copy));
-		return std::move(compaction);
 	}
+
+	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
+	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
+	multi_file_bind_data.file_list = make_uniq<DuckLakeMultiFileList>(read_info, std::move(files_to_scan));
+
+	// generate the LogicalGet
+	auto &columns = table.GetColumns();
+
+	DuckLakeCopyInput copy_input(context, table);
+	// merge_adjacent_files does not use partitioning information - instead we always merge within partitions
+	copy_input.partition_data = nullptr;
+	// if files are adjacent we don't need to write the row-id to the file
+	if (files_are_adjacent) {
+		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
+	} else {
+		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	}
+
+	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+
+	auto virtual_columns = table.GetVirtualColumns();
+	auto ducklake_scan =
+	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
+	                          copy_options.names, std::move(virtual_columns));
+	auto &column_ids = ducklake_scan->GetMutableColumnIds();
+	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
+		column_ids.emplace_back(i);
+	}
+	if (!files_are_adjacent) {
+		column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
+	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+
+	// generate the LogicalCopyToFile
+	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
+	                                         std::move(copy_options.info));
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+	copy->use_tmp_file = copy_options.use_tmp_file;
+	copy->filename_pattern = std::move(copy_options.filename_pattern);
+	copy->file_extension = std::move(copy_options.file_extension);
+	copy->overwrite_mode = copy_options.overwrite_mode;
+	copy->per_thread_output = copy_options.per_thread_output;
+	copy->file_size_bytes = copy_options.file_size_bytes;
+	copy->rotate = copy_options.rotate;
+	copy->return_type = copy_options.return_type;
+
+	copy->partition_output = copy_options.partition_output;
+	copy->write_partition_columns = copy_options.write_partition_columns;
+	copy->write_empty_file = false;
+	copy->partition_columns = std::move(copy_options.partition_columns);
+	copy->names = std::move(copy_options.names);
+	copy->expected_types = std::move(copy_options.expected_types);
+	copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
+	copy->file_size_bytes = optional_idx();
+	copy->rotate = false;
+
+	copy->children.push_back(std::move(ducklake_scan));
+
+	optional_idx target_row_id_start;
+	if (files_are_adjacent) {
+		target_row_id_start = source_files[0].file.row_id_start;
+	}
+
+	// followed by the compaction operator (that writes the results back to the
+	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
+	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
+	    partition_id, std::move(partition_values), target_row_id_start, type);
+	compaction->children.push_back(std::move(copy));
+	return std::move(compaction);
 }
 
 //===--------------------------------------------------------------------===//

@@ -55,7 +55,6 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot, const string &filter);
-	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table);
 	virtual vector<DuckLakeFileScheduledForCleanup> GetFilesScheduledForCleanup(const string &filter);
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileScheduledForCleanup> &cleaned_up_files);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
@@ -90,7 +89,6 @@ public:
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual void WriteNewColumnMappings(DuckLakeSnapshot commit_snapshot,
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
-	virtual void WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type);

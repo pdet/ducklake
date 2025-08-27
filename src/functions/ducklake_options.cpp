@@ -26,7 +26,7 @@ static constexpr const ducklake_option_array DUCKLAKE_OPTIONS = {
      {"version", "DuckLake format version"},
      {"created_by", "Tool used to write the DuckLake"},
      {"data_path", "Path to data files"},
-    	{"rewrite_delete_threshold", "A threshold that determines the minimum amount of data that must be "
+     {"rewrite_delete_threshold", "A threshold that determines the minimum amount of data that must be "
                                   "removed from a file before a rewrite is warranted. From 0 - 1."},
      {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},
      {"encrypted", "Whether or not to encrypt Parquet files written to the data path"}}};
