@@ -24,3 +24,11 @@ if($ENV{ENABLE_POSTGRES_SCANNER})
         GIT_TAG f012a4f99cea1d276d1787d0dc84b1f1a0e0f0b2
     )
 endif()
+
+if($ENV{ENABLE_SPATIAL})
+    duckdb_extension_load(spatial
+        DONT_LINK
+        GIT_URL https://github.com/duckdb/duckdb-spatial
+        GIT_TAG a6a607fe3a98ef9ad4bed218490b770f725fbc12
+    )
+endif()
