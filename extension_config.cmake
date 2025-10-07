@@ -30,5 +30,7 @@ if($ENV{ENABLE_SPATIAL})
         DONT_LINK
         GIT_URL https://github.com/duckdb/duckdb-spatial
         GIT_TAG a6a607fe3a98ef9ad4bed218490b770f725fbc12
+        INCLUDE_DIR src/spatial
+        TEST_DIR test/sql
     )
 endif()
