@@ -2,6 +2,7 @@
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -673,6 +674,10 @@ struct NewTableInfo {
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
 };
 
+struct NewMacroInfo {
+	vector<DuckLakeMacroInfo> new_macros;
+};
+
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result) {
 	for (auto &new_col_info : change_info.new_fields) {
 		DuckLakeNewColumn new_column;
@@ -829,6 +834,40 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	return view_entry;
 }
 
+void DuckLakeTransaction::GetNewMacroInfo(reference<CatalogEntry> entry, NewMacroInfo &result) {
+	DuckLakeMacroInfo new_macro_info;
+	auto &macro_entry = entry.get().Cast<ScalarMacroCatalogEntry>();
+	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
+	// FIXME: We need to set this somewhere?
+	// new_macro_info.macro_id =
+	new_macro_info.macro_name = macro_entry.name;
+	new_macro_info.schema_id = ducklake_schema.GetSchemaId();
+	// Let's do the implementations
+	for (const auto &impl : macro_entry.macros) {
+		DuckLakeMacroImplementation macro_impl;
+		macro_impl.dialect = "duckdb";
+		switch (impl->type) {
+		case MacroType::SCALAR_MACRO:
+			macro_impl.type = "scalar";
+		default:
+			throw NotImplementedException("Unsupported macro type");
+		}
+		macro_impl.sql = impl->ToSQL();
+		// Let's do the parameters
+		for (idx_t i = 0; i < impl->parameters.size(); i++) {
+			DuckLakeMacroParameters parameter;
+			parameter.parameter_name = impl->parameters[i]->GetName();
+			if (impl->default_parameters.find(parameter.parameter_name) != impl->default_parameters.end()) {
+				parameter.default_value = impl->default_parameters[parameter.parameter_name]->ToString();
+			}
+			parameter.parameter_type = impl->types[i].ToString();
+			macro_impl.parameters.push_back(std::move(parameter));
+		}
+		new_macro_info.implementations.push_back(std::move(macro_impl));
+	}
+	result.new_macros.push_back(std::move(new_macro_info));
+}
+
 void DuckLakeTransaction::GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
                                          reference<CatalogEntry> view_entry, NewTableInfo &result,
                                          TransactionChangeInformation &transaction_changes) {
@@ -889,6 +928,23 @@ NewTableInfo DuckLakeTransaction::GetNewTables(DuckLakeCommitState &commit_state
 				break;
 			default:
 				throw InternalException("Unknown type in new_tables");
+			}
+		}
+	}
+	return result;
+}
+
+NewMacroInfo DuckLakeTransaction::GetNewMacros(DuckLakeCommitState &commit_state,
+                                               TransactionChangeInformation &transaction_changes) {
+	NewMacroInfo result;
+	for (auto &schema_entry : new_macros) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY:
+				GetNewMacroInfo(*entry.second, result);
+				break;
+			default:
+				throw InternalException("Unknown type in GetNewMacros");
 			}
 		}
 	}
@@ -1240,6 +1296,11 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		metadata_manager->WriteDroppedColumns(commit_snapshot, result.dropped_columns);
 		metadata_manager->WriteNewColumns(commit_snapshot, result.new_columns);
 		metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+	}
+
+	if (!new_macros.empty()) {
+		auto result = GetNewMacros(commit_state, transaction_changes);
+		metadata_manager->WriteNewMacros(commit_snapshot, result.new_macros);
 	}
 
 	// write new name maps
@@ -2037,6 +2098,12 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 		auto new_table_list = make_uniq<DuckLakeCatalogSet>();
 		auto &result = *new_table_list;
 		new_tables.insert(make_pair(schema_name, std::move(new_table_list)));
+		return result;
+	}
+	case CatalogType::MACRO_ENTRY: {
+		auto new_macro_list = make_uniq<DuckLakeCatalogSet>();
+		auto &result = *new_macro_list;
+		new_macros.insert(make_pair(schema_name, std::move(new_macro_list)));
 		return result;
 	}
 	default:

@@ -9,6 +9,8 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
+#include "duckdb/parser/parsed_data/create_function_info.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 
 namespace duckdb {
 
@@ -95,7 +97,21 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransaction transaction,
                                                                CreateFunctionInfo &info) {
-	throw NotImplementedException("DuckLake does not support functions");
+	if (info.type != CatalogType::MACRO_ENTRY) {
+		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
+	}
+	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
+	if (!HandleCreateConflict(transaction, info.type, info.name, info.on_conflict)) {
+		return nullptr;
+	}
+	auto &create_macro_info = info.Cast<CreateMacroInfo>();
+	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
+
+	auto macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
+
+	auto result = macro_entry.get();
+	duck_transaction.CreateEntry(std::move(macro_entry));
+	return result;
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
