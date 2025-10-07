@@ -132,6 +132,8 @@ public:
 
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
+	virtual void MigrateV03(bool allow_failures = false);
+	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
 	string StorePath(string path);
