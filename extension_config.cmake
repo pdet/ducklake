@@ -5,9 +5,11 @@ duckdb_extension_load(ducklake
         SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
 )
 
-duckdb_extension_load(icu)
-duckdb_extension_load(json)
-duckdb_extension_load(tpch)
+if(NOT DEFINED ENV{DISABLE_EXTENSIONS_FOR_TEST})
+    duckdb_extension_load(icu)
+    duckdb_extension_load(json)
+    duckdb_extension_load(tpch)
+endif()
 
 if($ENV{ENABLE_SQLITE_SCANNER})
     duckdb_extension_load(sqlite_scanner

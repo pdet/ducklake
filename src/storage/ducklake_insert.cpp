@@ -545,6 +545,9 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	idx_t target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id,
 	                                                        DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE);
 
+	// Always use native parquet geometry for writing
+	info->options["geoparquet_version"].emplace_back("NONE");
+
 	// Get Parquet Copy function
 	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(context, "parquet");
 

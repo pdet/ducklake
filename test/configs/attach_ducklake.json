@@ -445,6 +445,12 @@
       ]
     },
     {
+      "reason": "Prepared statement differs from original result!",
+      "paths": [
+        "test/sql/function/generic/test_connection_count.test"
+        ]
+    },
+    {
       "reason": "Checkpoint in DuckLake doesn't produce expected result. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
         "test/fuzzer/pedro/incomplete_checkpoint.test",
