@@ -324,6 +324,10 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		schema_set->AddEntry(schema_entry, view.id, std::move(view_entry));
 	}
 
+	// load the macros
+	for (auto &entry : catalog.macros) {
+	}
+
 	// load the partition entries
 	for (auto &entry : catalog.partitions) {
 		auto table = schema_set->GetEntryById(entry.table_id);

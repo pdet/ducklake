@@ -290,6 +290,7 @@ struct DuckLakeCatalogInfo {
 	vector<DuckLakeSchemaInfo> schemas;
 	vector<DuckLakeTableInfo> tables;
 	vector<DuckLakeViewInfo> views;
+	vector<DuckLakeMacroInfo> macros;
 	vector<DuckLakePartitionInfo> partitions;
 };
 

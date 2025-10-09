@@ -242,6 +242,28 @@ static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list)
 	return result;
 }
 
+static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) {
+	vector<DuckLakeMacroImplementation> result;
+	for (auto &val : ListValue::GetChildren(list)) {
+		auto &struct_children = StructValue::GetChildren(val);
+		DuckLakeMacroImplementation impl_info;
+		impl_info.dialect = StringValue::Get(struct_children[0]);
+		impl_info.sql = StringValue::Get(struct_children[1]);
+		impl_info.type = StringValue::Get(struct_children[2]);
+		auto param_list = struct_children[3].GetValue<Value>();
+		for (auto &param_value : ListValue::GetChildren(param_list)) {
+			auto &param_struct_children = StructValue::GetChildren(param_value);
+			DuckLakeMacroParameters param;
+			param.parameter_name = StringValue::Get(param_struct_children[0]);
+			param.parameter_type = StringValue::Get(param_struct_children[1]);
+			param.default_value = StringValue::Get(param_struct_children[2]);
+			impl_info.parameters.push_back(std::move(param));
+		}
+		result.push_back(std::move(impl_info));
+	}
+	return result;
+}
+
 idx_t DuckLakeMetadataManager::GetCatalogIdForSchema(idx_t schema_id) {
 	string query = R"(
 SELECT begin_snapshot
@@ -425,6 +447,34 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 			view_info.tags = LoadTags(tags);
 		}
 		views.push_back(std::move(view_info));
+	}
+
+	// load macro information
+	result = transaction.Query(snapshot, R"(
+SELECT schema_id, ducklake_macro.macro_id, macro_name, (
+		SELECT LIST({'dialect': dialect, 'sql':sql, 'type':type, 'params': (
+		    SELECT LIST({'parameter_name': parameter_name, 'parameter_type': parameter_type, 'default_value': default_value})
+				FROM {METADATA_CATALOG}.ducklake_macro_parameters
+		        WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
+		        AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
+		)})
+		FROM {METADATA_CATALOG}.ducklake_macro_impl
+		WHERE ducklake_macro.macro_id = ducklake_macro_impl.macro_id
+	) AS impl
+FROM {METADATA_CATALOG}.ducklake_macro
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
+	}
+	auto &macros = catalog.macros;
+	for (auto &row : *result) {
+		DuckLakeMacroInfo macro_info;
+		macro_info.schema_id = SchemaIndex(row.GetValue<uint64_t>(0));
+		macro_info.macro_id = MacroIndex(row.GetValue<uint64_t>(1));
+		macro_info.macro_name = row.GetValue<string>(2);
+		auto macro_implementations = row.GetValue<Value>(3);
+		macro_info.implementations = LoadMacroImplementations(macro_implementations);
+		macros.push_back(std::move(macro_info));
 	}
 
 	// load partition information
@@ -1184,6 +1234,9 @@ void DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snap
 	ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
 }
 
+void DuckLakeMetadataManager::CreateMacro(DuckLakeSnapshot snapshot, MacroIndex index) {
+	// auto result = transaction.Query(snapshot,"SELECT name")
+}
 void DuckLakeMetadataManager::WriteNewMacros(DuckLakeSnapshot commit_snapshot,
                                              const vector<DuckLakeMacroInfo> &new_macros) {
 	for (auto &macro : new_macros) {
