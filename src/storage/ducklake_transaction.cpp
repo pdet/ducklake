@@ -87,7 +87,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 bool DuckLakeTransaction::SchemaChangesMade() {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
-	       !dropped_views.empty();
+	       !dropped_views.empty() || !new_macros.empty() || !dropped_macros.empty();
 }
 
 bool DuckLakeTransaction::ChangesMade() {
@@ -99,10 +99,13 @@ struct TransactionChangeInformation {
 	case_insensitive_set_t created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
+	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_macros;
+
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
+	set<MacroIndex> dropped_macros;
 	set<TableIndex> tables_inserted_into;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_inserted_inlined;
@@ -191,6 +194,9 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 	for (auto &dropped_view_idx : dropped_views) {
 		changes.dropped_views.insert(dropped_view_idx);
 	}
+	for (auto &dropped_macro_idx : dropped_macros) {
+		changes.dropped_macros.insert(dropped_macro_idx);
+	}
 	for (auto &entry : dropped_schemas) {
 		changes.dropped_schemas.insert(entry);
 	}
@@ -198,6 +204,20 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 		for (auto &entry : new_schemas->GetEntries()) {
 			auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
 			changes.created_schemas.insert(schema_entry.name);
+		}
+	}
+	for (auto &schema_entry : new_macros) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY: {
+				auto &macro = *entry.second;
+				auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
+				changes.created_macros[schema.name].insert(macro);
+				break;
+			}
+			default:
+				throw InternalException("Unsupported type found in new_macros");
+			}
 		}
 	}
 	for (auto &schema_entry : new_tables) {
@@ -834,12 +854,13 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	return view_entry;
 }
 
-void DuckLakeTransaction::GetNewMacroInfo(reference<CatalogEntry> entry, NewMacroInfo &result) {
+void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry,
+                                          NewMacroInfo &result) {
 	DuckLakeMacroInfo new_macro_info;
 	auto &macro_entry = entry.get().Cast<ScalarMacroCatalogEntry>();
 	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
-	// FIXME: We need to set this somewhere?
-	// new_macro_info.macro_id =
+
+	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
 	new_macro_info.macro_name = macro_entry.name;
 	new_macro_info.schema_id = ducklake_schema.GetSchemaId();
 	// Let's do the implementations
@@ -849,6 +870,7 @@ void DuckLakeTransaction::GetNewMacroInfo(reference<CatalogEntry> entry, NewMacr
 		switch (impl->type) {
 		case MacroType::SCALAR_MACRO:
 			macro_impl.type = "scalar";
+			break;
 		default:
 			throw NotImplementedException("Unsupported macro type");
 		}
@@ -941,7 +963,7 @@ NewMacroInfo DuckLakeTransaction::GetNewMacros(DuckLakeCommitState &commit_state
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
 			case CatalogType::MACRO_ENTRY:
-				GetNewMacroInfo(*entry.second, result);
+				GetNewMacroInfo(commit_state, *entry.second, result);
 				break;
 			default:
 				throw InternalException("Unknown type in GetNewMacros");
@@ -2132,6 +2154,13 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 	case CatalogType::VIEW_ENTRY: {
 		auto entry = new_tables.find(schema_name);
 		if (entry == new_tables.end()) {
+			return nullptr;
+		}
+		return entry->second;
+	}
+	case CatalogType::MACRO_ENTRY: {
+		auto entry = new_macros.find(schema_name);
+		if (entry == new_macros.end()) {
 			return nullptr;
 		}
 		return entry->second;

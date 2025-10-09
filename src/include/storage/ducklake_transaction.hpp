@@ -183,7 +183,7 @@ private:
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);
-	void GetNewMacroInfo(reference<CatalogEntry> macro_entry, NewMacroInfo &result);
+	void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> macro_entry, NewMacroInfo &result);
 	void GetNewViewInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                    reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                    TransactionChangeInformation &transaction_changes);

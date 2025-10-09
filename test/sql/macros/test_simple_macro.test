@@ -17,5 +17,45 @@ statement ok
 use ducklake
 
 statement ok
-CREATE MACRO add(a, b) AS a + b;
+CREATE MACRO add_values(a, b) AS a + b;
 
+# Check Macro Tables
+query III
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	1	add_values
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+1	0	duckdb	(a, b) AS ((a + b))	scalar
+
+query IIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+1	0	0	a	UNKNOWN	NULL
+1	0	1	b	UNKNOWN	NULL
+
+# Test Macro
+query I
+SELECT add_values(1,1)
+----
+2
+
+#
+# statement ok
+# USE memory
+#
+# statement ok
+# DETACH ducklake
+#
+# statement ok
+# ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_simple_macro');
+#
+# statement ok
+# use ducklake
+#
+# query I
+# SELECT add_values(1,1)
+# ----
+# 2

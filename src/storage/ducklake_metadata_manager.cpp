@@ -1215,7 +1215,7 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%
 INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s')
 )",
 				                                        macro.macro_id.index, impl_id, param_id, param.parameter_name,
-				                                        param.parameter_type, param.default_value));
+				                                        param.parameter_type, param.default_value.ToString()));
 				if (result->HasError()) {
 					result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
 				}
