@@ -1,6 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -19,6 +20,7 @@
 #include "duckdb/main/database_path_and_type.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_macro_info.hpp"
 
 namespace duckdb {
 
@@ -232,6 +234,18 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
+unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro) {
+	CatalogType type;
+	if (macro.implementations.front().type == "scalar") {
+		type = CatalogType::MACRO_ENTRY;
+	} else {
+		throw NotImplementedException("Macro type %s is not implemented", macro.implementations.front().type);
+	}
+	auto macro_info = make_uniq<CreateMacroInfo>(type);
+	return macro_info;
+	// macro_info->macros.push_back()
+}
+
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
                                                                       DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -325,7 +339,18 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	}
 
 	// load the macros
-	for (auto &entry : catalog.macros) {
+	for (auto &macro : catalog.macros) {
+		auto entry = schema_id_map.find(macro.schema_id);
+		if (entry == schema_id_map.end()) {
+			throw InvalidInputException(
+			    "Failed to load DuckLake - could not find schema that corresponds to the macro entry \"%s\"",
+			    macro.macro_name);
+		}
+		auto &schema_entry = entry->second.get();
+		auto create_macro = CreateMacroInfoFromDucklake(macro);
+		// auto macro_catalog_entry = make_uniq<MacroCatalogEntry>(*this, schema_entry, create_macro);
+		// macro_catalog_entry->name = macro.macro_name;
+		// schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}
 
 	// load the partition entries
