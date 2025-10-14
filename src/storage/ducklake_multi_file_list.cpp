@@ -24,10 +24,12 @@ namespace duckdb {
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
                                              vector<DuckLakeDataFile> transaction_local_files_p,
-                                             shared_ptr<DuckLakeInlinedData> transaction_local_data_p, string filter_p)
+                                             shared_ptr<DuckLakeInlinedData> transaction_local_data_p, string filter_p,
+                                             string cte_section_p)
     : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info), read_file_list(false),
       transaction_local_files(std::move(transaction_local_files_p)),
-      transaction_local_data(std::move(transaction_local_data_p)), filter(std::move(filter_p)) {
+      transaction_local_data(std::move(transaction_local_data_p)), filter(std::move(filter_p)),
+      cte_section(std::move(cte_section_p)) {
 }
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
@@ -45,6 +47,115 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	file_entry.data_type = DuckLakeDataType::INLINED_DATA;
 	files.push_back(std::move(file_entry));
 	inlined_data_tables.push_back(inlined_table);
+}
+
+struct CTERequirement {
+	idx_t column_field_index;
+	unordered_set<string> referenced_stats;
+	idx_t reference_count = 1;
+
+	CTERequirement(idx_t column_idx, unordered_set<string> stats)
+	    : column_field_index(column_idx), referenced_stats(std::move(stats)) {
+	}
+};
+
+struct FilterSQLResult {
+	string where_conditions;                            // WHERE clause using CTEs
+	unordered_map<idx_t, CTERequirement> required_ctes; // CTE requirements for further processing
+
+	FilterSQLResult() = default;
+	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
+	}
+};
+
+static string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+                                                 const DuckLakeFunctionInfo &read_info) {
+	if (requirements.empty()) {
+		return "";
+	}
+
+	string cte_section = "WITH ";
+	bool first_cte = true;
+
+	for (const auto &entry : requirements) {
+		const auto &req = entry.second;
+		if (!first_cte) {
+			cte_section += ",\n";
+		}
+		first_cte = false;
+
+		string select_list = "data_file_id";
+		for (const auto &stat : req.referenced_stats) {
+			select_list += ", " + stat;
+		}
+
+		// Only MATERIALIZED if the CTE is referenced multiple times
+		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
+
+		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint);
+		cte_section += StringUtil::Format("  SELECT %s\n", select_list);
+		cte_section += "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n";
+		cte_section += StringUtil::Format("  WHERE column_id = %d AND table_id = %d\n", req.column_field_index,
+		                                  read_info.table_id.index);
+		cte_section += ")";
+	}
+
+	return cte_section + "\n";
+}
+
+string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
+
+static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_filters,
+                                                  const vector<column_t> &column_ids,
+                                                  const DuckLakeFunctionInfo &read_info) {
+	FilterSQLResult result;
+	string conditions;
+
+	for (auto &entry : table_filters.filters) {
+		auto column_index_val = entry.first;
+		idx_t column_idx = column_index_val;
+
+		// FIXME: handle structs
+		auto column_id = column_ids[column_idx];
+
+		if (IsVirtualColumn(column_id)) {
+			// skip pushing filters on virtual columns
+			continue;
+		}
+
+		unordered_set<string> referenced_stats;
+		auto filter_condition = GenerateFilterPushdown(*entry.second, referenced_stats);
+		if (filter_condition.empty()) {
+			// failed to generate filter for this column
+			continue;
+		}
+
+		auto column_index = PhysicalIndex(column_id);
+		auto &root_id = read_info.table.GetFieldId(column_index);
+		auto field_index = root_id.GetFieldIndex().index;
+
+		// generate the final filter for this column
+		string cte_name = StringUtil::Format("col_%d_stats", field_index);
+
+		// if any of the referenced stats are NULL we cannot prune
+		string null_checks;
+		for (auto &stat : referenced_stats) {
+			null_checks += stat + " IS NULL OR ";
+		}
+
+		if (!conditions.empty()) {
+			conditions += " AND ";
+		}
+		// finally add the filter
+		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
+		                                 null_checks, filter_condition);
+		// Add the CTE requirement for this column
+		CTERequirement req(field_index, referenced_stats);
+		result.required_ctes.emplace(field_index, std::move(req));
+	}
+
+	result.where_conditions = conditions;
+	return result;
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
@@ -251,52 +362,18 @@ unique_ptr<MultiFileList>
 DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
                                              const vector<string> &names, const vector<LogicalType> &types,
                                              const vector<column_t> &column_ids, TableFilterSet &filters) const {
-	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.filters.empty()) {
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
 	}
-	string filter;
-	for (auto &entry : filters.filters) {
-		auto column_id = entry.first;
-		if (IsVirtualColumn(column_ids[column_id])) {
-			// skip pushing filters on virtual columns
-			continue;
-		}
-		// FIXME: handle structs
-		auto column_index = PhysicalIndex(column_ids[column_id]);
-		auto &root_id = read_info.table.GetFieldId(column_index);
-		unordered_set<string> referenced_stats;
-		auto new_filter = GenerateFilterPushdown(*entry.second, referenced_stats);
-		if (new_filter.empty()) {
-			// failed to generate filter for this column
-			continue;
-		}
-		// generate the final filter for this column
-		string final_filter;
-		final_filter = "table_id=" + to_string(read_info.table_id.index);
-		final_filter += " AND ";
-		final_filter += "column_id=" + to_string(root_id.GetFieldIndex().index);
-		final_filter += " AND ";
-		final_filter += "(";
-		// if any of the referenced stats are NULL we cannot prune
-		for (auto &stats_name : referenced_stats) {
-			final_filter += stats_name + " IS NULL OR ";
-		}
-		// finally add the filter
-		final_filter += "(" + new_filter + "))";
-		// add the filter to the list of filters
-		if (!filter.empty()) {
-			filter += " AND ";
-		}
-		filter += StringUtil::Format(
-		    "data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_column_stats WHERE %s)",
-		    final_filter);
+	auto dynamic_result = ConvertTableFilterSetToSQL(filters, column_ids, read_info);
+	if (dynamic_result.where_conditions.empty()) {
+		// no pushdown possible
+		return nullptr;
 	}
-	if (!filter.empty()) {
-		return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
-		                                        std::move(filter));
-	}
-	return nullptr;
+	return make_uniq<DuckLakeMultiFileList>(
+	    read_info, transaction_local_files, transaction_local_data, std::move(dynamic_result.where_conditions),
+	    GenerateCTESectionFromRequirements(dynamic_result.required_ctes, read_info));
 }
 
 vector<OpenFileInfo> DuckLakeMultiFileList::GetAllFiles() {
@@ -394,7 +471,8 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) {
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
-	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter);
+	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
+	                                               cte_section);
 	result->files = GetFiles();
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
@@ -436,7 +514,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!read_info.table_id.IsTransactionLocal()) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter);
+		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter, cte_section);
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < result.size(); file_idx++) {
@@ -506,7 +584,7 @@ void DuckLakeMultiFileList::GetFilesForTable() {
 	if (!read_info.table_id.IsTransactionLocal()) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter);
+		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter, cte_section);
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
