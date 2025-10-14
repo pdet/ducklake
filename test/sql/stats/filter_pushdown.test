@@ -157,11 +157,11 @@ FROM range(501000, 501001) t(i);
 
 # != (not equal) pushdown - should prune file with constant value
 query I
-SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 777777;
+SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 501000;
 ----
 3000
 
 query II
-EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 777777;
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.filter_pushdown WHERE i != 501000;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 3.*
