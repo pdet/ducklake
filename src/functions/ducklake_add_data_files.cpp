@@ -5,6 +5,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -804,11 +805,104 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 		auto field_index = entry.second.first;
 
 		if (!column.column_stats.empty()) {
-			auto base_stats = column.column_stats[0];
-			for (idx_t i = 1; i < column.column_stats.size(); i++) {
-				base_stats.MergeStats(column.column_stats[i]);
+			auto &stats_list = column.column_stats;
+			auto aggregated = stats_list[0];
+			bool numeric_type = aggregated.type.IsNumeric();
+
+			for (idx_t i = 1; i < stats_list.size(); i++) {
+				auto &stats = stats_list[i];
+
+				if (aggregated.type != stats.type) {
+					aggregated.type = stats.type;
+					numeric_type = aggregated.type.IsNumeric();
+				}
+
+				if (!stats.has_null_count) {
+					aggregated.has_null_count = false;
+				} else if (aggregated.has_null_count) {
+					aggregated.null_count += stats.null_count;
+				}
+				aggregated.column_size_bytes += stats.column_size_bytes;
+
+				if (!stats.has_contains_nan) {
+					aggregated.has_contains_nan = false;
+				} else if (aggregated.has_contains_nan && stats.contains_nan) {
+					aggregated.contains_nan = true;
+				}
+
+				if (stats.extra_stats) {
+					if (aggregated.extra_stats) {
+						aggregated.extra_stats->Merge(*stats.extra_stats);
+					} else {
+						aggregated.extra_stats = stats.extra_stats->Copy();
+					}
+				}
 			}
-			result.column_stats.emplace(field_index, std::move(base_stats));
+
+			numeric_type = aggregated.type.IsNumeric();
+			Value numeric_min_cache;
+			Value numeric_max_cache;
+			bool min_cache_valid = false;
+			bool max_cache_valid = false;
+
+			if (numeric_type && aggregated.has_min) {
+				numeric_min_cache = Value(aggregated.min).DefaultCastAs(aggregated.type);
+				min_cache_valid = true;
+			}
+			if (numeric_type && aggregated.has_max) {
+				numeric_max_cache = Value(aggregated.max).DefaultCastAs(aggregated.type);
+				max_cache_valid = true;
+			}
+
+			if (aggregated.has_min) {
+				for (idx_t i = 1; i < stats_list.size(); i++) {
+					auto &stats = stats_list[i];
+					if (!stats.has_min) {
+						aggregated.has_min = false;
+						min_cache_valid = false;
+						break;
+					}
+					if (numeric_type) {
+						if (!min_cache_valid) {
+							numeric_min_cache = Value(aggregated.min).DefaultCastAs(aggregated.type);
+							min_cache_valid = true;
+						}
+						auto stats_min_val = Value(stats.min).DefaultCastAs(aggregated.type);
+						if (stats_min_val < numeric_min_cache) {
+							aggregated.min = stats.min;
+							numeric_min_cache = std::move(stats_min_val);
+						}
+					} else if (stats.min < aggregated.min) {
+						aggregated.min = stats.min;
+					}
+				}
+			}
+
+			if (aggregated.has_max) {
+				for (idx_t i = 1; i < stats_list.size(); i++) {
+					auto &stats = stats_list[i];
+					if (!stats.has_max) {
+						aggregated.has_max = false;
+						max_cache_valid = false;
+						break;
+					}
+					if (numeric_type) {
+						if (!max_cache_valid) {
+							numeric_max_cache = Value(aggregated.max).DefaultCastAs(aggregated.type);
+							max_cache_valid = true;
+						}
+						auto stats_max_val = Value(stats.max).DefaultCastAs(aggregated.type);
+						if (stats_max_val > numeric_max_cache) {
+							aggregated.max = stats.max;
+							numeric_max_cache = std::move(stats_max_val);
+						}
+					} else if (stats.max > aggregated.max) {
+						aggregated.max = stats.max;
+					}
+				}
+			}
+
+			result.column_stats.emplace(field_index, std::move(aggregated));
 		}
 	}
 
