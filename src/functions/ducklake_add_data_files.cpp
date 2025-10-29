@@ -120,9 +120,7 @@ public:
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
 
 private:
-	void ReadParquetSchema(const string &glob);
-	void ReadParquetStats(const string &glob);
-	void ReadParquetFileMetadata(const string &glob);
+	void ReadParquetFullMetadata(const string &glob);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix);
@@ -147,227 +145,219 @@ private:
 	unordered_map<string, unique_ptr<ParquetFileMetadata>> parquet_files;
 };
 
-void DuckLakeFileProcessor::ReadParquetSchema(const string &glob) {
+void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-WITH base AS (
-  SELECT file_name, name, type, num_children, converted_type, scale, precision, field_id, logical_type
-  FROM parquet_schema(%s)
-),
-ordered AS (SELECT *, row_number() OVER () AS rn FROM base),
-partitioned AS (SELECT * EXCLUDE (rn), row_number() OVER (PARTITION BY file_name ORDER BY rn) - 1 AS flattened_column_id FROM ordered)
-SELECT * EXCLUDE (flattened_column_id)
-FROM partitioned
-ORDER BY file_name, flattened_column_id;
+SELECT parquet_file_metadata, parquet_metadata, parquet_schema
+FROM parquet_full_metadata(%s)
 )",
 	                                                   SQLString(glob)));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
 	}
-	unique_ptr<ParquetFileMetadata> file;
-	vector<reference<ParquetColumn>> current_column;
-	vector<idx_t> child_counts;
-	idx_t column_id = 0;
+
 	for (auto &row : *result) {
-		auto filename = row.GetValue<string>(0);
-		auto child_count = row.IsNull(3) ? 0 : row.GetValue<idx_t>(3);
-		if (!file || file->filename != filename) {
-			if (!child_counts.empty()) {
+		auto file_metadata_value = row.iterator.chunk->GetValue(0, row.row);
+		auto parquet_metadata_value = row.iterator.chunk->GetValue(1, row.row);
+		auto parquet_schema_value = row.iterator.chunk->GetValue(2, row.row);
+
+		auto &file_metadata_entries = ListValue::GetChildren(file_metadata_value);
+		auto &schema_entries = ListValue::GetChildren(parquet_schema_value);
+		auto &metadata_entries = ListValue::GetChildren(parquet_metadata_value);
+
+		ParquetFileMetadata *file_ptr = nullptr;
+
+		// File metadata
+		{
+			auto &file_entry = file_metadata_entries[0];
+			auto &children = StructValue::GetChildren(file_entry);
+			auto filename = StringValue::Get(children[0]);
+			auto &found_file_ptr = parquet_files[filename];
+			if (!found_file_ptr) {
+				found_file_ptr = make_uniq<ParquetFileMetadata>();
+			} else {
+				// Already initialized, this file must be found in multiple globs
+				continue;
+			}
+			file_ptr = found_file_ptr.get();
+			file_ptr->filename = filename;
+			file_ptr->row_count = children[2].GetValue<idx_t>();
+			file_ptr->footer_size = children[8].GetValue<idx_t>();
+			file_ptr->file_size_bytes = children[7].GetValue<idx_t>();
+		}
+		auto &file = *file_ptr;
+
+		bool saw_root = false;
+		vector<idx_t> child_counts;
+		idx_t next_column_id = 0;
+		vector<ParquetColumn *> column_stack;
+		for (auto &schema_entry : schema_entries) {
+			auto &children = StructValue::GetChildren(schema_entry);
+
+			idx_t child_count = 0;
+			auto &num_children_val = children[5];
+			if (!num_children_val.IsNull()) {
+				child_count = num_children_val.GetValue<idx_t>();
+			}
+
+			if (!saw_root) {
+				// parquet_full_metadata emits the synthetic root node as the first entry per file.
+				saw_root = true;
+				child_counts.push_back(child_count);
+				continue;
+			}
+			if (child_counts.empty()) {
 				throw InvalidInputException("child_counts provided by parquet_schema are unaligned");
 			}
-			if (file) {
-				DetermineMapping(*file);
-				auto &filename = file->filename;
-				parquet_files.emplace(filename, std::move(file));
+
+			auto column = make_uniq<ParquetColumn>();
+			column->name = StringValue::Get(children[1]);
+			if (!children[2].IsNull()) {
+				column->type = StringValue::Get(children[2]);
 			}
-			file = make_uniq<ParquetFileMetadata>();
-			file->filename = filename;
-			child_counts.push_back(child_count);
-			column_id = 0;
-			continue;
-		}
-		if (child_counts.empty()) {
-			throw InvalidInputException("child_counts provided by parquet_schema are unaligned");
-		}
-		auto column = make_uniq<ParquetColumn>();
-		column->name = row.GetValue<string>(1);
-		column->type = row.GetValue<string>(2);
-		if (!row.IsNull(4)) {
-			column->converted_type = row.GetValue<string>(4);
-		}
-		if (!row.IsNull(5)) {
-			column->scale = row.GetValue<idx_t>(5);
-		}
-		if (!row.IsNull(6)) {
-			column->precision = row.GetValue<idx_t>(6);
-		}
-		if (!row.IsNull(7)) {
-			column->field_id = row.GetValue<idx_t>(7);
-		}
-		if (!row.IsNull(8)) {
-			column->logical_type = row.GetValue<string>(8);
-		}
-
-		// Only assign column_id to leaf columns (those without children)
-		if (child_count == 0) {
-			column->column_id = column_id++;
-		} else {
-			column->column_id = DConstants::INVALID_INDEX; // Mark as non-leaf
-		}
-
-		auto &column_ref = *column;
-
-		if (current_column.empty()) {
-			// add to root
-			file->columns.push_back(std::move(column));
-		} else {
-			// add as child to last column
-			current_column.back().get().child_columns.push_back(std::move(column));
-		}
-
-		// Only add leaf columns to column_id_map (those that will have statistics)
-		if (column_ref.column_id != DConstants::INVALID_INDEX) {
-			file->column_id_map.emplace(column_ref.column_id, column_ref);
-		}
-
-		// reduce the child count by one
-		child_counts.back()--;
-		if (child_counts.back() == 0) {
-			// we exhausted all children at this layer - pop back child counts
-			if (!current_column.empty()) {
-				current_column.pop_back();
+			if (!children[6].IsNull()) {
+				column->converted_type = StringValue::Get(children[6]);
 			}
-			child_counts.pop_back();
-		}
-		if (child_count > 0) {
-			// nested column: push back the child count and the current column and start reading children for this
-			// column
-			current_column.push_back(column_ref);
-			child_counts.push_back(child_count);
-		}
-	}
-	if (file) {
-		DetermineMapping(*file);
-		auto &filename = file->filename;
-		parquet_files.emplace(filename, std::move(file));
-	}
-}
+			if (!children[7].IsNull()) {
+				column->scale = children[7].GetValue<idx_t>();
+			}
+			if (!children[8].IsNull()) {
+				column->precision = children[8].GetValue<idx_t>();
+			}
+			if (!children[9].IsNull()) {
+				column->field_id = children[9].GetValue<int64_t>();
+			}
+			if (!children[10].IsNull()) {
+				column->logical_type = StringValue::Get(children[10]);
+			}
 
-void DuckLakeFileProcessor::ReadParquetStats(const string &glob) {
-	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT file_name, column_id, coalesce(stats_min, stats_min_value), coalesce(stats_max, stats_max_value), stats_null_count, total_compressed_size, geo_bbox, geo_types
-FROM parquet_metadata(%s)
-)",
-	                                                   SQLString(glob)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
-	}
-	for (auto &row : *result) {
-		auto filename = row.GetValue<string>(0);
-		auto entry = parquet_files.find(filename);
-		if (entry == parquet_files.end()) {
-			throw InvalidInputException("Parquet file was returned by parquet_metadata, but not returned by "
-			                            "parquet_schema - did a Parquet file get added to a glob while processing?");
-		}
-		auto &parquet_file = entry->second;
-		auto column_id = row.GetValue<idx_t>(1);
-		// find the column this belongs to
-		auto column_entry = parquet_file->column_id_map.find(column_id);
-		if (column_entry == parquet_file->column_id_map.end()) {
-			throw InvalidInputException("Column id not found in Parquet map?");
-		}
-		auto &column = column_entry->second.get();
-		const auto &column_field_entry = parquet_file->column_id_to_field_map.find(column_id);
-		if (column_field_entry == parquet_file->column_id_to_field_map.end()) {
-			// We've already verified that this file has a mapping for all existing columns in the table, if this one
-			// doesn't
-			//  have a mapping then it must not correspond to any table column so we can skip it
-			continue;
-		}
-		auto &column_field = column_field_entry->second;
-		DuckLakeColumnStats stats(column_field.second);
+			if (child_count == 0) {
+				column->column_id = next_column_id++;
+			} else {
+				column->column_id = DConstants::INVALID_INDEX;
+			}
 
-		if (!row.IsNull(2)) {
-			stats.has_min = true;
-			stats.min = row.GetValue<string>(2);
-		}
-		if (!row.IsNull(3)) {
-			stats.has_max = true;
-			stats.max = row.GetValue<string>(3);
-		}
-		if (!row.IsNull(4)) {
-			stats.has_null_count = true;
-			stats.null_count = StringUtil::ToUnsigned(row.GetValue<string>(4));
-		}
-		if (!row.IsNull(5)) {
-			stats.column_size_bytes = StringUtil::ToUnsigned(row.GetValue<string>(5));
-		}
-		if (!row.IsNull(6)) {
-			// Split the bbox struct into individual entries
-			auto bbox_value = row.iterator.chunk->GetValue(6, row.row);
-			auto &bbox_type = bbox_value.type();
+			ParquetColumn *column_ptr = nullptr;
+			if (column_stack.empty()) {
+				file.columns.push_back(std::move(column));
+				column_ptr = file.columns.back().get();
+			} else {
+				column_stack.back()->child_columns.push_back(std::move(column));
+				column_ptr = column_stack.back()->child_columns.back().get();
+			}
 
-			auto &bbox_child_types = StructType::GetChildTypes(bbox_type);
-			auto &bbox_child_values = StructValue::GetChildren(bbox_value);
+			if (column_ptr->column_id != DConstants::INVALID_INDEX) {
+				file.column_id_map.emplace(column_ptr->column_id, reference<ParquetColumn>(*column_ptr));
+			}
 
-			for (idx_t child_idx = 0; child_idx < bbox_child_types.size(); child_idx++) {
-				auto &name = bbox_child_types[child_idx].first;
-				auto &value = bbox_child_values[child_idx];
-				if (!value.IsNull()) {
-					auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-					if (name == "xmax") {
-						geo_stats.xmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "xmin") {
-						geo_stats.xmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "ymax") {
-						geo_stats.ymax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "ymin") {
-						geo_stats.ymin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "zmax") {
-						geo_stats.zmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "zmin") {
-						geo_stats.zmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "mmax") {
-						geo_stats.mmax = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else if (name == "mmin") {
-						geo_stats.mmin = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-					} else {
-						throw InternalException("Unknown bbox child name %s", name);
-					}
+			child_counts.back()--;
+			if (child_counts.back() == 0) {
+				if (!column_stack.empty()) {
+					column_stack.pop_back();
+				}
+				child_counts.pop_back();
+			}
+			if (child_count > 0) {
+				column_stack.push_back(column_ptr);
+				child_counts.push_back(child_count);
+			}
+		}
+
+		DetermineMapping(file);
+
+		for (auto &metadata_entry : metadata_entries) {
+			auto &children = StructValue::GetChildren(metadata_entry);
+
+			auto &column_id_val = children[5];
+			if (column_id_val.IsNull()) {
+				continue;
+			}
+			auto column_id = column_id_val.GetValue<idx_t>();
+			auto column_entry = file.column_id_map.find(column_id);
+			if (column_entry == file.column_id_map.end()) {
+				throw InvalidInputException("Column id not found in Parquet map?");
+			}
+			const auto &column_field_entry = file.column_id_to_field_map.find(column_id);
+			if (column_field_entry == file.column_id_to_field_map.end()) {
+				continue;
+			}
+
+			auto &column = column_entry->second.get();
+			auto &column_field = column_field_entry->second;
+			DuckLakeColumnStats stats(column_field.second);
+
+			const Value *min_source = nullptr;
+			auto &stats_min_val = children[10];
+			if (!stats_min_val.IsNull()) {
+				min_source = &stats_min_val;
+			}
+			if (!min_source) {
+				auto &stats_min_value_val = children[14];
+				if (!stats_min_value_val.IsNull()) {
+					min_source = &stats_min_value_val;
 				}
 			}
-		}
-		if (!row.IsNull(7)) {
-			auto list_value = row.iterator.chunk->GetValue(7, row.row);
-			auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-			for (const auto &child : ListValue::GetChildren(list_value)) {
-				geo_stats.geo_types.insert(StringValue::Get(child));
+			if (min_source) {
+				stats.has_min = true;
+				stats.min = StringValue::Get(*min_source);
 			}
+
+			const Value *max_source = nullptr;
+			auto &stats_max_val = children[11];
+			if (!stats_max_val.IsNull()) {
+				max_source = &stats_max_val;
+			}
+			if (!max_source) {
+				auto &stats_max_value_val = children[15];
+				if (!stats_max_value_val.IsNull()) {
+					max_source = &stats_max_value_val;
+				}
+			}
+			if (max_source) {
+				stats.has_max = true;
+				stats.max = StringValue::Get(*max_source);
+			}
+
+			auto &stats_null_count_val = children[12];
+			if (!stats_null_count_val.IsNull()) {
+				stats.has_null_count = true;
+				stats.null_count = stats_null_count_val.GetValue<idx_t>();
+			}
+
+			auto &total_compressed_size_val = children[21];
+			if (!total_compressed_size_val.IsNull()) {
+				stats.column_size_bytes = total_compressed_size_val.GetValue<idx_t>();
+			}
+
+			auto &geo_bbox_val = children[29];
+			if (!geo_bbox_val.IsNull() && stats.extra_stats) {
+				auto &bbox_child_values = StructValue::GetChildren(geo_bbox_val);
+				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
+				auto assign_bbox_value = [&](idx_t idx, double &target) {
+					auto &value = bbox_child_values[idx];
+					if (!value.IsNull()) {
+						target = value.GetValue<double>();
+					}
+				};
+				assign_bbox_value(0, geo_stats.xmin);
+				assign_bbox_value(1, geo_stats.xmax);
+				assign_bbox_value(2, geo_stats.ymin);
+				assign_bbox_value(3, geo_stats.ymax);
+				assign_bbox_value(4, geo_stats.zmin);
+				assign_bbox_value(5, geo_stats.zmax);
+				assign_bbox_value(6, geo_stats.mmin);
+				assign_bbox_value(7, geo_stats.mmax);
+			}
+
+			auto &geo_types_val = children[30];
+			if (!geo_types_val.IsNull() && stats.extra_stats) {
+				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
+				for (const auto &child : ListValue::GetChildren(geo_types_val)) {
+					geo_stats.geo_types.insert(StringValue::Get(child));
+				}
+			}
+
+			column.column_stats.push_back(std::move(stats));
 		}
-
-		column.column_stats.push_back(std::move(stats));
-	}
-}
-
-void DuckLakeFileProcessor::ReadParquetFileMetadata(const string &glob) {
-
-	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT file_name, num_rows, footer_size, file_size_bytes
-FROM parquet_file_metadata(%s)
-)",
-	                                                   SQLString(glob)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
-	}
-	for (auto &row : *result) {
-		auto filename = row.GetValue<string>(0);
-		auto entry = parquet_files.find(filename);
-		if (entry == parquet_files.end()) {
-			throw InvalidInputException("Parquet file was returned by parquet_metadata, but not returned by "
-			                            "parquet_schema - did a Parquet file get added to a glob while processing?");
-		}
-		entry->second->row_count = row.GetValue<idx_t>(1);
-		entry->second->footer_size = row.GetValue<idx_t>(2);
-		entry->second->file_size_bytes = row.GetValue<idx_t>(3);
 	}
 }
 
@@ -911,12 +901,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 vector<DuckLakeDataFile> DuckLakeFileProcessor::AddFiles(const vector<string> &globs) {
 	// fetch the metadata, stats and columns from the various files
 	for (auto &glob : globs) {
-		// query the parquet_schema to figure out the schema for each of the columns
-		ReadParquetSchema(glob);
-		// query the parquet_metadata to get the stats for each of the columns
-		ReadParquetStats(glob);
-		// read parquet file metadata
-		ReadParquetFileMetadata(glob);
+		ReadParquetFullMetadata(glob);
 	}
 
 	// now we have obtained a list of files to add together with the relevant information (statistics, file size, ...)
