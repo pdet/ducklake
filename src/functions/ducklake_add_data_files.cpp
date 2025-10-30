@@ -6,6 +6,8 @@
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/types/vector.hpp"
 
 namespace duckdb {
 
@@ -148,7 +150,32 @@ private:
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob) {
 	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT parquet_file_metadata, parquet_metadata, parquet_schema
+SELECT 
+    list_transform(parquet_file_metadata, x -> struct_pack(
+        file_name := x.file_name,
+        num_rows := x.num_rows,
+        file_size_bytes := x.file_size_bytes,
+        footer_size := x.footer_size
+    )) AS parquet_file_metadata,
+    list_transform(parquet_metadata, x -> struct_pack(
+        column_id := x.column_id,
+        stats_min := COALESCE(x.stats_min, x.stats_min_value),
+        stats_max := COALESCE(x.stats_max, x.stats_max_value),
+        stats_null_count := x.stats_null_count,
+        total_compressed_size := x.total_compressed_size,
+        geo_bbox := x.geo_bbox,
+        geo_types := x.geo_types
+    )) AS parquet_metadata,
+    list_transform(parquet_schema, x -> struct_pack(
+        "name" := x."name",
+        "type" := x."type",
+        num_children := x.num_children,
+        converted_type := x.converted_type,
+        "scale" := x."scale",
+        "precision" := x."precision",
+        field_id := x.field_id,
+        logical_type := x.logical_type
+    )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
 	                                                   SQLString(glob)));
@@ -157,21 +184,47 @@ FROM parquet_full_metadata(%s)
 	}
 
 	for (auto &row : *result) {
-		auto file_metadata_value = row.iterator.chunk->GetValue(0, row.row);
-		auto parquet_metadata_value = row.iterator.chunk->GetValue(1, row.row);
-		auto parquet_schema_value = row.iterator.chunk->GetValue(2, row.row);
+		auto &chunk = *row.iterator.chunk;
+		idx_t row_idx = row.row;
 
-		auto &file_metadata_entries = ListValue::GetChildren(file_metadata_value);
-		auto &schema_entries = ListValue::GetChildren(parquet_schema_value);
-		auto &metadata_entries = ListValue::GetChildren(parquet_metadata_value);
+		auto &file_metadata_vec = chunk.data[0];
+		auto &parquet_metadata_vec = chunk.data[1];
+		auto &parquet_schema_vec = chunk.data[2];
+
+		// Access the underlying list data directly
+		auto &file_metadata_list_entries = ListVector::GetEntry(file_metadata_vec);
+		auto &parquet_metadata_list_entries = ListVector::GetEntry(parquet_metadata_vec);
+		auto &parquet_schema_list_entries = ListVector::GetEntry(parquet_schema_vec);
+		auto file_metadata_list_data = ListVector::GetData(file_metadata_vec);
+		auto parquet_metadata_list_data = ListVector::GetData(parquet_metadata_vec);
+		auto parquet_schema_list_data = ListVector::GetData(parquet_schema_vec);
+
+		auto &file_metadata_entry = file_metadata_list_data[row_idx];
+		auto file_metadata_offset = file_metadata_entry.offset;
+		auto file_metadata_length = file_metadata_entry.length;
+
+		auto &parquet_metadata_entry = parquet_metadata_list_data[row_idx];
+		auto parquet_metadata_offset = parquet_metadata_entry.offset;
+		auto parquet_metadata_length = parquet_metadata_entry.length;
+
+		auto &parquet_schema_entry = parquet_schema_list_data[row_idx];
+		auto parquet_schema_offset = parquet_schema_entry.offset;
+		auto parquet_schema_length = parquet_schema_entry.length;
 
 		ParquetFileMetadata *file_ptr = nullptr;
 
-		// File metadata
+		// File metadata - access struct fields directly
 		{
-			auto &file_entry = file_metadata_entries[0];
-			auto &children = StructValue::GetChildren(file_entry);
-			auto filename = StringValue::Get(children[0]);
+			// file_metadata_entries is a struct vector, get its child vectors
+			auto &struct_children = StructVector::GetEntries(file_metadata_list_entries);
+
+			// Access individual fields directly from the struct child vectors
+			// We only process the first entry (index 0 within the list)
+			idx_t struct_idx = file_metadata_offset; // First entry in the list
+
+			auto &filename_vec = *struct_children[0];
+			auto filename = FlatVector::GetData<string_t>(filename_vec)[struct_idx].GetString();
+
 			auto &found_file_ptr = parquet_files[filename];
 			if (!found_file_ptr) {
 				found_file_ptr = make_uniq<ParquetFileMetadata>();
@@ -181,9 +234,14 @@ FROM parquet_full_metadata(%s)
 			}
 			file_ptr = found_file_ptr.get();
 			file_ptr->filename = filename;
-			file_ptr->row_count = children[2].GetValue<idx_t>();
-			file_ptr->footer_size = children[8].GetValue<idx_t>();
-			file_ptr->file_size_bytes = children[7].GetValue<idx_t>();
+
+			auto &num_rows_vec = *struct_children[1];
+			auto &file_size_vec = *struct_children[2];
+			auto &footer_size_vec = *struct_children[3];
+
+			file_ptr->row_count = FlatVector::GetData<int64_t>(num_rows_vec)[struct_idx];
+			file_ptr->file_size_bytes = FlatVector::GetData<uint64_t>(file_size_vec)[struct_idx];
+			file_ptr->footer_size = FlatVector::GetData<uint64_t>(footer_size_vec)[struct_idx];
 		}
 		auto &file = *file_ptr;
 
@@ -191,13 +249,44 @@ FROM parquet_full_metadata(%s)
 		vector<idx_t> child_counts;
 		idx_t next_column_id = 0;
 		vector<ParquetColumn *> column_stack;
-		for (auto &schema_entry : schema_entries) {
-			auto &children = StructValue::GetChildren(schema_entry);
 
+		// Get schema struct child vectors once
+		auto &schema_struct_children = StructVector::GetEntries(parquet_schema_list_entries);
+
+		// Extract child vectors
+		auto &name_vec = *schema_struct_children[0];
+		auto &type_vec = *schema_struct_children[1];
+		auto &num_children_vec = *schema_struct_children[2];
+		auto &converted_type_vec = *schema_struct_children[3];
+		auto &scale_vec = *schema_struct_children[4];
+		auto &precision_vec = *schema_struct_children[5];
+		auto &field_id_vec = *schema_struct_children[6];
+		auto &logical_type_vec = *schema_struct_children[7];
+
+		// Get data pointers
+		auto name_data = FlatVector::GetData<string_t>(name_vec);
+		auto type_data = FlatVector::GetData<string_t>(type_vec);
+		auto num_children_data = FlatVector::GetData<int64_t>(num_children_vec);
+		auto converted_type_data = FlatVector::GetData<string_t>(converted_type_vec);
+		auto scale_data = FlatVector::GetData<int64_t>(scale_vec);
+		auto precision_data = FlatVector::GetData<int64_t>(precision_vec);
+		auto field_id_data = FlatVector::GetData<int64_t>(field_id_vec);
+		auto logical_type_data = FlatVector::GetData<string_t>(logical_type_vec);
+
+		// Get validity masks
+		auto &num_children_validity = FlatVector::Validity(num_children_vec);
+		auto &type_validity = FlatVector::Validity(type_vec);
+		auto &converted_type_validity = FlatVector::Validity(converted_type_vec);
+		auto &scale_validity = FlatVector::Validity(scale_vec);
+		auto &precision_validity = FlatVector::Validity(precision_vec);
+		auto &field_id_validity = FlatVector::Validity(field_id_vec);
+		auto &logical_type_validity = FlatVector::Validity(logical_type_vec);
+
+		for (idx_t schema_idx = parquet_schema_offset; schema_idx < parquet_schema_offset + parquet_schema_length;
+		     schema_idx++) {
 			idx_t child_count = 0;
-			auto &num_children_val = children[5];
-			if (!num_children_val.IsNull()) {
-				child_count = num_children_val.GetValue<idx_t>();
+			if (num_children_validity.RowIsValid(schema_idx)) {
+				child_count = num_children_data[schema_idx];
 			}
 
 			if (!saw_root) {
@@ -211,24 +300,24 @@ FROM parquet_full_metadata(%s)
 			}
 
 			auto column = make_uniq<ParquetColumn>();
-			column->name = StringValue::Get(children[1]);
-			if (!children[2].IsNull()) {
-				column->type = StringValue::Get(children[2]);
+			column->name = name_data[schema_idx].GetString();
+			if (type_validity.RowIsValid(schema_idx)) {
+				column->type = type_data[schema_idx].GetString();
 			}
-			if (!children[6].IsNull()) {
-				column->converted_type = StringValue::Get(children[6]);
+			if (converted_type_validity.RowIsValid(schema_idx)) {
+				column->converted_type = converted_type_data[schema_idx].GetString();
 			}
-			if (!children[7].IsNull()) {
-				column->scale = children[7].GetValue<idx_t>();
+			if (scale_validity.RowIsValid(schema_idx)) {
+				column->scale = scale_data[schema_idx];
 			}
-			if (!children[8].IsNull()) {
-				column->precision = children[8].GetValue<idx_t>();
+			if (precision_validity.RowIsValid(schema_idx)) {
+				column->precision = precision_data[schema_idx];
 			}
-			if (!children[9].IsNull()) {
-				column->field_id = children[9].GetValue<int64_t>();
+			if (field_id_validity.RowIsValid(schema_idx)) {
+				column->field_id = field_id_data[schema_idx];
 			}
-			if (!children[10].IsNull()) {
-				column->logical_type = StringValue::Get(children[10]);
+			if (logical_type_validity.RowIsValid(schema_idx)) {
+				column->logical_type = logical_type_data[schema_idx].GetString();
 			}
 
 			if (child_count == 0) {
@@ -265,14 +354,35 @@ FROM parquet_full_metadata(%s)
 
 		DetermineMapping(file);
 
-		for (auto &metadata_entry : metadata_entries) {
-			auto &children = StructValue::GetChildren(metadata_entry);
+		auto &metadata_struct_children = StructVector::GetEntries(parquet_metadata_list_entries);
+		auto &column_id_vec = *metadata_struct_children[0];
+		auto &stats_min_vec = *metadata_struct_children[1];
+		auto &stats_max_vec = *metadata_struct_children[2];
+		auto &stats_null_count_vec = *metadata_struct_children[3];
+		auto &total_compressed_size_vec = *metadata_struct_children[4];
+		auto &geo_bbox_vec = *metadata_struct_children[5];
+		auto &geo_types_vec = *metadata_struct_children[6];
 
-			auto &column_id_val = children[5];
-			if (column_id_val.IsNull()) {
+		auto column_id_data = FlatVector::GetData<int64_t>(column_id_vec);
+		auto stats_min_data = FlatVector::GetData<string_t>(stats_min_vec);
+		auto stats_max_data = FlatVector::GetData<string_t>(stats_max_vec);
+		auto stats_null_count_data = FlatVector::GetData<int64_t>(stats_null_count_vec);
+		auto total_compressed_size_data = FlatVector::GetData<int64_t>(total_compressed_size_vec);
+
+		auto &column_id_validity = FlatVector::Validity(column_id_vec);
+		auto &stats_min_validity = FlatVector::Validity(stats_min_vec);
+		auto &stats_max_validity = FlatVector::Validity(stats_max_vec);
+		auto &stats_null_count_validity = FlatVector::Validity(stats_null_count_vec);
+		auto &total_compressed_size_validity = FlatVector::Validity(total_compressed_size_vec);
+		auto &geo_bbox_validity = FlatVector::Validity(geo_bbox_vec);
+		auto &geo_types_validity = FlatVector::Validity(geo_types_vec);
+
+		for (idx_t metadata_idx = parquet_metadata_offset;
+		     metadata_idx < parquet_metadata_offset + parquet_metadata_length; metadata_idx++) {
+			if (!column_id_validity.RowIsValid(metadata_idx)) {
 				continue;
 			}
-			auto column_id = column_id_val.GetValue<idx_t>();
+			auto column_id = column_id_data[metadata_idx];
 			auto column_entry = file.column_id_map.find(column_id);
 			if (column_entry == file.column_id_map.end()) {
 				throw InvalidInputException("Column id not found in Parquet map?");
@@ -286,73 +396,69 @@ FROM parquet_full_metadata(%s)
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
 
-			const Value *min_source = nullptr;
-			auto &stats_min_val = children[10];
-			if (!stats_min_val.IsNull()) {
-				min_source = &stats_min_val;
-			}
-			if (!min_source) {
-				auto &stats_min_value_val = children[14];
-				if (!stats_min_value_val.IsNull()) {
-					min_source = &stats_min_value_val;
-				}
-			}
-			if (min_source) {
+			if (stats_min_validity.RowIsValid(metadata_idx)) {
 				stats.has_min = true;
-				stats.min = StringValue::Get(*min_source);
+				stats.min = stats_min_data[metadata_idx].GetString();
 			}
 
-			const Value *max_source = nullptr;
-			auto &stats_max_val = children[11];
-			if (!stats_max_val.IsNull()) {
-				max_source = &stats_max_val;
-			}
-			if (!max_source) {
-				auto &stats_max_value_val = children[15];
-				if (!stats_max_value_val.IsNull()) {
-					max_source = &stats_max_value_val;
-				}
-			}
-			if (max_source) {
+			if (stats_max_validity.RowIsValid(metadata_idx)) {
 				stats.has_max = true;
-				stats.max = StringValue::Get(*max_source);
+				stats.max = stats_max_data[metadata_idx].GetString();
 			}
 
-			auto &stats_null_count_val = children[12];
-			if (!stats_null_count_val.IsNull()) {
+			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
 				stats.has_null_count = true;
-				stats.null_count = stats_null_count_val.GetValue<idx_t>();
+				stats.null_count = stats_null_count_data[metadata_idx];
 			}
 
-			auto &total_compressed_size_val = children[21];
-			if (!total_compressed_size_val.IsNull()) {
-				stats.column_size_bytes = total_compressed_size_val.GetValue<idx_t>();
+			if (total_compressed_size_validity.RowIsValid(metadata_idx)) {
+				stats.column_size_bytes = total_compressed_size_data[metadata_idx];
 			}
 
-			auto &geo_bbox_val = children[29];
-			if (!geo_bbox_val.IsNull() && stats.extra_stats) {
-				auto &bbox_child_values = StructValue::GetChildren(geo_bbox_val);
+			if (geo_bbox_validity.RowIsValid(metadata_idx) && stats.extra_stats) {
+				// Access geo_bbox struct fields directly
+				auto &bbox_struct_children = StructVector::GetEntries(geo_bbox_vec);
+				auto bbox_xmin_data = FlatVector::GetData<double>(*bbox_struct_children[0]);
+				auto bbox_xmax_data = FlatVector::GetData<double>(*bbox_struct_children[1]);
+				auto bbox_ymin_data = FlatVector::GetData<double>(*bbox_struct_children[2]);
+				auto bbox_ymax_data = FlatVector::GetData<double>(*bbox_struct_children[3]);
+				auto bbox_zmin_data = FlatVector::GetData<double>(*bbox_struct_children[4]);
+				auto bbox_zmax_data = FlatVector::GetData<double>(*bbox_struct_children[5]);
+				auto bbox_mmin_data = FlatVector::GetData<double>(*bbox_struct_children[6]);
+				auto bbox_mmax_data = FlatVector::GetData<double>(*bbox_struct_children[7]);
+
+				auto &bbox_xmin_validity = FlatVector::Validity(*bbox_struct_children[0]);
+				auto &bbox_xmax_validity = FlatVector::Validity(*bbox_struct_children[1]);
+				auto &bbox_ymin_validity = FlatVector::Validity(*bbox_struct_children[2]);
+				auto &bbox_ymax_validity = FlatVector::Validity(*bbox_struct_children[3]);
+				auto &bbox_zmin_validity = FlatVector::Validity(*bbox_struct_children[4]);
+				auto &bbox_zmax_validity = FlatVector::Validity(*bbox_struct_children[5]);
+				auto &bbox_mmin_validity = FlatVector::Validity(*bbox_struct_children[6]);
+				auto &bbox_mmax_validity = FlatVector::Validity(*bbox_struct_children[7]);
 				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-				auto assign_bbox_value = [&](idx_t idx, double &target) {
-					auto &value = bbox_child_values[idx];
-					if (!value.IsNull()) {
-						target = value.GetValue<double>();
-					}
-				};
-				assign_bbox_value(0, geo_stats.xmin);
-				assign_bbox_value(1, geo_stats.xmax);
-				assign_bbox_value(2, geo_stats.ymin);
-				assign_bbox_value(3, geo_stats.ymax);
-				assign_bbox_value(4, geo_stats.zmin);
-				assign_bbox_value(5, geo_stats.zmax);
-				assign_bbox_value(6, geo_stats.mmin);
-				assign_bbox_value(7, geo_stats.mmax);
+				if (bbox_xmin_validity.RowIsValid(metadata_idx))
+					geo_stats.xmin = bbox_xmin_data[metadata_idx];
+				if (bbox_xmax_validity.RowIsValid(metadata_idx))
+					geo_stats.xmax = bbox_xmax_data[metadata_idx];
+				if (bbox_ymin_validity.RowIsValid(metadata_idx))
+					geo_stats.ymin = bbox_ymin_data[metadata_idx];
+				if (bbox_ymax_validity.RowIsValid(metadata_idx))
+					geo_stats.ymax = bbox_ymax_data[metadata_idx];
+				if (bbox_zmin_validity.RowIsValid(metadata_idx))
+					geo_stats.zmin = bbox_zmin_data[metadata_idx];
+				if (bbox_zmax_validity.RowIsValid(metadata_idx))
+					geo_stats.zmax = bbox_zmax_data[metadata_idx];
+				if (bbox_mmin_validity.RowIsValid(metadata_idx))
+					geo_stats.mmin = bbox_mmin_data[metadata_idx];
+				if (bbox_mmax_validity.RowIsValid(metadata_idx))
+					geo_stats.mmax = bbox_mmax_data[metadata_idx];
 			}
 
-			auto &geo_types_val = children[30];
-			if (!geo_types_val.IsNull() && stats.extra_stats) {
+			if (geo_types_validity.RowIsValid(metadata_idx) && stats.extra_stats) {
 				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-				for (const auto &child : ListValue::GetChildren(geo_types_val)) {
+				// geo_types is a list of strings, need to access it differently
+				auto geo_types_value = geo_types_vec.GetValue(metadata_idx);
+				for (const auto &child : ListValue::GetChildren(geo_types_value)) {
 					geo_stats.geo_types.insert(StringValue::Get(child));
 				}
 			}
