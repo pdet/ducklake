@@ -261,6 +261,25 @@ static unique_ptr<Expression> GetPartitionExpressionForUpdate(ClientContext &con
 	}
 }
 
+static const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
+                                                optional_idx &index) {
+	if (!copy_input.field_data) {
+		throw InvalidInputException("Partitioning requires field ids");
+	}
+	auto entry = copy_input.field_data->GetByFieldIndex(field_id);
+	if (!entry) {
+		throw InvalidInputException("Partitioned column not found");
+	}
+	auto &top_level_field_ids = copy_input.field_data->GetFieldIds();
+	for (idx_t col_idx = 0; col_idx < top_level_field_ids.size(); col_idx++) {
+		if (top_level_field_ids[col_idx].get() == entry.get()) {
+			index = col_idx;
+			return *entry;
+		}
+	}
+	throw InvalidInputException("Partitioning is only supported on top-level columns");
+}
+
 PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
@@ -304,7 +323,10 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 				// Identity Partitions are already there
 				continue;
 			}
-			auto &child_expression = expressions[field.partition_key_index]->Cast<BoundReferenceExpression>();
+			optional_idx col_idx;
+			GetTopLevelColumn(copy_input, field.field_id, col_idx);
+			D_ASSERT(col_idx.IsValid());
+			auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
 			auto column_reference =
 			    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
 			expressions.push_back(GetPartitionExpressionForUpdate(context, std::move(column_reference), field));
