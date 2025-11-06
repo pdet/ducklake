@@ -1373,7 +1373,8 @@ static string GetProjection(const vector<string> &columns_to_read) {
 		if (!result.empty()) {
 			result += ", ";
 		}
-		result += KeywordHelper::WriteOptionallyQuoted(entry);
+		result += entry;
+		// result += KeywordHelper::WriteOptionallyQuoted(entry);
 	}
 	return result;
 }
