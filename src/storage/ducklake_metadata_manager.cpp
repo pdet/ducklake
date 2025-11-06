@@ -1048,6 +1048,11 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	if (col.children.empty()) {
 		return DuckLakeTypes::FromString(col.type).ToString();
 	}
+	auto &ducklake_catalog = transaction.GetCatalog();
+	if (!ducklake_catalog.IsDuckCatalog() && (col.type == "struct" || col.type == "map" || col.type == "list")) {
+		// If we are not using duckdb as a catalog DBMS, we store nested types as varchar.
+		return "VARCHAR";
+	}
 	if (col.type == "struct") {
 		string result;
 		for (auto &child : col.children) {
@@ -1374,7 +1379,6 @@ static string GetProjection(const vector<string> &columns_to_read) {
 			result += ", ";
 		}
 		result += entry;
-		// result += KeywordHelper::WriteOptionallyQuoted(entry);
 	}
 	return result;
 }
