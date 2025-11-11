@@ -1,0 +1,68 @@
+# name: test/sql/rowid/ducklake_row_id_update.test
+# description: test ducklake row-id tracking over partition and updates
+# group: [rowid]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH 'ducklake_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.test(i INTEGER, j INTEGER);
+
+statement ok
+USE ducklake;
+
+statement ok
+ALTER TABLE test SET PARTITIONED BY (i);
+
+# 1. Two rows on different partitions.
+statement ok
+INSERT INTO test VALUES (1, 2)
+
+statement ok
+INSERT INTO test VALUES (2, 6);
+
+# Even though they are in different partitions they have different row_ids
+query III
+SELECT rowid,i,j FROM test
+----
+0	1	2
+1	2	6
+
+# Merge into with new row into partition
+statement ok
+MERGE INTO test
+    USING (
+        SELECT
+            1 as i,
+            5 as j
+    ) AS test_updates
+    ON test.j = test_updates.j
+    WHEN NOT MATCHED THEN INSERT;
+
+# RowIDs are still unique
+query III
+SELECT rowid,i,j FROM test
+----
+0	1	2
+1	2	6
+2	1	5
+
+# Update two rows in the same partition
+statement ok
+UPDATE test SET j = 10 where i = 1;
+
+# The update borks rowlineage
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	10
+1	2	6
+2	1	10
