@@ -304,7 +304,10 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 				// Identity Partitions are already there
 				continue;
 			}
-			auto &child_expression = expressions[field.partition_key_index]->Cast<BoundReferenceExpression>();
+			optional_idx col_idx;
+			DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
+			D_ASSERT(col_idx.IsValid());
+			auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
 			auto column_reference =
 			    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
 			expressions.push_back(GetPartitionExpressionForUpdate(context, std::move(column_reference), field));
