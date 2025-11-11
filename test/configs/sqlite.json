@@ -42,7 +42,8 @@
         "test/sql/transaction/transaction_conflicts.test",
         "test/sql/transaction/transaction_conflicts_delete.test",
         "test/sql/transaction/transaction_conflicts_view.test",
-        "test/sql/concurrent/file_level_conflict.test"
+        "test/sql/concurrent/file_level_conflict.test",
+        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     },
     {
@@ -87,7 +88,9 @@
         "test/sql/compaction/compaction_cleanup_global.test",
         "test/sql/compaction/expire_snapshot_global_option.test",
         "test/sql/checkpoint/many_inserts_transaction.test",
-        "test/sql/checkpoint/view_checkpoint.test"
+        "test/sql/checkpoint/view_checkpoint.test",
+        "test/sql/checkpoint/checkpoint_ducklake.test",
+        "test/sql/checkpoint/checkpoint_updates_interleaved.test"
       ]
     },
     {
