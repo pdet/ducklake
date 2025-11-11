@@ -86,7 +86,8 @@
         "test/sql/compaction/cleanup_old_files_global_option.test",
         "test/sql/compaction/compaction_cleanup_global.test",
         "test/sql/compaction/expire_snapshot_global_option.test",
-        "test/sql/checkpoint/many_inserts_transaction.test"
+        "test/sql/checkpoint/many_inserts_transaction.test",
+        "test/sql/checkpoint/view_checkpoint.test"
       ]
     },
     {
