@@ -66,3 +66,79 @@ SELECT rowid,i,j FROM test order by rowid
 0	1	10
 1	2	6
 2	1	10
+
+statement ok
+INSERT INTO test VALUES (3, 4), (3,10), (2,5);
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	10
+1	2	6
+2	1	10
+5	3	4
+6	3	10
+7	2	5
+
+statement ok
+UPDATE test SET j = 5 where j = 10;
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	5
+1	2	6
+2	1	5
+5	3	4
+6	3	5
+7	2	5
+
+statement ok
+UPDATE test SET i = 1 where j = 5;
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	5
+1	2	6
+2	1	5
+5	3	4
+6	1	5
+7	1	5
+
+
+statement ok
+INSERT INTO test VALUES (1,2);
+
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	5
+1	2	6
+2	1	5
+5	3	4
+6	1	5
+7	1	5
+15	1	2
+
+statement ok
+MERGE INTO test
+    USING (
+        SELECT
+            1 as i,
+            5 as j
+    ) AS test_updates
+    ON test.j = test_updates.j
+    WHEN MATCHED THEN UPDATE;
+
+query III
+SELECT rowid,i,j FROM test order by rowid
+----
+0	1	5
+1	2	6
+1	1	5
+2	1	5
+3	1	5
+5	3	4
+15	1	2
