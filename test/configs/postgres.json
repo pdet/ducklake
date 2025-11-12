@@ -41,7 +41,8 @@
         "test/sql/checkpoint/checkpoint_ducklake.test",
         "test/sql/checkpoint/many_inserts_transaction.test",
         "test/sql/data_inlining/insert_inlining_concurrent.test",
-        "test/sql/transaction/transaction_inlining.test"
+        "test/sql/transaction/transaction_inlining.test",
+        "test/sql/data_inlining/data_inlining_issue504.test"
       ]
     },
     {
