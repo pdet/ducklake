@@ -47,3 +47,40 @@ COMMIT
 query I nosort alltypes
 FROM ducklake.data_types
 ----
+
+statement ok
+CREATE TABLE extra_types (
+    d DATE,
+    b BLOB,
+    v VARCHAR,
+    ts_s TIMESTAMP_S,
+    ts_ms TIMESTAMP_MS,
+    ts_ns TIMESTAMP_NS,
+    ts_tz TIMESTAMPTZ
+);
+
+statement ok
+INSERT INTO extra_types VALUES ('2025-11-12','\x48656c6c6f20576f726c64','Sample text','2025-11-12 15:30:45',
+    '2025-11-12 15:30:45.123','2025-11-12 15:30:45.123','2025-11-12 15:30:45+00');
+
+
+query I nosort extra_types
+FROM extra_types
+----
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.extra_types AS FROM extra_types
+
+query I nosort extra_types
+FROM ducklake.extra_types
+----
+
+statement ok
+COMMIT
+
+query I nosort extra_types
+FROM ducklake.extra_types
+----

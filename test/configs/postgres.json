@@ -20,7 +20,8 @@
         "test/sql/general/missing_parquet.test",
         "test/sql/general/paths.test",
         "test/sql/general/default_path.test",
-        "test/sql/transaction/concurrent_table_creation.test"
+        "test/sql/autoloading/autoload_data_path.test",
+        "test/sql/general/metadata_parameters.test"
       ]
     },
     {
@@ -31,10 +32,9 @@
       ]
     },
     {
-      "reason": "DuckDB as a catalog specific",
+      "reason": "Postgres Locking (Not a bug, rather PG behavior)",
       "paths": [
-        "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test"
+        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     }
   ]
