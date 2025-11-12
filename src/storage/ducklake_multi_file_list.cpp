@@ -205,8 +205,9 @@ string GenerateConstantFilter(const ConstantFilter &constant_filter, const Logic
 	case ExpressionType::COMPARE_NOTEQUAL:
 		// x <> constant
 		// this can only be false if "constant = min AND constant = max" (i.e. min = max = constant)
-		// skip this for now
-		return string();
+		referenced_stats.insert("min_value");
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("NOT (%s = %s AND %s = %s)", min_value, constant_str, max_value, constant_str);
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		// x >= constant
 		// this can only be true if "max >= C"
@@ -313,7 +314,7 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 			if (child_str.empty()) {
 				return string();
 			}
-			result += child_str;
+			result += "(" + child_str + ")";
 		}
 		return result;
 	}
@@ -321,14 +322,14 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
 		string result;
 		for (auto &child_filter : conjunction_and_filter.child_filters) {
+			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
+			if (child_str.empty()) {
+				continue; // skip this child, we can still use other children
+			}
 			if (!result.empty()) {
 				result += " AND ";
 			}
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				return string();
-			}
-			result += child_str;
+			result += "(" + child_str + ")";
 		}
 		return result;
 	}
@@ -348,7 +349,7 @@ string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &
 			if (next_filter.empty()) {
 				return string();
 			}
-			result += next_filter;
+			result += "(" + next_filter + ")";
 		}
 		return result;
 	}

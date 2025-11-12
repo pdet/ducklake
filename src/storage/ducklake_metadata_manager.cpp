@@ -2508,12 +2508,21 @@ WHERE snapshot_id IN (%s);
 	// get a list of tables that are no longer required after these deletions
 	result = transaction.Query(R"(
 SELECT table_id
-FROM {METADATA_CATALOG}.ducklake_table
-WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
+FROM {METADATA_CATALOG}.ducklake_table t
+WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
     SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
-);)");
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM {METADATA_CATALOG}.ducklake_table t2
+    WHERE t2.table_id = t.table_id
+      AND (t2.end_snapshot IS NULL OR  EXISTS (SELECT snapshot_id
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot))
+  );)");
+
 	vector<TableIndex> cleanup_tables;
 	for (auto &row : *result) {
 		cleanup_tables.push_back(TableIndex(row.GetValue<idx_t>(0)));
