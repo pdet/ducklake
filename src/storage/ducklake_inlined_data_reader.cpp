@@ -155,7 +155,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 }
 
 AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
-                                     LocalTableFunctionState &local_state, DataChunk &chunk) {
+                                            LocalTableFunctionState &local_state, DataChunk &chunk) {
 	if (!virtual_columns.empty()) {
 		scan_chunk.Reset();
 		data->data->Scan(state, scan_chunk);

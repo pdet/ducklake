@@ -211,39 +211,29 @@ FROM parquet_full_metadata(%s)
 		auto parquet_schema_offset = parquet_schema_entry.offset;
 		auto parquet_schema_length = parquet_schema_entry.length;
 
-		ParquetFileMetadata *file_ptr = nullptr;
+		// Extract filename from the file metadata struct
+		auto &struct_children = StructVector::GetEntries(file_metadata_list_entries);
+		idx_t struct_idx = file_metadata_offset;
 
-		// File metadata - access struct fields directly
-		{
-			// file_metadata_entries is a struct vector, get its child vectors
-			auto &struct_children = StructVector::GetEntries(file_metadata_list_entries);
+		auto filename =
+		    FlatVector::GetData<string_t>(*struct_children[0])[struct_idx].GetString(); // struct field: file_name
 
-			// Access individual fields directly from the struct child vectors
-			// We only process the first entry (index 0 within the list)
-			idx_t struct_idx = file_metadata_offset; // First entry in the list
-
-			auto &filename_vec = *struct_children[0];
-			auto filename = FlatVector::GetData<string_t>(filename_vec)[struct_idx].GetString();
-
-			auto &found_file_ptr = parquet_files[filename];
-			if (!found_file_ptr) {
-				found_file_ptr = make_uniq<ParquetFileMetadata>();
-			} else {
-				// Already initialized, this file must be found in multiple globs
-				continue;
-			}
-			file_ptr = found_file_ptr.get();
-			file_ptr->filename = filename;
-
-			auto &num_rows_vec = *struct_children[1];
-			auto &file_size_vec = *struct_children[2];
-			auto &footer_size_vec = *struct_children[3];
-
-			file_ptr->row_count = FlatVector::GetData<int64_t>(num_rows_vec)[struct_idx];
-			file_ptr->file_size_bytes = FlatVector::GetData<uint64_t>(file_size_vec)[struct_idx];
-			file_ptr->footer_size = FlatVector::GetData<uint64_t>(footer_size_vec)[struct_idx];
+		// Check if we've already processed this file (can happen with overlapping globs)
+		auto &file_metadata_ptr = parquet_files[filename];
+		if (file_metadata_ptr) {
+			// File already processed in a previous glob, skip
+			continue;
 		}
-		auto &file = *file_ptr;
+
+		// Initialize new file metadata entry
+		file_metadata_ptr = make_uniq<ParquetFileMetadata>();
+		auto &file = *file_metadata_ptr;
+		file.filename = filename;
+
+		file.row_count = FlatVector::GetData<int64_t>(*struct_children[1])[struct_idx]; // struct field: num_rows
+		file.file_size_bytes =
+		    FlatVector::GetData<uint64_t>(*struct_children[2])[struct_idx]; // struct field: file_size_bytes
+		file.footer_size = FlatVector::GetData<uint64_t>(*struct_children[3])[struct_idx]; // struct field: footer_size
 
 		bool saw_root = false;
 		vector<idx_t> child_counts;
