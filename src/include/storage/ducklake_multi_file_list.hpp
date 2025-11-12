@@ -13,6 +13,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_inlined_data.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -25,8 +26,8 @@ class DuckLakeMultiFileList : public MultiFileList {
 
 public:
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeDataFile> transaction_local_files,
-	                      shared_ptr<DuckLakeInlinedData> transaction_local_data, string filter = "",
-	                      string cte_section = "");
+	                      shared_ptr<DuckLakeInlinedData> transaction_local_data,
+	                      unique_ptr<FilterPushdownInfo> filter_info = nullptr);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, vector<DuckLakeFileListEntry> files_to_scan);
 	DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info, const DuckLakeInlinedTableInfo &inlined_table);
 
@@ -78,10 +79,8 @@ private:
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	//! The set of delete scans, only used when scanning deleted tuples using ducklake_table_deletions
 	vector<DuckLakeDeleteScanEntry> delete_scans;
-	//! The filter to apply
-	string filter;
-	//! The CTE section to apply before the WHERE clause
-	string cte_section;
+	//! Filter pushdown information
+	unique_ptr<FilterPushdownInfo> filter_info;
 };
 
 } // namespace duckdb

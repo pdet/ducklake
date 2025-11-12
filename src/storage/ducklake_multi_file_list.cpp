@@ -2,6 +2,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -24,12 +25,11 @@ namespace duckdb {
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
                                              vector<DuckLakeDataFile> transaction_local_files_p,
-                                             shared_ptr<DuckLakeInlinedData> transaction_local_data_p, string filter_p,
-                                             string cte_section_p)
+                                             shared_ptr<DuckLakeInlinedData> transaction_local_data_p,
+                                             unique_ptr<FilterPushdownInfo> filter_info_p)
     : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), read_info(read_info), read_file_list(false),
       transaction_local_files(std::move(transaction_local_files_p)),
-      transaction_local_data(std::move(transaction_local_data_p)), filter(std::move(filter_p)),
-      cte_section(std::move(cte_section_p)) {
+      transaction_local_data(std::move(transaction_local_data_p)), filter_info(std::move(filter_info_p)) {
 }
 
 DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
@@ -49,314 +49,11 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
-struct CTERequirement {
-	idx_t column_field_index;
-	unordered_set<string> referenced_stats;
-	idx_t reference_count = 1;
-
-	CTERequirement(idx_t column_idx, unordered_set<string> stats)
-	    : column_field_index(column_idx), referenced_stats(std::move(stats)) {
-	}
-};
-
-struct FilterSQLResult {
-	string where_conditions;                            // WHERE clause using CTEs
-	unordered_map<idx_t, CTERequirement> required_ctes; // CTE requirements for further processing
-
-	FilterSQLResult() = default;
-	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
-	}
-};
-
-static string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-                                                 const DuckLakeFunctionInfo &read_info) {
-	if (requirements.empty()) {
-		return "";
-	}
-
-	string cte_section = "WITH ";
-	bool first_cte = true;
-
-	for (const auto &entry : requirements) {
-		const auto &req = entry.second;
-		if (!first_cte) {
-			cte_section += ",\n";
-		}
-		first_cte = false;
-
-		string select_list = "data_file_id";
-		for (const auto &stat : req.referenced_stats) {
-			select_list += ", " + stat;
-		}
-
-		// Only MATERIALIZED if the CTE is referenced multiple times
-		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
-
-		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint);
-		cte_section += StringUtil::Format("  SELECT %s\n", select_list);
-		cte_section += "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n";
-		cte_section += StringUtil::Format("  WHERE column_id = %d AND table_id = %d\n", req.column_field_index,
-		                                  read_info.table_id.index);
-		cte_section += ")";
-	}
-
-	return cte_section + "\n";
-}
-
-string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
-
-static FilterSQLResult ConvertTableFilterSetToSQL(const TableFilterSet &table_filters,
-                                                  const vector<column_t> &column_ids,
-                                                  const DuckLakeFunctionInfo &read_info) {
-	FilterSQLResult result;
-	string conditions;
-
-	for (auto &entry : table_filters.filters) {
-		auto column_index_val = entry.first;
-		idx_t column_idx = column_index_val;
-
-		// FIXME: handle structs
-		auto column_id = column_ids[column_idx];
-
-		if (IsVirtualColumn(column_id)) {
-			// skip pushing filters on virtual columns
-			continue;
-		}
-
-		unordered_set<string> referenced_stats;
-		auto filter_condition = GenerateFilterPushdown(*entry.second, referenced_stats);
-		if (filter_condition.empty()) {
-			// failed to generate filter for this column
-			continue;
-		}
-
-		auto column_index = PhysicalIndex(column_id);
-		auto &root_id = read_info.table.GetFieldId(column_index);
-		auto field_index = root_id.GetFieldIndex().index;
-
-		// generate the final filter for this column
-		string cte_name = StringUtil::Format("col_%d_stats", field_index);
-
-		// if any of the referenced stats are NULL we cannot prune
-		string null_checks;
-		for (auto &stat : referenced_stats) {
-			null_checks += stat + " IS NULL OR ";
-		}
-
-		if (!conditions.empty()) {
-			conditions += " AND ";
-		}
-		// finally add the filter
-		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
-		                                 null_checks, filter_condition);
-		// Add the CTE requirement for this column
-		CTERequirement req(field_index, referenced_stats);
-		result.required_ctes.emplace(field_index, std::move(req));
-	}
-
-	result.where_conditions = conditions;
-	return result;
-}
-
 unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientContext &context,
                                                                        const MultiFileOptions &options,
                                                                        MultiFilePushdownInfo &info,
                                                                        vector<unique_ptr<Expression>> &filters) {
 	return nullptr;
-}
-
-bool ValueIsFinite(const Value &val) {
-	if (val.type().id() != LogicalTypeId::FLOAT && val.type().id() != LogicalTypeId::DOUBLE) {
-		return true;
-	}
-	double constant_val = val.GetValue<double>();
-	return Value::IsFinite(constant_val);
-}
-
-string CastValueToTarget(const Value &val, const LogicalType &type) {
-	if (type.IsNumeric() && ValueIsFinite(val)) {
-		// for (finite) numerics we directly emit the number
-		return val.ToString();
-	}
-	// convert to a string
-	return DuckLakeUtil::SQLLiteralToString(val.ToString());
-}
-
-string CastStatsToTarget(const string &stats, const LogicalType &type) {
-	// we only need to cast numerics
-	if (type.IsNumeric()) {
-		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
-	}
-	return stats;
-}
-
-string GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
-                              unordered_set<string> &referenced_stats) {
-	auto constant_str = CastValueToTarget(constant_filter.constant, type);
-	auto min_value = CastStatsToTarget("min_value", type);
-	auto max_value = CastStatsToTarget("max_value", type);
-	switch (constant_filter.comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-		// x = constant
-		// this can only be true if "constant BETWEEN min AND max"
-		referenced_stats.insert("min_value");
-		referenced_stats.insert("max_value");
-		return StringUtil::Format("%s BETWEEN %s AND %s", constant_str, min_value, max_value);
-	case ExpressionType::COMPARE_NOTEQUAL:
-		// x <> constant
-		// this can only be false if "constant = min AND constant = max" (i.e. min = max = constant)
-		referenced_stats.insert("min_value");
-		referenced_stats.insert("max_value");
-		return StringUtil::Format("NOT (%s = %s AND %s = %s)", min_value, constant_str, max_value, constant_str);
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		// x >= constant
-		// this can only be true if "max >= C"
-		referenced_stats.insert("max_value");
-		return StringUtil::Format("%s >= %s", max_value, constant_str);
-	case ExpressionType::COMPARE_GREATERTHAN:
-		// x > constant
-		// this can only be true if "max > C"
-		referenced_stats.insert("max_value");
-		return StringUtil::Format("%s > %s", max_value, constant_str);
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		// x <= constant
-		// this can only be true if "min <= C"
-		referenced_stats.insert("min_value");
-		return StringUtil::Format("%s <= %s", min_value, constant_str);
-	case ExpressionType::COMPARE_LESSTHAN:
-		// x < constant
-		// this can only be true if "min < C"
-		referenced_stats.insert("min_value");
-		return StringUtil::Format("%s < %s", min_value, constant_str);
-	default:
-		// unsupported
-		return string();
-	}
-}
-
-string GenerateConstantFilterDouble(const ConstantFilter &constant_filter, const LogicalType &type,
-                                    unordered_set<string> &referenced_stats) {
-	double constant_val = constant_filter.constant.GetValue<double>();
-	bool constant_is_nan = Value::IsNan(constant_val);
-	switch (constant_filter.comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-		// x = constant
-		if (constant_is_nan) {
-			// x = NAN - check for `contains_nan`
-			referenced_stats.insert("contains_nan");
-			return "contains_nan";
-		}
-		// else check as if this is a numeric
-		return GenerateConstantFilter(constant_filter, type, referenced_stats);
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-	case ExpressionType::COMPARE_GREATERTHAN: {
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			// note that > and >= we can actually handle since nan is the biggest value
-			// (>= is equal to =, > is always false)
-			return string();
-		}
-		// generate the numeric filter
-		string filter = GenerateConstantFilter(constant_filter, type, referenced_stats);
-		if (filter.empty()) {
-			return string();
-		}
-		// since NaN is bigger than anything - we also need to check for contains_nan
-		referenced_stats.insert("contains_nan");
-		return filter + " OR contains_nan";
-	}
-	case ExpressionType::COMPARE_NOTEQUAL:
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-	case ExpressionType::COMPARE_LESSTHAN:
-		if (constant_is_nan) {
-			// skip these filters if the constant is nan
-			return string();
-		}
-		// these are equivalent to the numeric filter
-		return GenerateConstantFilter(constant_filter, type, referenced_stats);
-	default:
-		// unsupported
-		return string();
-	}
-}
-
-string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &constant_filter = filter.Cast<ConstantFilter>();
-		auto &type = constant_filter.constant.type();
-		switch (type.id()) {
-		case LogicalTypeId::BLOB:
-			return string();
-		case LogicalTypeId::FLOAT:
-		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
-		default:
-			return GenerateConstantFilter(constant_filter, type, referenced_stats);
-		}
-	}
-	case TableFilterType::IS_NULL:
-		// IS NULL can only be true if the file has any NULL values
-		referenced_stats.insert("null_count");
-		return "null_count > 0";
-	case TableFilterType::IS_NOT_NULL:
-		// IS NOT NULL can only be true if the file has any valid values
-		referenced_stats.insert("value_count");
-		return "value_count > 0";
-	case TableFilterType::CONJUNCTION_OR: {
-		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
-		string result;
-		for (auto &child_filter : conjunction_or_filter.child_filters) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				return string();
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::CONJUNCTION_AND: {
-		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
-		string result;
-		for (auto &child_filter : conjunction_and_filter.child_filters) {
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				continue; // skip this child, we can still use other children
-			}
-			if (!result.empty()) {
-				result += " AND ";
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::OPTIONAL_FILTER: {
-		auto &optional_filter = filter.Cast<OptionalFilter>();
-		return GenerateFilterPushdown(*optional_filter.child_filter, referenced_stats);
-	}
-	case TableFilterType::IN_FILTER: {
-		auto &in_filter = filter.Cast<InFilter>();
-		string result;
-		for (auto &value : in_filter.values) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
-			auto next_filter = GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
-			if (next_filter.empty()) {
-				return string();
-			}
-			result += "(" + next_filter + ")";
-		}
-		return result;
-	}
-	default:
-		// unsupported filter
-		return string();
-	}
 }
 
 unique_ptr<MultiFileList>
@@ -367,14 +64,37 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
 	}
-	auto dynamic_result = ConvertTableFilterSetToSQL(filters, column_ids, read_info);
-	if (dynamic_result.where_conditions.empty()) {
+
+	auto pushdown_info = make_uniq<FilterPushdownInfo>();
+
+	for (auto &entry : filters.filters) {
+		auto column_index_val = entry.first;
+		idx_t column_idx = column_index_val;
+		auto column_id = column_ids[column_idx];
+
+		if (IsVirtualColumn(column_id)) {
+			continue;
+		}
+
+		auto column_index = PhysicalIndex(column_id);
+		auto &root_id = read_info.table.GetFieldId(column_index);
+		auto field_index = root_id.GetFieldIndex().index;
+
+		auto filter_copy = entry.second->Copy();
+		// Get the column type from the table schema, not from the scan types array
+		const auto &column_type = read_info.column_types[column_index.index];
+
+		ColumnFilterInfo filter_info(field_index, column_type, std::move(filter_copy));
+		pushdown_info->column_filters.emplace(field_index, std::move(filter_info));
+	}
+
+	if (pushdown_info->column_filters.empty()) {
 		// no pushdown possible
 		return nullptr;
 	}
-	return make_uniq<DuckLakeMultiFileList>(
-	    read_info, transaction_local_files, transaction_local_data, std::move(dynamic_result.where_conditions),
-	    GenerateCTESectionFromRequirements(dynamic_result.required_ctes, read_info));
+
+	return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
+	                                        std::move(pushdown_info));
 }
 
 vector<OpenFileInfo> DuckLakeMultiFileList::GetAllFiles() {
@@ -472,12 +192,18 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) {
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
-	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data, filter,
-	                                               cte_section);
+	unique_ptr<FilterPushdownInfo> filter_copy;
+	if (filter_info) {
+		filter_copy = filter_info->Copy();
+	}
+
+	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
+	                                               std::move(filter_copy));
 	result->files = GetFiles();
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
-	return std::move(result);
+	result->inlined_data_tables = inlined_data_tables;
+	return result;
 }
 
 const DuckLakeFileListEntry &DuckLakeMultiFileList::GetFileEntry(idx_t file_idx) {
@@ -515,7 +241,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!read_info.table_id.IsTransactionLocal()) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter, cte_section);
+		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < result.size(); file_idx++) {
@@ -585,7 +311,7 @@ void DuckLakeMultiFileList::GetFilesForTable() {
 	if (!read_info.table_id.IsTransactionLocal()) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter, cte_section);
+		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
 	}
 	if (transaction.HasDroppedFiles()) {
 		for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
