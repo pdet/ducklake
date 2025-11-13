@@ -654,6 +654,18 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 		}
 		return;
 	}
+
+	if (DuckLakeTypes::IsGeoType(type)) {
+		if (!DuckLakeTypes::IsGeoType(source_type)) {
+			failures.push_back(StringUtil::Format(
+			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
+			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
+			    source_type));
+			Fail();
+		}
+		return;
+	}
+
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:

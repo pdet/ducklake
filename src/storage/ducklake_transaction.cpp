@@ -2,9 +2,11 @@
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -13,8 +15,6 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_view_entry.hpp"
-#include "duckdb/main/client_data.hpp"
-#include "duckdb/common/thread.hpp"
 
 namespace duckdb {
 
@@ -2024,6 +2024,21 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 	}
 	default:
 		throw InternalException("Catalog type not supported for IsDeleted");
+	}
+}
+
+bool DuckLakeTransaction::IsRenamed(CatalogEntry &entry) {
+	switch (entry.type) {
+	case CatalogType::TABLE_ENTRY: {
+		auto &table_entry = entry.Cast<DuckLakeTableEntry>();
+		return renamed_tables.find(table_entry.GetTableId()) != renamed_tables.end();
+	}
+	case CatalogType::VIEW_ENTRY:
+	case CatalogType::SCHEMA_ENTRY: {
+		return false;
+	}
+	default:
+		throw InternalException("Catalog type not supported for IsRenamed");
 	}
 }
 

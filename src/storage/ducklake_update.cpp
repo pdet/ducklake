@@ -9,6 +9,8 @@
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -41,6 +43,8 @@ public:
 	unique_ptr<LocalSinkState> copy_local_state;
 	unique_ptr<LocalSinkState> delete_local_state;
 	unique_ptr<ExpressionExecutor> expression_executor;
+	//! Chunk where the updated expressions are executed.
+	DataChunk update_expression_chunk;
 	DataChunk insert_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
@@ -74,6 +78,7 @@ unique_ptr<LocalSinkState> DuckLakeUpdate::GetLocalSinkState(ExecutionContext &c
 			type = DuckLakeTypes::GetCastedType(type);
 		}
 	}
+	result->update_expression_chunk.Initialize(context.client, insert_types);
 	// updates also write the row id to the file, so the final version needs the row_id
 	insert_types.push_back(LogicalType::BIGINT);
 	result->insert_chunk.Initialize(context.client, insert_types);
@@ -89,9 +94,17 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &lstate = input.local_state.Cast<DuckLakeUpdateLocalState>();
 
 	// push the to-be-inserted data into the copy
+	auto &update_expression_chunk = lstate.update_expression_chunk;
 	auto &insert_chunk = lstate.insert_chunk;
+
+	update_expression_chunk.SetCardinality(chunk.size());
 	insert_chunk.SetCardinality(chunk.size());
-	lstate.expression_executor->Execute(chunk, insert_chunk);
+	lstate.expression_executor->Execute(chunk, update_expression_chunk);
+
+	// We reference all columns we created in our updates
+	for (idx_t i = 0; i < update_expression_chunk.ColumnCount(); i++) {
+		insert_chunk.data[i].Reference(update_expression_chunk.data[i]);
+	}
 
 	insert_chunk.data[insert_chunk.data.size() - 1].Reference(chunk.data[row_id_index]);
 
@@ -265,7 +278,6 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 	auto &copy_op = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-
 	// plan the delete
 	vector<idx_t> row_id_indexes;
 	for (idx_t i = 0; i < 3; i++) {
@@ -288,10 +300,21 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	if (copy_input.partition_data) {
 		// If we have partitions, we must include them in our expressions.
 		for (auto &field : copy_input.partition_data->fields) {
+			if (field.transform.type == DuckLakeTransformType::IDENTITY) {
+				// Identity Partitions are already there
+				continue;
+			}
 			auto &child_expression = expressions[field.partition_key_index]->Cast<BoundReferenceExpression>();
 			auto column_reference =
 			    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
 			expressions.push_back(GetPartitionExpressionForUpdate(context, std::move(column_reference), field));
+		}
+	}
+
+	for (auto &expr : expressions) {
+		if (DuckLakeTypes::RequiresCast(expr->return_type)) {
+			auto target_type = DuckLakeTypes::GetCastedType(expr->return_type);
+			expr = BoundCastExpression::AddCastToType(context, std::move(expr), std::move(target_type));
 		}
 	}
 

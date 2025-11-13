@@ -109,7 +109,7 @@ public:
 
 private:
 	void FlushDelete(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeDeleteGlobalState &global_state,
-	                 const string &filename, vector<idx_t> &deleted_rows) const;
+	                 const string &filename, ColumnDataCollection &deleted_rows) const;
 };
 
 } // namespace duckdb
