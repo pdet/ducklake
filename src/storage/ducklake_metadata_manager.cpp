@@ -1466,7 +1466,8 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 		return StringUtil::Format("MAP(%s, %s)", GetColumnType(col.children[0]), GetColumnType(col.children[1]));
 	}
 	default:
-		if (col.children.empty()) {
+		if (!col.children.empty()) {
+			// This is a nested structure that we currently do not support.
 			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
 			                              col.type);
 		}
