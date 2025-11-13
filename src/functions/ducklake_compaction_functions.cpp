@@ -538,9 +538,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			auto schemas = ducklake_catalog.GetSchemas(context);
 			for (auto &cur_schema : schemas) {
 				cur_schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-					                   compactions);
+					if (entry.type == CatalogType::TABLE_ENTRY) {
+						auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
+						                   delete_threshold, compactions);
+					}
 				});
 			}
 			return GenerateCompactionOperator(input, bind_index, compactions);
@@ -549,9 +551,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			auto schema_entry = catalog.GetSchema(context, catalog.GetName(), schema, OnEntryNotFound::THROW_EXCEPTION);
 			auto &ducklake_schema = schema_entry->Cast<DuckLakeSchemaEntry>();
 			ducklake_schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-				auto &cur_table = entry.Cast<DuckLakeTableEntry>();
-				GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-				                   compactions);
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
+					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
+					                   compactions);
+				}
 			});
 			return GenerateCompactionOperator(input, bind_index, compactions);
 		}
