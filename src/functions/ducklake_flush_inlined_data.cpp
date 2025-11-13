@@ -272,8 +272,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 		// - scan all tables from the relevant schemas
 		for (auto &schema : schemas) {
-			schema.get().Scan(context, CatalogType::TABLE_ENTRY,
-			                  [&](CatalogEntry &entry) { tables.push_back(entry.Cast<DuckLakeTableEntry>()); });
+			schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					tables.push_back(entry.Cast<DuckLakeTableEntry>());
+				}
+			});
 		}
 	} else {
 		// specific table - fetch the table
