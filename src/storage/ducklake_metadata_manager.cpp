@@ -39,6 +39,10 @@ DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &trans
 	return transaction.GetMetadataManager();
 }
 
+bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
+	return true;
+}
+
 FileSystem &DuckLakeMetadataManager::GetFileSystem() {
 	return FileSystem::GetFileSystem(transaction.GetCatalog().GetDatabase());
 }
@@ -1440,10 +1444,12 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 }
 
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
-	if (col.children.empty()) {
-		return DuckLakeTypes::FromString(col.type).ToString();
+	auto column_type = DuckLakeTypes::FromString(col.type);
+	if (!TypeIsNativelySupported(column_type)) {
+		return "VARCHAR";
 	}
-	if (col.type == "struct") {
+	switch (column_type.id()) {
+	case LogicalTypeId::STRUCT: {
 		string result;
 		for (auto &child : col.children) {
 			if (!result.empty()) {
@@ -1453,13 +1459,20 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 		}
 		return "STRUCT(" + result + ")";
 	}
-	if (col.type == "list") {
+	case LogicalTypeId::LIST: {
 		return GetColumnType(col.children[0]) + "[]";
 	}
-	if (col.type == "map") {
+	case LogicalTypeId::MAP: {
 		return StringUtil::Format("MAP(%s, %s)", GetColumnType(col.children[0]), GetColumnType(col.children[1]));
 	}
-	throw InternalException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType", col.type);
+	default:
+		if (!col.children.empty()) {
+			// This is a nested structure that we currently do not support.
+			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
+			                              col.type);
+		}
+		return column_type.ToString();
+	}
 }
 
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
@@ -1768,7 +1781,7 @@ static string GetProjection(const vector<string> &columns_to_read) {
 		if (!result.empty()) {
 			result += ", ";
 		}
-		result += KeywordHelper::WriteOptionallyQuoted(entry);
+		result += entry;
 	}
 	return result;
 }

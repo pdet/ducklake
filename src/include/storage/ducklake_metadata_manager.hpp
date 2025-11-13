@@ -97,6 +97,8 @@ public:
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
 
+	virtual bool TypeIsNativelySupported(const LogicalType &type);
+
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
 	//! Initialize a new DuckLake
