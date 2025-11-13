@@ -252,7 +252,8 @@
         "test/sql/copy/parquet/writer/parquet_write_memory_usage.test",
         "test/fuzzer/sqlsmith/nullif_map_with_config.test",
         "test/sql/storage/buffer_manager_temp_dir.test",
-        "test/issues/internal/test_5457.test"
+        "test/issues/internal/test_5457.test",
+        "test/sql/copy/csv/code_cov/csv_disk_reload.test"
       ]
     },
     {
