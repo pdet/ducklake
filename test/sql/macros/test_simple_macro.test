@@ -28,7 +28,7 @@ FROM __ducklake_metadata_ducklake.ducklake_macro;
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 ----
-1	0	duckdb	(a, b) AS ((a + b))	scalar
+1	0	duckdb	(a + b)	scalar
 
 query IIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;

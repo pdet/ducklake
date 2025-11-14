@@ -22,6 +22,8 @@
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
+#include "duckdb/function/macro_function.hpp"
+#include "duckdb/function/scalar_macro_function.hpp"
 
 namespace duckdb {
 
@@ -235,7 +237,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
-unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro) {
+unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro, string schema_name) {
 	CatalogType type;
 	if (macro.implementations.front().type == "scalar") {
 		type = CatalogType::MACRO_ENTRY;
@@ -244,23 +246,27 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro
 	}
 	auto macro_info = make_uniq<CreateMacroInfo>(type);
 	macro_info->name = macro.macro_name;
-	// macro_info->schema = default_macro.schema;
+	macro_info->schema = schema_name;
 	macro_info->temporary = true;
 	macro_info->internal = true;
-	for (auto& impl : macro.implementations) {
-		MacroType macro_type;
+	for (auto &impl : macro.implementations) {
+		unique_ptr<MacroFunction> macro_function;
 		if (impl.type == "scalar") {
-			macro_type = MacroType::SCALAR_MACRO;
+			auto sql_expr = Parser::ParseExpressionList(impl.sql);
+			if (sql_expr.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
 		} else if (impl.type == "table") {
-			macro_type = MacroType::TABLE_MACRO;
+			throw NotImplementedException("dont have table macro yet");
 		} else if (impl.type == "void") {
-			macro_type = MacroType::VOID_MACRO;
+			throw NotImplementedException("dont have void macro yet");
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
-		auto macro_function = make_uniq<MacroFunction>(macro_type);
-		for (auto&param : impl.parameters) {
-			auto expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
+		vector<unique_ptr<ParsedExpression>> expr_list;
+		for (auto &param : impl.parameters) {
+			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
 			if (expr_list.size() != 1) {
 				throw InternalException("Expected a single expression");
 			}
@@ -270,9 +276,7 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro
 		}
 		macro_info->macros.push_back(std::move(macro_function));
 	}
-
 	return macro_info;
-	// macro_info->macros.push_back()
 }
 
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
@@ -376,11 +380,9 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    macro.macro_name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_macro = CreateMacroInfoFromDucklake(macro);
-		idx_t i = 0;
-		// auto macro_catalog_entry = make_uniq<MacroCatalogEntry>(*this, schema_entry, create_macro);
-		// macro_catalog_entry->name = macro.macro_name;
-		// schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		auto create_macro = CreateMacroInfoFromDucklake(macro, schema_entry.name);
+		auto macro_catalog_entry = make_uniq<MacroCatalogEntry>(*this, schema_entry, *create_macro);
+		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}
 
 	// load the partition entries

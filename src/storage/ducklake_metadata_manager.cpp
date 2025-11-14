@@ -2010,7 +2010,6 @@ WHERE snapshot_id = (
 static unordered_map<idx_t, DuckLakePartitionInfo>
 GetNewPartitions(const vector<DuckLakePartitionInfo> &old_partitions,
                  const vector<DuckLakePartitionInfo> &new_partitions) {
-
 	unordered_map<idx_t, DuckLakePartitionInfo> new_partition_map;
 
 	for (auto &partition : new_partitions) {
@@ -2274,7 +2273,6 @@ static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
-
 	auto res = transaction.Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info
 FROM {METADATA_CATALOG}.ducklake_snapshot

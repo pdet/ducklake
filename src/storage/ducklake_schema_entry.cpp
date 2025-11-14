@@ -88,6 +88,7 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
 		return true;
 	default:
 		return false;
@@ -283,6 +284,9 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 				}
 			}
 		}
+		if (entry.second->type == CatalogType::MACRO_ENTRY) {
+			idx_t i = 0;
+		}
 		callback(*entry.second);
 	}
 }
@@ -368,6 +372,9 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 					add_dependent = true;
 				}
 			} break;
+			case CatalogType::MACRO_ENTRY: {
+				throw InternalException("bla");
+			} break;
 			default:
 				throw InternalException(
 				    "Unexpected catalog type %s for GetDroppedTables() in DuckLakeSchemaEntry::TryDropSchema()",
@@ -401,6 +408,9 @@ DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
 		return tables;
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+		return macros;
 	default:
 		throw NotImplementedException("Unsupported catalog type %s for DuckLake", CatalogTypeToString(type));
 	}

@@ -5,6 +5,7 @@
 #include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -552,7 +553,6 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 
 void DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes) {
-
 	// get all changes made to the system after the current snapshot was started
 	auto changes_made = metadata_manager->GetChangesMadeAfterSnapshot(transaction_snapshot);
 	// parse changes made by other transactions
@@ -874,7 +874,8 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 		default:
 			throw NotImplementedException("Unsupported macro type");
 		}
-		macro_impl.sql = impl->ToSQL();
+		auto &scalar_macro = impl->Cast<ScalarMacroFunction>();
+		macro_impl.sql = scalar_macro.expression->ToString();
 		// Let's do the parameters
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
@@ -1272,7 +1273,6 @@ struct CompactionInformation {
 
 void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                         TransactionChangeInformation &transaction_changes) {
-
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	if (ducklake_catalog.IsCommitInfoRequired() && !commit_info.is_commit_info_set) {
@@ -2000,6 +2000,9 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 	case CatalogType::VIEW_ENTRY:
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
+	case CatalogType::MACRO_ENTRY:
+		throw NotImplementedException("bla");
+		break;
 	case CatalogType::SCHEMA_ENTRY:
 		DropSchema(entry.Cast<DuckLakeSchemaEntry>());
 		break;
@@ -2018,6 +2021,13 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		auto &view_entry = entry.Cast<DuckLakeViewEntry>();
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
+	case CatalogType::MACRO_ENTRY: {
+		// auto &macro_entry = entry.Cast<MacroCatalogEntry>();
+		// return dropped_views.find(macro_entry.) != dropped_views.end();
+		// dropped_macros
+		// throw NotImplementedException("bla");
+		return false;
+	}
 	case CatalogType::SCHEMA_ENTRY: {
 		auto &schema_entry = entry.Cast<DuckLakeSchemaEntry>();
 		return dropped_schemas.find(schema_entry.GetSchemaId()) != dropped_schemas.end();
@@ -2034,6 +2044,7 @@ bool DuckLakeTransaction::IsRenamed(CatalogEntry &entry) {
 		return renamed_tables.find(table_entry.GetTableId()) != renamed_tables.end();
 	}
 	case CatalogType::VIEW_ENTRY:
+	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCHEMA_ENTRY: {
 		return false;
 	}
