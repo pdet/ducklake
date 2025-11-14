@@ -376,6 +376,28 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_table.get().name, '"');
 		}
 	}
+
+	for (auto &entry : changes.created_macros) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_macro : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			change_info.changes_made += "created_macro:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+		}
+	}
+
+	for (auto &entry : changes.dropped_macros) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		// auto id = commit_state.GetMacroId(entry);
+		change_info.changes_made += "dropped_macro:";
+		// change_info.changes_made += to_string(id.index);
+	}
+
 	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
 	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
 	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
