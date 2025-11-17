@@ -908,8 +908,13 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 			parameter.parameter_name = impl->parameters[i]->GetName();
 			if (impl->default_parameters.find(parameter.parameter_name) != impl->default_parameters.end()) {
 				parameter.default_value = impl->default_parameters[parameter.parameter_name]->ToString();
+				parameter.parameter_type = DuckLakeTypes::ToString(
+				    impl->default_parameters[parameter.parameter_name]->Cast<ConstantExpression>().value.type());
+			} else {
+				// Parameter is not defined as a default parameter, we get it's type directly
+				parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
 			}
-			parameter.parameter_type = impl->types[i].ToString();
+
 			macro_impl.parameters.push_back(std::move(parameter));
 		}
 		new_macro_info.implementations.push_back(std::move(macro_impl));
