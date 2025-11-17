@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "ducklake_macro_entry.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
@@ -108,6 +109,7 @@ public:
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
 	void DropView(DuckLakeViewEntry &view);
+	void DropMacro(DuckLakeMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);

@@ -24,6 +24,7 @@
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
 #include "duckdb/function/macro_function.hpp"
 #include "duckdb/function/scalar_macro_function.hpp"
+#include "storage/ducklake_macro_entry.hpp"
 
 namespace duckdb {
 
@@ -247,8 +248,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro
 	auto macro_info = make_uniq<CreateMacroInfo>(type);
 	macro_info->name = macro.macro_name;
 	macro_info->schema = schema_name;
-	macro_info->temporary = true;
-	macro_info->internal = true;
+	macro_info->temporary = false;
+	macro_info->internal = false;
 	for (auto &impl : macro.implementations) {
 		unique_ptr<MacroFunction> macro_function;
 		if (impl.type == "scalar") {
@@ -381,7 +382,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		}
 		auto &schema_entry = entry->second.get();
 		auto create_macro = CreateMacroInfoFromDucklake(macro, schema_entry.name);
-		auto macro_catalog_entry = make_uniq<MacroCatalogEntry>(*this, schema_entry, *create_macro);
+		auto macro_catalog_entry = make_uniq<DuckLakeMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
 		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}
 

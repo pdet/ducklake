@@ -71,6 +71,7 @@ public:
 	virtual void DropSchemas(DuckLakeSnapshot commit_snapshot, const set<SchemaIndex> &ids);
 	virtual void DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids, bool renamed);
 	virtual void DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids);
+	virtual void DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids);
 	virtual void WriteNewSchemas(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual void WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables);
 	virtual void WriteNewViews(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeViewInfo> &new_views);

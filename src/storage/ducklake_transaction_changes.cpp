@@ -148,6 +148,9 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		case ChangeType::DROPPED_TABLE:
 			result.dropped_tables.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
+		case ChangeType::DROPPED_MACRO:
+			result.dropped_macros.insert(MacroIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
 		case ChangeType::DROPPED_VIEW:
 			result.dropped_views.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;

@@ -11,6 +11,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
@@ -393,9 +394,8 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 		if (!change_info.changes_made.empty()) {
 			change_info.changes_made += ",";
 		}
-		// auto id = commit_state.GetMacroId(entry);
 		change_info.changes_made += "dropped_macro:";
-		// change_info.changes_made += to_string(id.index);
+		change_info.changes_made += to_string(entry.index);
 	}
 
 	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
@@ -470,6 +470,10 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	// check if we are dropping the same view as another transaction
 	for (auto &dropped_idx : changes.dropped_views) {
 		ConflictCheck(dropped_idx, other_changes.dropped_views, "drop view", "dropped it already");
+	}
+	// check if we are dropping the same macro as another transaction
+	for (auto &dropped_idx : changes.dropped_macros) {
+		ConflictCheck(dropped_idx, other_changes.dropped_macros, "drop macro", "dropped it already");
 	}
 	// check if we are dropping the same schema as another transaction
 	for (auto &entry : changes.dropped_schemas) {
@@ -1316,6 +1320,9 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	if (!dropped_views.empty()) {
 		metadata_manager->DropViews(commit_snapshot, dropped_views);
 	}
+	if (!dropped_macros.empty()) {
+		metadata_manager->DropMacros(commit_snapshot, dropped_macros);
+	}
 	if (!dropped_schemas.empty()) {
 		set<SchemaIndex> dropped_schema_ids;
 		for (auto &entry : dropped_schemas) {
@@ -2000,6 +2007,20 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 	}
 }
 
+void DuckLakeTransaction::DropMacro(DuckLakeMacroEntry &macro) {
+	// if (view.IsTransactionLocal()) {
+	// 	// table is transaction-local - drop it from the transaction local changes
+	// 	auto schema_entry = new_tables.find(view.ParentSchema().name);
+	// 	if (schema_entry == new_tables.end()) {
+	// 		throw InternalException("Dropping a transaction local view that does not exist?");
+	// 	}
+	// 	schema_entry->second->DropEntry(view.name);
+	// 	new_tables.erase(schema_entry);
+	// } else {
+	dropped_macros.insert(macro.GetIndex());
+	// }
+}
+
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {
 	tables_deleted_from.insert(table_id);
 	dropped_files.emplace(std::move(path), data_file_id);
@@ -2023,7 +2044,7 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
 	case CatalogType::MACRO_ENTRY:
-		throw NotImplementedException("bla");
+		DropMacro(entry.Cast<DuckLakeMacroEntry>());
 		break;
 	case CatalogType::SCHEMA_ENTRY:
 		DropSchema(entry.Cast<DuckLakeSchemaEntry>());
@@ -2044,11 +2065,8 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
 	case CatalogType::MACRO_ENTRY: {
-		// auto &macro_entry = entry.Cast<MacroCatalogEntry>();
-		// return dropped_views.find(macro_entry.) != dropped_views.end();
-		// dropped_macros
-		// throw NotImplementedException("bla");
-		return false;
+		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
+		return dropped_macros.find(macro_entry.GetIndex()) != dropped_macros.end();
 	}
 	case CatalogType::SCHEMA_ENTRY: {
 		auto &schema_entry = entry.Cast<DuckLakeSchemaEntry>();

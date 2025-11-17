@@ -201,7 +201,6 @@ FROM parquet_full_metadata(%s)
 
 		auto &file_metadata_entry = file_metadata_list_data[row_idx];
 		auto file_metadata_offset = file_metadata_entry.offset;
-		auto file_metadata_length = file_metadata_entry.length;
 
 		auto &parquet_metadata_entry = parquet_metadata_list_data[row_idx];
 		auto parquet_metadata_offset = parquet_metadata_entry.offset;

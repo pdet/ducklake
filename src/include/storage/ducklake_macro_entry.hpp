@@ -18,5 +18,17 @@ namespace duckdb {
 struct SetCommentInfo;
 class DuckLakeTransaction;
 
-class DuckLakeMacroEntry : public MacroCatalogEntry {};
+class DuckLakeMacroEntry : public MacroCatalogEntry {
+public:
+	DuckLakeMacroEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateMacroInfo &info, MacroIndex &macro_index)
+	    : MacroCatalogEntry(catalog, schema, info), index(macro_index) {};
+
+	MacroIndex GetIndex() {
+		return index;
+	}
+
+private:
+	MacroIndex index;
+};
+
 } // namespace duckdb
