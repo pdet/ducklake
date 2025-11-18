@@ -96,6 +96,7 @@ struct DuckLakeMacroParameters {
 	string parameter_name;
 	string parameter_type;
 	Value default_value;
+	string default_value_type;
 };
 
 //! Stores information on macro implementations, since one macro can have multiple implementations

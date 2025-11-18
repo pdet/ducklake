@@ -238,7 +238,8 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
-unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro, string schema_name) {
+unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
+                                                        string schema_name) {
 	CatalogType type;
 	if (macro.implementations.front().type == "scalar") {
 		type = CatalogType::MACRO_ENTRY;
@@ -272,6 +273,11 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(DuckLakeMacroInfo &macro
 				throw InternalException("Expected a single expression");
 			}
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(param.parameter_name));
+			auto &expression = expr_list[0]->Cast<ConstantExpression>();
+			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
+				expression.value = expression.value.CastAs(context, expr_type);
+			}
 			macro_function->default_parameters.insert(make_pair(param.parameter_name, std::move(expr_list[0])));
 			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
 		}
@@ -381,7 +387,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			    macro.macro_name);
 		}
 		auto &schema_entry = entry->second.get();
-		auto create_macro = CreateMacroInfoFromDucklake(macro, schema_entry.name);
+		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name);
 		auto macro_catalog_entry = make_uniq<DuckLakeMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
 		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}

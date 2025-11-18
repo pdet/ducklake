@@ -73,7 +73,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_
 CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (0,0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
@@ -148,8 +148,9 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EX
 
 void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
 	string migrate_query = R"(
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macros(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, dialect VARCHAR, sql VARCHAR, type VARCHAR);
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -257,6 +258,7 @@ static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value 
 			param.parameter_name = StringValue::Get(param_struct_children[0]);
 			param.parameter_type = StringValue::Get(param_struct_children[1]);
 			param.default_value = StringValue::Get(param_struct_children[2]);
+			param.default_value_type = StringValue::Get(param_struct_children[3]);
 			impl_info.parameters.push_back(std::move(param));
 		}
 		result.push_back(std::move(impl_info));
@@ -453,7 +455,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 	result = transaction.Query(snapshot, R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 		SELECT LIST({'dialect': dialect, 'sql':sql, 'type':type, 'params': (
-		    SELECT LIST({'parameter_name': parameter_name, 'parameter_type': parameter_type, 'default_value': default_value})
+		    SELECT LIST({'parameter_name': parameter_name, 'parameter_type': parameter_type, 'default_value': default_value, 'default_value_type': default_value_type})
 				FROM {METADATA_CATALOG}.ducklake_macro_parameters
 		        WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
 		        AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
@@ -1275,11 +1277,12 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%
 				// Insert in the parameter table
 				auto &param = impl.parameters[param_id];
 				result = transaction.Query(
-				    commit_snapshot, StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s')
+				    commit_snapshot,
+				    StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s', '%s')
 )",
-				                                        macro.macro_id.index, impl_id, param_id, param.parameter_name,
-				                                        param.parameter_type, param.default_value.ToString()));
+				                       macro.macro_id.index, impl_id, param_id, param.parameter_name,
+				                       param.parameter_type, param.default_value.ToString(), param.default_value_type));
 				if (result->HasError()) {
 					result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
 				}

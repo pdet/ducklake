@@ -35,10 +35,10 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
 ----
 1	0	duckdb	a	scalar
 
-query IIIIII
+query IIIIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 ----
-1	0	0	a	UNKNOWN	NULL
+1	0	0	a	unknown	NULL	unknown
 
 statement ok
 drop macro simple;
