@@ -2244,7 +2244,10 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 		}
 		return entry->second;
 	}
-	case CatalogType::MACRO_ENTRY: {
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+	case CatalogType::TABLE_FUNCTION_ENTRY: {
 		auto entry = new_macros.find(schema_name);
 		if (entry == new_macros.end()) {
 			return nullptr;
