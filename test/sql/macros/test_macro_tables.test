@@ -49,3 +49,6 @@ FROM xt(5,'tom');
 1	tom
 5	mungo
 6	midge
+
+statement ok
+DROP MACRO TABLE xt;

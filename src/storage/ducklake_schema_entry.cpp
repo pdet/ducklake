@@ -92,6 +92,7 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 	case CatalogType::VIEW_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
 	case CatalogType::TABLE_FUNCTION_ENTRY:
+		case CatalogType::TABLE_MACRO_ENTRY:
 	case CatalogType::MACRO_ENTRY:
 		return true;
 	default:

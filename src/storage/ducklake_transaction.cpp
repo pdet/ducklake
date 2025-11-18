@@ -918,7 +918,12 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 			parameter.parameter_name = impl->parameters[i]->GetName();
 			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
 			if (impl->default_parameters.find(parameter.parameter_name) != impl->default_parameters.end()) {
-				parameter.default_value = impl->default_parameters[parameter.parameter_name]->ToString();
+				auto value = impl->default_parameters[parameter.parameter_name]->ToString();
+				if (StringUtil::StartsWith(value,"'")) {
+					value = value.substr(1, value.size() - 2);
+				}
+				parameter.default_value = value;
+
 				parameter.default_value_type = DuckLakeTypes::ToString(
 				    impl->default_parameters[parameter.parameter_name]->Cast<ConstantExpression>().value.type());
 			} else {
