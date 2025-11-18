@@ -252,15 +252,18 @@ static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value 
 		impl_info.sql = StringValue::Get(struct_children[1]);
 		impl_info.type = StringValue::Get(struct_children[2]);
 		auto param_list = struct_children[3].GetValue<Value>();
-		for (auto &param_value : ListValue::GetChildren(param_list)) {
-			auto &param_struct_children = StructValue::GetChildren(param_value);
-			DuckLakeMacroParameters param;
-			param.parameter_name = StringValue::Get(param_struct_children[0]);
-			param.parameter_type = StringValue::Get(param_struct_children[1]);
-			param.default_value = StringValue::Get(param_struct_children[2]);
-			param.default_value_type = StringValue::Get(param_struct_children[3]);
-			impl_info.parameters.push_back(std::move(param));
+		if (!param_list.IsNull()) {
+			for (auto &param_value : ListValue::GetChildren(param_list)) {
+				auto &param_struct_children = StructValue::GetChildren(param_value);
+				DuckLakeMacroParameters param;
+				param.parameter_name = StringValue::Get(param_struct_children[0]);
+				param.parameter_type = StringValue::Get(param_struct_children[1]);
+				param.default_value = StringValue::Get(param_struct_children[2]);
+				param.default_value_type = StringValue::Get(param_struct_children[3]);
+				impl_info.parameters.push_back(std::move(param));
+			}
 		}
+
 		result.push_back(std::move(impl_info));
 	}
 	return result;
