@@ -911,7 +911,7 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 		default:
 			throw NotImplementedException("Unsupported macro type");
 		}
-
+		macro_impl.sql = StringUtil::Replace(macro_impl.sql, "'", "''");
 		// Let's do the parameters
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
