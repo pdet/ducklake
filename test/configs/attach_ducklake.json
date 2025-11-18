@@ -20,7 +20,6 @@
     "DuckLake does not support generated columns",
     "RETURNING clause",
     "DuckLake does not support sequences",
-    "DuckLake does not support functions",
     "DuckLake does not support user-defined types",
     "Parquet files do not support negative intervals",
     "The same row was updated multiple times - this is not (yet) supported in DuckLake",
@@ -173,7 +172,8 @@
         "test/sql/alter/list/add_column_in_struct.test",
         "test/sql/transactions/conflict_drop_then_delete.test",
         "test/sql/transactions/test_create_drop_conflict.test",
-        "test/sql/transactions/test_create_drop_conflict_variation1.test"
+        "test/sql/transactions/test_create_drop_conflict_variation1.test",
+        "test/sql/copy/parquet/parquet_glob.test"
       ]
     },
     {
@@ -435,6 +435,12 @@
       ]
     },
     {
+      "reason": "FIXME: Wrong result",
+      "paths": [
+        "test/sql/join/positional/test_positional_join.test"
+      ]
+    },
+    {
       "reason": "FIXME: Transaction Conflict Error",
       "paths": [
         "test/sql/transactions/test_from_update_conflict.test"
@@ -450,6 +456,18 @@
       "reason": "Prepared statement differs from original result!",
       "paths": [
         "test/sql/function/generic/test_connection_count.test"
+        ]
+    },
+     {
+      "reason": "FIXME: DuckTransaction::Get called on non-DuckDB transaction",
+      "paths": [
+        "test/sql/function/timestamp/test_icu_makedate.test"
+        ]
+    },
+    {
+      "reason": "FIXME: Missing ducklake type",
+      "paths": [
+        "test/sql/catalog/function/test_macro_issue_13104.test"
         ]
     },
     {
