@@ -10,6 +10,7 @@
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/parser/parsed_data/create_function_info.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 
 namespace duckdb {
 
@@ -89,6 +90,7 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
+	case CatalogType::TABLE_FUNCTION_ENTRY:
 	case CatalogType::MACRO_ENTRY:
 		return true;
 	default:
@@ -98,18 +100,23 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransaction transaction,
                                                                CreateFunctionInfo &info) {
-	if (info.type != CatalogType::MACRO_ENTRY) {
+	unique_ptr<CatalogEntry> macro_entry;
+	auto &create_macro_info = info.Cast<CreateMacroInfo>();
+	switch (info.type) {
+	case CatalogType::MACRO_ENTRY:
+		macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
+		break;
+	case CatalogType::TABLE_MACRO_ENTRY:
+		macro_entry = make_uniq<TableMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
+		break;
+	default:
 		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
 	}
 	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
 	if (!HandleCreateConflict(transaction, info.type, info.name, info.on_conflict)) {
 		return nullptr;
 	}
-	auto &create_macro_info = info.Cast<CreateMacroInfo>();
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
-
-	auto macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
-
 	auto result = macro_entry.get();
 	duck_transaction.CreateEntry(std::move(macro_entry));
 	return result;
@@ -285,9 +292,6 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 				}
 			}
 		}
-		if (entry.second->type == CatalogType::MACRO_ENTRY) {
-			idx_t i = 0;
-		}
 		callback(*entry.second);
 	}
 }
@@ -411,6 +415,8 @@ DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) {
 		return tables;
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
+	case CatalogType::TABLE_FUNCTION_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY:
 		return macros;
 	default:
 		throw NotImplementedException("Unsupported catalog type %s for DuckLake", CatalogTypeToString(type));

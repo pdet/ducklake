@@ -24,6 +24,7 @@
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
 #include "duckdb/function/macro_function.hpp"
 #include "duckdb/function/scalar_macro_function.hpp"
+#include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 
 namespace duckdb {
@@ -243,6 +244,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	CatalogType type;
 	if (macro.implementations.front().type == "scalar") {
 		type = CatalogType::MACRO_ENTRY;
+	} else if (macro.implementations.front().type == "table") {
+		type = CatalogType::TABLE_MACRO_ENTRY;
 	} else {
 		throw NotImplementedException("Macro type %s is not implemented", macro.implementations.front().type);
 	}
@@ -260,9 +263,13 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 			}
 			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
 		} else if (impl.type == "table") {
-			throw NotImplementedException("dont have table macro yet");
-		} else if (impl.type == "void") {
-			throw NotImplementedException("dont have void macro yet");
+			Parser parser;
+			parser.ParseQuery(impl.sql);
+			if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
+				throw InternalException("Expected a single select statement");
+			}
+			auto node = std::move(parser.statements[0]->Cast<SelectStatement>().node);
+			macro_function = make_uniq<TableMacroFunction>(std::move(node));
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}

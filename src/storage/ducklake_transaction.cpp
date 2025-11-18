@@ -6,6 +6,7 @@
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/scalar_macro_function.hpp"
+#include "duckdb/function/table_macro_function.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -211,7 +212,8 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 	for (auto &schema_entry : new_macros) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
-			case CatalogType::MACRO_ENTRY: {
+			case CatalogType::MACRO_ENTRY:
+			case CatalogType::TABLE_MACRO_ENTRY: {
 				auto &macro = *entry.second;
 				auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
 				changes.created_macros[schema.name].insert(macro);
@@ -883,7 +885,7 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry,
                                           NewMacroInfo &result) {
 	DuckLakeMacroInfo new_macro_info;
-	auto &macro_entry = entry.get().Cast<ScalarMacroCatalogEntry>();
+	auto &macro_entry = entry.get().Cast<MacroCatalogEntry>();
 	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
 
 	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
@@ -894,14 +896,22 @@ void DuckLakeTransaction::GetNewMacroInfo(DuckLakeCommitState &commit_state, ref
 		DuckLakeMacroImplementation macro_impl;
 		macro_impl.dialect = "duckdb";
 		switch (impl->type) {
-		case MacroType::SCALAR_MACRO:
+		case MacroType::SCALAR_MACRO: {
 			macro_impl.type = "scalar";
+			auto &scalar_macro = impl->Cast<ScalarMacroFunction>();
+			macro_impl.sql = scalar_macro.expression->ToString();
 			break;
+		}
+		case MacroType::TABLE_MACRO: {
+			macro_impl.type = "table";
+			auto &table_macro = impl->Cast<TableMacroFunction>();
+			macro_impl.sql = table_macro.query_node->ToString();
+			break;
+		}
 		default:
 			throw NotImplementedException("Unsupported macro type");
 		}
-		auto &scalar_macro = impl->Cast<ScalarMacroFunction>();
-		macro_impl.sql = scalar_macro.expression->ToString();
+
 		// Let's do the parameters
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
@@ -995,6 +1005,7 @@ NewMacroInfo DuckLakeTransaction::GetNewMacros(DuckLakeCommitState &commit_state
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
 			case CatalogType::MACRO_ENTRY:
+			case CatalogType::TABLE_MACRO_ENTRY:
 				GetNewMacroInfo(commit_state, *entry.second, result);
 				break;
 			default:
@@ -2069,7 +2080,8 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		auto &view_entry = entry.Cast<DuckLakeViewEntry>();
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
-	case CatalogType::MACRO_ENTRY: {
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY: {
 		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
 		return dropped_macros.find(macro_entry.GetIndex()) != dropped_macros.end();
 	}
@@ -2090,7 +2102,8 @@ bool DuckLakeTransaction::IsRenamed(CatalogEntry &entry) {
 	}
 	case CatalogType::VIEW_ENTRY:
 	case CatalogType::MACRO_ENTRY:
-	case CatalogType::SCHEMA_ENTRY: {
+	case CatalogType::SCHEMA_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY: {
 		return false;
 	}
 	default:
@@ -2193,7 +2206,8 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 		new_tables.insert(make_pair(schema_name, std::move(new_table_list)));
 		return result;
 	}
-	case CatalogType::MACRO_ENTRY: {
+	case CatalogType::MACRO_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY: {
 		auto new_macro_list = make_uniq<DuckLakeCatalogSet>();
 		auto &result = *new_macro_list;
 		new_macros.insert(make_pair(schema_name, std::move(new_macro_list)));
