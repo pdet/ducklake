@@ -25,23 +25,23 @@ INSERT INTO test_tbl VALUES (1,'tom'), (2,'dick'),(3,'harry'), (4,'mary'), (5,'m
 statement ok
 CREATE MACRO xt(a,_name) as TABLE SELECT * FROM test_tbl WHERE(id>=a or name=_name);
 
-# # Check Macro Tables
-# query IIIII
-# FROM __ducklake_metadata_ducklake.ducklake_macro;
-# ----
-# 0	2	xt	3	NULL
-#
-# query IIIII
-# FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
-# ----
-# 2	0	duckdb	SELECT * FROM test_tbl WHERE ((id >= a) OR ("name" = _name))	table
-#
-#
-# query IIIIIII
-# FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
-# ----
-# 2	0	0	a	unknown	NULL	unknown
-# 2	0	1	_name	unknown	NULL	unknown
+# Check Macro Tables
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro;
+----
+0	2	xt	3	NULL
+
+query IIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
+----
+2	0	duckdb	SELECT * FROM test_tbl WHERE ((id >= a) OR ("name" = _name))	table
+
+
+query IIIIIII
+FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
+----
+2	0	0	a	unknown	NULL	unknown
+2	0	1	_name	unknown	NULL	unknown
 
 query II
 FROM xt(5,'tom');
