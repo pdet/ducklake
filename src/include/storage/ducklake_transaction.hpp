@@ -140,6 +140,9 @@ public:
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}
+	const set<MacroIndex> &GetDroppedMacros() {
+		return dropped_macros;
+	}
 	const set<TableIndex> &GetRenamedTables() {
 		return renamed_tables;
 	}

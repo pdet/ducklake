@@ -2060,6 +2060,7 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
 	case CatalogType::MACRO_ENTRY:
+	case CatalogType::TABLE_MACRO_ENTRY:
 		DropMacro(entry.Cast<DuckLakeMacroEntry>());
 		break;
 	case CatalogType::SCHEMA_ENTRY:

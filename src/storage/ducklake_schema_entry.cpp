@@ -11,6 +11,7 @@
 #include "duckdb/parser/parsed_data/create_function_info.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
+#include "storage/ducklake_macro_entry.hpp"
 
 namespace duckdb {
 
@@ -377,12 +378,29 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 					add_dependent = true;
 				}
 			} break;
-			case CatalogType::MACRO_ENTRY: {
-				throw InternalException("bla");
-			} break;
 			default:
 				throw InternalException(
 				    "Unexpected catalog type %s for GetDroppedTables() in DuckLakeSchemaEntry::TryDropSchema()",
+				    CatalogTypeToString(entry.second->type));
+			}
+			if (add_dependent) {
+				dependents.push_back(*entry.second);
+			}
+		}
+
+		for (auto &entry : macros.GetEntries()) {
+			const auto &dropped_macros = transaction.GetDroppedMacros();
+			bool add_dependent = false;
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY: {
+				const auto &ducklake_macro = entry.second->Cast<DuckLakeMacroEntry>();
+				if (dropped_macros.find(ducklake_macro.GetIndex()) == dropped_macros.end()) {
+					add_dependent = true;
+				}
+			} break;
+			default:
+				throw InternalException(
+				    "Unexpected catalog type %s for GetDroppedMacros() in DuckLakeSchemaEntry::TryDropSchema()",
 				    CatalogTypeToString(entry.second->type));
 			}
 			if (add_dependent) {
@@ -404,6 +422,9 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 	}
 	// drop all dependents
 	for (auto &entry : tables.GetEntries()) {
+		transaction.DropEntry(*entry.second);
+	}
+	for (auto &entry : macros.GetEntries()) {
 		transaction.DropEntry(*entry.second);
 	}
 }

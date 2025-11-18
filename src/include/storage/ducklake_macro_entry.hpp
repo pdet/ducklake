@@ -23,7 +23,7 @@ public:
 	DuckLakeMacroEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateMacroInfo &info, MacroIndex &macro_index)
 	    : MacroCatalogEntry(catalog, schema, info), index(macro_index) {};
 
-	MacroIndex GetIndex() {
+	MacroIndex GetIndex() const {
 		return index;
 	}
 
