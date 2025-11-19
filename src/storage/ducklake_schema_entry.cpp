@@ -389,7 +389,26 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 			}
 		}
 
-		for (auto &entry : macros.GetEntries()) {
+		for (auto &entry : scalar_macros.GetEntries()) {
+			const auto &dropped_macros = transaction.GetDroppedMacros();
+			bool add_dependent = false;
+			switch (entry.second->type) {
+			case CatalogType::MACRO_ENTRY: {
+				const auto &ducklake_macro = entry.second->Cast<DuckLakeMacroEntry>();
+				if (dropped_macros.find(ducklake_macro.GetIndex()) == dropped_macros.end()) {
+					add_dependent = true;
+				}
+			} break;
+			default:
+				throw InternalException(
+				    "Unexpected catalog type %s for GetDroppedMacros() in DuckLakeSchemaEntry::TryDropSchema()",
+				    CatalogTypeToString(entry.second->type));
+			}
+			if (add_dependent) {
+				dependents.push_back(*entry.second);
+			}
+		}
+		for (auto &entry : table_macros.GetEntries()) {
 			const auto &dropped_macros = transaction.GetDroppedMacros();
 			bool add_dependent = false;
 			switch (entry.second->type) {
@@ -425,7 +444,10 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 	for (auto &entry : tables.GetEntries()) {
 		transaction.DropEntry(*entry.second);
 	}
-	for (auto &entry : macros.GetEntries()) {
+	for (auto &entry : scalar_macros.GetEntries()) {
+		transaction.DropEntry(*entry.second);
+	}
+	for (auto &entry : table_macros.GetEntries()) {
 		transaction.DropEntry(*entry.second);
 	}
 }
@@ -437,9 +459,10 @@ DuckLakeCatalogSet &DuckLakeSchemaEntry::GetCatalogSet(CatalogType type) {
 		return tables;
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
+		return scalar_macros;
 	case CatalogType::TABLE_FUNCTION_ENTRY:
 	case CatalogType::TABLE_MACRO_ENTRY:
-		return macros;
+		return table_macros;
 	default:
 		throw NotImplementedException("Unsupported catalog type %s for DuckLake", CatalogTypeToString(type));
 	}
