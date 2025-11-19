@@ -480,8 +480,8 @@
     {
       "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
-        "test/sql/catalog/function/test_recursive_macro.test",
-        "test/sql/catalog/function/test_table_macro_copy.test"
+        "test/sql/catalog/function/test_table_macro_copy.test",
+        "test/sql/catalog/function/test_macro_type_overloads.test"
         ]
     },
     {
