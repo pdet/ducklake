@@ -390,7 +390,7 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		}
 
 		for (auto &entry : scalar_macros.GetEntries()) {
-			const auto &dropped_macros = transaction.GetDroppedMacros();
+			const auto &dropped_macros = transaction.GetDroppedScalarMacros();
 			bool add_dependent = false;
 			switch (entry.second->type) {
 			case CatalogType::MACRO_ENTRY: {
@@ -409,7 +409,7 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 			}
 		}
 		for (auto &entry : table_macros.GetEntries()) {
-			const auto &dropped_macros = transaction.GetDroppedMacros();
+			const auto &dropped_macros = transaction.GetDroppedTableMacros();
 			bool add_dependent = false;
 			switch (entry.second->type) {
 			case CatalogType::MACRO_ENTRY: {

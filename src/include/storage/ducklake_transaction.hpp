@@ -109,7 +109,8 @@ public:
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
 	void DropView(DuckLakeViewEntry &view);
-	void DropMacro(DuckLakeMacroEntry &macro);
+	void DropScalarMacro(DuckLakeMacroEntry &macro);
+	void DropTableMacro(DuckLakeMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
@@ -140,8 +141,11 @@ public:
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}
-	const set<MacroIndex> &GetDroppedMacros() {
-		return dropped_macros;
+	const set<MacroIndex> &GetDroppedScalarMacros() {
+		return dropped_scalar_macros;
+	}
+	const set<MacroIndex> &GetDroppedTableMacros() {
+		return dropped_table_macros;
 	}
 	const set<TableIndex> &GetRenamedTables() {
 		return renamed_tables;
@@ -217,7 +221,8 @@ private:
 
 	//! New macros added by this transaction
 	case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> new_macros;
-	set<MacroIndex> dropped_macros;
+	set<MacroIndex> dropped_scalar_macros;
+	set<MacroIndex> dropped_table_macros;
 
 	set<TableIndex> renamed_tables;
 	set<TableIndex> dropped_views;

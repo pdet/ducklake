@@ -90,7 +90,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 bool DuckLakeTransaction::SchemaChangesMade() {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
-	       !dropped_views.empty() || !new_macros.empty() || !dropped_macros.empty();
+	       !dropped_views.empty() || !new_macros.empty() || !dropped_scalar_macros.empty() ||
+	       !dropped_table_macros.empty();
 }
 
 bool DuckLakeTransaction::ChangesMade() {
@@ -102,13 +103,15 @@ struct TransactionChangeInformation {
 	case_insensitive_set_t created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_macros;
+	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_scalar_macros;
+	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
 
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
-	set<MacroIndex> dropped_macros;
+	set<MacroIndex> dropped_scalar_macros;
+	set<MacroIndex> dropped_table_macros;
 	set<TableIndex> tables_inserted_into;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_inserted_inlined;
@@ -197,8 +200,11 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 	for (auto &dropped_view_idx : dropped_views) {
 		changes.dropped_views.insert(dropped_view_idx);
 	}
-	for (auto &dropped_macro_idx : dropped_macros) {
-		changes.dropped_macros.insert(dropped_macro_idx);
+	for (auto &dropped_macro_idx : dropped_scalar_macros) {
+		changes.dropped_scalar_macros.insert(dropped_macro_idx);
+	}
+	for (auto &dropped_macro_idx : dropped_table_macros) {
+		changes.dropped_table_macros.insert(dropped_macro_idx);
 	}
 	for (auto &entry : dropped_schemas) {
 		changes.dropped_schemas.insert(entry);
@@ -212,11 +218,16 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() {
 	for (auto &schema_entry : new_macros) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
-			case CatalogType::MACRO_ENTRY:
+			case CatalogType::MACRO_ENTRY: {
+				auto &macro = *entry.second;
+				auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
+				changes.created_scalar_macros[schema.name].insert(macro);
+				break;
+			}
 			case CatalogType::TABLE_MACRO_ENTRY: {
 				auto &macro = *entry.second;
 				auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
-				changes.created_macros[schema.name].insert(macro);
+				changes.created_table_macros[schema.name].insert(macro);
 				break;
 			}
 			default:
@@ -380,23 +391,42 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 		}
 	}
 
-	for (auto &entry : changes.created_macros) {
+	for (auto &entry : changes.created_scalar_macros) {
 		auto &schema = entry.first;
 		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
 			}
-			change_info.changes_made += "created_macro:";
+			change_info.changes_made += "created_scalar_macro:";
+			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
+		}
+	}
+	for (auto &entry : changes.created_table_macros) {
+		auto &schema = entry.first;
+		auto schema_prefix = KeywordHelper::WriteQuoted(schema, '"') + ".";
+		for (auto &created_macro : entry.second) {
+			if (!change_info.changes_made.empty()) {
+				change_info.changes_made += ",";
+			}
+			change_info.changes_made += "created_table_macro:";
 			change_info.changes_made += schema_prefix + KeywordHelper::WriteQuoted(created_macro.get().name, '"');
 		}
 	}
 
-	for (auto &entry : changes.dropped_macros) {
+	for (auto &entry : changes.dropped_scalar_macros) {
 		if (!change_info.changes_made.empty()) {
 			change_info.changes_made += ",";
 		}
-		change_info.changes_made += "dropped_macro:";
+		change_info.changes_made += "dropped_scalar_macro:";
+		change_info.changes_made += to_string(entry.index);
+	}
+
+	for (auto &entry : changes.dropped_table_macros) {
+		if (!change_info.changes_made.empty()) {
+			change_info.changes_made += ",";
+		}
+		change_info.changes_made += "dropped_table_macro:";
 		change_info.changes_made += to_string(entry.index);
 	}
 
@@ -462,6 +492,49 @@ void ConflictCheck(const string &source_name, const MAP &conflict_map, const cha
 	}
 }
 
+string GetCatalogType(CatalogType type) {
+	switch (type) {
+	case CatalogType::TABLE_ENTRY:
+		return "table";
+	case CatalogType::VIEW_ENTRY:
+		return "view";
+	case CatalogType::MACRO_ENTRY:
+		return "scalar";
+	case CatalogType::TABLE_MACRO_ENTRY:
+		return "table";
+	default:
+		throw InternalException("Can't handle catalog type in GetCatalogType()");
+	}
+}
+void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &created_changes,
+                   const set<SchemaIndex> &dropped_schemas,
+                   const case_insensitive_map_t<case_insensitive_map_t<string>> other_created_changes) {
+	for (auto &entry : created_changes) {
+		auto &schema_name = entry.first;
+		auto &created_entry = entry.second;
+		for (auto &catalog_ref : created_entry) {
+			auto &catalog_entry = catalog_ref.get();
+			auto &schema = catalog_entry.ParentSchema().Cast<DuckLakeSchemaEntry>();
+			auto entry_type = GetCatalogType(catalog_entry.type);
+			string action =
+			    StringUtil::Format("create %s \"%s\" in schema \"%s\"", entry_type, catalog_entry.name, schema_name);
+			ConflictCheck(schema.GetSchemaId(), dropped_schemas, action.c_str(), "dropped this schema");
+
+			auto tbl_entry = other_created_changes.find(schema_name);
+			if (tbl_entry != other_created_changes.end()) {
+				auto &other_created_tables = tbl_entry->second;
+				auto sub_entry = other_created_tables.find(catalog_entry.name);
+				if (sub_entry != other_created_tables.end()) {
+					// a table with this name in this schema was already created
+					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema \"%s\" "
+					                           "- but this %s has been created by another transaction already",
+					                           entry_type, catalog_entry.name, schema_name, sub_entry->second);
+				}
+			}
+		}
+	}
+}
+
 void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &changes,
                                             const SnapshotChangeInformation &other_changes,
                                             DuckLakeSnapshot transaction_snapshot) {
@@ -474,8 +547,11 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(dropped_idx, other_changes.dropped_views, "drop view", "dropped it already");
 	}
 	// check if we are dropping the same macro as another transaction
-	for (auto &dropped_idx : changes.dropped_macros) {
-		ConflictCheck(dropped_idx, other_changes.dropped_macros, "drop macro", "dropped it already");
+	for (auto &dropped_idx : changes.dropped_scalar_macros) {
+		ConflictCheck(dropped_idx, other_changes.dropped_scalar_macros, "drop macro", "dropped it already");
+	}
+	for (auto &dropped_idx : changes.dropped_table_macros) {
+		ConflictCheck(dropped_idx, other_changes.dropped_table_macros, "drop macro", "dropped it already");
 	}
 	// check if we are dropping the same schema as another transaction
 	for (auto &entry : changes.dropped_schemas) {
@@ -491,6 +567,9 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(created_schema, other_changes.created_schemas, "create schema",
 		              "created a schema with this name already");
 	}
+	// check if we are creating the same macro as another transaction
+	ConflictCheck(changes.created_scalar_macros, other_changes.dropped_schemas, other_changes.created_scalar_macros);
+	ConflictCheck(changes.created_tables, other_changes.dropped_schemas, other_changes.created_tables);
 	// check if we are creating the same table as another transaction
 	for (auto &entry : changes.created_tables) {
 		auto &schema_name = entry.first;
@@ -1343,8 +1422,11 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	if (!dropped_views.empty()) {
 		metadata_manager->DropViews(commit_snapshot, dropped_views);
 	}
-	if (!dropped_macros.empty()) {
-		metadata_manager->DropMacros(commit_snapshot, dropped_macros);
+	if (!dropped_scalar_macros.empty()) {
+		metadata_manager->DropMacros(commit_snapshot, dropped_scalar_macros);
+	}
+	if (!dropped_table_macros.empty()) {
+		metadata_manager->DropMacros(commit_snapshot, dropped_table_macros);
 	}
 	if (!dropped_schemas.empty()) {
 		set<SchemaIndex> dropped_schema_ids;
@@ -2030,8 +2112,12 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 	}
 }
 
-void DuckLakeTransaction::DropMacro(DuckLakeMacroEntry &macro) {
-	dropped_macros.insert(macro.GetIndex());
+void DuckLakeTransaction::DropScalarMacro(DuckLakeMacroEntry &macro) {
+	dropped_scalar_macros.insert(macro.GetIndex());
+}
+
+void DuckLakeTransaction::DropTableMacro(DuckLakeMacroEntry &macro) {
+	dropped_table_macros.insert(macro.GetIndex());
 }
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {
@@ -2057,8 +2143,10 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
 	case CatalogType::MACRO_ENTRY:
+		DropScalarMacro(entry.Cast<DuckLakeMacroEntry>());
+		break;
 	case CatalogType::TABLE_MACRO_ENTRY:
-		DropMacro(entry.Cast<DuckLakeMacroEntry>());
+		DropTableMacro(entry.Cast<DuckLakeMacroEntry>());
 		break;
 	case CatalogType::SCHEMA_ENTRY:
 		DropSchema(entry.Cast<DuckLakeSchemaEntry>());
@@ -2078,10 +2166,13 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		auto &view_entry = entry.Cast<DuckLakeViewEntry>();
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
-	case CatalogType::MACRO_ENTRY:
+	case CatalogType::MACRO_ENTRY: {
+		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
+		return dropped_scalar_macros.find(macro_entry.GetIndex()) != dropped_scalar_macros.end();
+	}
 	case CatalogType::TABLE_MACRO_ENTRY: {
 		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
-		return dropped_macros.find(macro_entry.GetIndex()) != dropped_macros.end();
+		return dropped_table_macros.find(macro_entry.GetIndex()) != dropped_table_macros.end();
 	}
 	case CatalogType::SCHEMA_ENTRY: {
 		auto &schema_entry = entry.Cast<DuckLakeSchemaEntry>();

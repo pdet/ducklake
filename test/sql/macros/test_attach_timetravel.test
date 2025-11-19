@@ -22,8 +22,8 @@ query II
 select snapshot_id, changes FROM snapshots()
 ----
 0	{schemas_created=[main]}
-1	{macros_created=['main."simple"']}
-2	{macros_dropped=[1]}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
 
 statement error
 select simple(1)

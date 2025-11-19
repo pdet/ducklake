@@ -1250,9 +1250,6 @@ void DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snap
 	ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
 }
 
-void DuckLakeMetadataManager::CreateMacro(DuckLakeSnapshot snapshot, MacroIndex index) {
-	// auto result = transaction.Query(snapshot,"SELECT name")
-}
 void DuckLakeMetadataManager::WriteNewMacros(DuckLakeSnapshot commit_snapshot,
                                              const vector<DuckLakeMacroInfo> &new_macros) {
 	for (auto &macro : new_macros) {

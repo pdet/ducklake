@@ -59,8 +59,6 @@ public:
 
 	static bool CatalogTypeIsSupported(CatalogType type);
 
-	static string GeneratePathFromName(const string &uuid, const string &name);
-
 private:
 	DuckLakeCatalogSet &GetCatalogSet(CatalogType type);
 	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,

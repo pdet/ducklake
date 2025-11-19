@@ -58,8 +58,8 @@ query II
 select snapshot_id, changes FROM snapshots()
 ----
 0	{schemas_created=[main]}
-1	{macros_created=['main."simple"']}
-2	{macros_dropped=[1]}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
 
 # We can recreate it and that's fine
 
@@ -82,9 +82,9 @@ query II
 select snapshot_id, changes FROM snapshots()
 ----
 0	{schemas_created=[main]}
-1	{macros_created=['main."simple"']}
-2	{macros_dropped=[1]}
-3	{macros_created=['main."simple"']}
+1	{scalar_macros_created=['main."simple"']}
+2	{scalar_macros_dropped=[1]}
+3	{scalar_macros_created=['main."simple"']}
 
 statement error
 CREATE MACRO simple(a) AS a;
