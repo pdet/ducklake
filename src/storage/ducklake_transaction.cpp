@@ -2031,17 +2031,7 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 }
 
 void DuckLakeTransaction::DropMacro(DuckLakeMacroEntry &macro) {
-	// if (view.IsTransactionLocal()) {
-	// 	// table is transaction-local - drop it from the transaction local changes
-	// 	auto schema_entry = new_tables.find(view.ParentSchema().name);
-	// 	if (schema_entry == new_tables.end()) {
-	// 		throw InternalException("Dropping a transaction local view that does not exist?");
-	// 	}
-	// 	schema_entry->second->DropEntry(view.name);
-	// 	new_tables.erase(schema_entry);
-	// } else {
 	dropped_macros.insert(macro.GetIndex());
-	// }
 }
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path) {

@@ -77,3 +77,30 @@ DROP schema test;
 statement ok
 COMMIT
 
+# Create and drop macro in same transaction
+statement ok
+BEGIN
+
+statement error
+CREATE MACRO simple(a) AS a;
+----
+Macro Function with name "simple" already exists
+
+statement ok
+DROP MACRO simple
+
+statement error
+select simple(1)
+----
+does not exist
+
+statement ok
+CREATE MACRO simple(a) AS a;
+
+query I
+select simple(1)
+----
+1
+
+statement ok
+COMMIT

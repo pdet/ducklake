@@ -466,6 +466,25 @@
         ]
     },
     {
+      "reason": "FIXME: Macros are currently not taken in for recursion",
+      "paths": [
+        "test/sql/catalog/function/test_recursive_macro.test"
+        ]
+    },
+    {
+      "reason": " Failed to parse DuckLake type - unsupported nested type",
+      "paths": [
+        "test/sql/catalog/function/test_macro_issue_13104.test"
+        ]
+    },
+    {
+      "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
+      "paths": [
+        "test/sql/catalog/function/test_recursive_macro.test",
+        "test/sql/catalog/function/test_table_macro_copy.test"
+        ]
+    },
+    {
       "reason": "Checkpoint in DuckLake doesn't produce expected result. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
         "test/fuzzer/pedro/incomplete_checkpoint.test",
