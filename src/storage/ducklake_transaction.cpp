@@ -2112,11 +2112,11 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 	}
 }
 
-void DuckLakeTransaction::DropScalarMacro(DuckLakeMacroEntry &macro) {
+void DuckLakeTransaction::DropScalarMacro(DuckLakeScalarMacroEntry &macro) {
 	dropped_scalar_macros.insert(macro.GetIndex());
 }
 
-void DuckLakeTransaction::DropTableMacro(DuckLakeMacroEntry &macro) {
+void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 	dropped_table_macros.insert(macro.GetIndex());
 }
 
@@ -2143,10 +2143,10 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 		DropView(entry.Cast<DuckLakeViewEntry>());
 		break;
 	case CatalogType::MACRO_ENTRY:
-		DropScalarMacro(entry.Cast<DuckLakeMacroEntry>());
+		DropScalarMacro(entry.Cast<DuckLakeScalarMacroEntry>());
 		break;
 	case CatalogType::TABLE_MACRO_ENTRY:
-		DropTableMacro(entry.Cast<DuckLakeMacroEntry>());
+		DropTableMacro(entry.Cast<DuckLakeTableMacroEntry>());
 		break;
 	case CatalogType::SCHEMA_ENTRY:
 		DropSchema(entry.Cast<DuckLakeSchemaEntry>());
@@ -2167,11 +2167,11 @@ bool DuckLakeTransaction::IsDeleted(CatalogEntry &entry) {
 		return dropped_views.find(view_entry.GetViewId()) != dropped_views.end();
 	}
 	case CatalogType::MACRO_ENTRY: {
-		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
+		auto &macro_entry = entry.Cast<DuckLakeScalarMacroEntry>();
 		return dropped_scalar_macros.find(macro_entry.GetIndex()) != dropped_scalar_macros.end();
 	}
 	case CatalogType::TABLE_MACRO_ENTRY: {
-		auto &macro_entry = entry.Cast<DuckLakeMacroEntry>();
+		auto &macro_entry = entry.Cast<DuckLakeTableMacroEntry>();
 		return dropped_table_macros.find(macro_entry.GetIndex()) != dropped_table_macros.end();
 	}
 	case CatalogType::SCHEMA_ENTRY: {

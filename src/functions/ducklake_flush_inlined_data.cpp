@@ -35,7 +35,7 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-                                            OperatorSourceInput &input) const {
+                                                    OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 

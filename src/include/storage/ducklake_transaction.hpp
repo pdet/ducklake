@@ -109,8 +109,8 @@ public:
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
 	void DropView(DuckLakeViewEntry &view);
-	void DropScalarMacro(DuckLakeMacroEntry &macro);
-	void DropTableMacro(DuckLakeMacroEntry &macro);
+	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
+	void DropTableMacro(DuckLakeTableMacroEntry &macro);
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
