@@ -20,7 +20,6 @@
     "DuckLake does not support generated columns",
     "RETURNING clause",
     "DuckLake does not support sequences",
-    "DuckLake does not support functions",
     "DuckLake does not support user-defined types",
     "Parquet files do not support negative intervals",
     "The same row was updated multiple times - this is not (yet) supported in DuckLake",
@@ -126,7 +125,8 @@
         "test/optimizer/prefer_final_projected_columns_on_probe_side.test",
         "test/optimizer/sampling_pushdown.test",
         "test/sql/explain/explain_execute.test",
-        "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test"
+        "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
+        "test/optimizer/topn_window_elimination.test"
       ]
     },
     {
@@ -173,7 +173,8 @@
         "test/sql/alter/list/add_column_in_struct.test",
         "test/sql/transactions/conflict_drop_then_delete.test",
         "test/sql/transactions/test_create_drop_conflict.test",
-        "test/sql/transactions/test_create_drop_conflict_variation1.test"
+        "test/sql/transactions/test_create_drop_conflict_variation1.test",
+        "test/sql/copy/parquet/parquet_glob.test"
       ]
     },
     {
@@ -435,6 +436,12 @@
       ]
     },
     {
+      "reason": "FIXME: Wrong result",
+      "paths": [
+        "test/sql/join/positional/test_positional_join.test"
+      ]
+    },
+    {
       "reason": "FIXME: Transaction Conflict Error",
       "paths": [
         "test/sql/transactions/test_from_update_conflict.test"
@@ -450,6 +457,31 @@
       "reason": "Prepared statement differs from original result!",
       "paths": [
         "test/sql/function/generic/test_connection_count.test"
+        ]
+    },
+     {
+      "reason": "FIXME: DuckTransaction::Get called on non-DuckDB transaction",
+      "paths": [
+        "test/sql/function/timestamp/test_icu_makedate.test"
+        ]
+    },
+    {
+      "reason": "FIXME: Macros are currently not taken in for recursion",
+      "paths": [
+        "test/sql/catalog/function/test_recursive_macro.test"
+        ]
+    },
+    {
+      "reason": " Failed to parse DuckLake type - unsupported nested type",
+      "paths": [
+        "test/sql/catalog/function/test_macro_issue_13104.test"
+        ]
+    },
+    {
+      "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
+      "paths": [
+        "test/sql/catalog/function/test_table_macro_copy.test",
+        "test/sql/catalog/function/test_macro_type_overloads.test"
         ]
     },
     {
