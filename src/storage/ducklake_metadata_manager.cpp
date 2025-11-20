@@ -81,10 +81,13 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_data_tables(table_id BIGINT, ta
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);
 CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (0,0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.3'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
@@ -118,19 +121,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.2' WHERE key = 'versi
 	}
 }
 
-void DuckLakeMetadataManager::MigrateV02(bool allow_failures) {
-	string migrate_query = R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_name_mapping ADD COLUMN {IF_NOT_EXISTS} is_partition BOOLEAN DEFAULT false;
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} author VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_message VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.3' WHERE key = 'version';
-CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
-INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions SELECT * FROM (SELECT MIN(snapshot_id), schema_version FROM {METADATA_CATALOG}.ducklake_snapshot GROUP BY schema_version ORDER BY schema_version) t {WHERE_EMPTY};
-ALTER TABLE {IF_EXISTS} {METADATA_CATALOG}.ducklake_file_column_statistics RENAME TO ducklake_file_column_stats;
-ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
-	)";
+void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_failures) {
 	if (allow_failures) {
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_NOT_EXISTS}", "IF NOT EXISTS");
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "IF EXISTS");
@@ -147,6 +138,32 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EX
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to migrate DuckLake from v0.2 to v0.3:");
 	}
+}
+
+void DuckLakeMetadataManager::MigrateV02(bool allow_failures) {
+	string migrate_query = R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_name_mapping ADD COLUMN {IF_NOT_EXISTS} is_partition BOOLEAN DEFAULT false;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} author VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_message VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.3' WHERE key = 'version';
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
+INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions SELECT * FROM (SELECT MIN(snapshot_id), schema_version FROM {METADATA_CATALOG}.ducklake_snapshot GROUP BY schema_version ORDER BY schema_version) t {WHERE_EMPTY};
+ALTER TABLE {IF_EXISTS} {METADATA_CATALOG}.ducklake_file_column_statistics RENAME TO ducklake_file_column_stats;
+ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_table_column_stats ADD COLUMN {IF_NOT_EXISTS} extra_stats VARCHAR DEFAULT NULL;
+	)";
+	ExecuteMigration(migrate_query, allow_failures);
+}
+
+void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
+	string migrate_query = R"(
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
+	)";
+	ExecuteMigration(migrate_query, allow_failures);
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -232,6 +249,32 @@ static vector<DuckLakeInlinedTableInfo> LoadInlinedDataTables(const Value &list)
 		inlined_data_table.table_name = StringValue::Get(struct_children[0]);
 		inlined_data_table.schema_version = struct_children[1].GetValue<idx_t>();
 		result.push_back(std::move(inlined_data_table));
+	}
+	return result;
+}
+
+static vector<DuckLakeMacroImplementation> LoadMacroImplementations(const Value &list) {
+	vector<DuckLakeMacroImplementation> result;
+	for (auto &val : ListValue::GetChildren(list)) {
+		auto &struct_children = StructValue::GetChildren(val);
+		DuckLakeMacroImplementation impl_info;
+		impl_info.dialect = StringValue::Get(struct_children[0]);
+		impl_info.sql = StringValue::Get(struct_children[1]);
+		impl_info.type = StringValue::Get(struct_children[2]);
+		auto param_list = struct_children[3].GetValue<Value>();
+		if (!param_list.IsNull()) {
+			for (auto &param_value : ListValue::GetChildren(param_list)) {
+				auto &param_struct_children = StructValue::GetChildren(param_value);
+				DuckLakeMacroParameters param;
+				param.parameter_name = StringValue::Get(param_struct_children[0]);
+				param.parameter_type = StringValue::Get(param_struct_children[1]);
+				param.default_value = StringValue::Get(param_struct_children[2]);
+				param.default_value_type = StringValue::Get(param_struct_children[3]);
+				impl_info.parameters.push_back(std::move(param));
+			}
+		}
+
+		result.push_back(std::move(impl_info));
 	}
 	return result;
 }
@@ -419,6 +462,35 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 			view_info.tags = LoadTags(tags);
 		}
 		views.push_back(std::move(view_info));
+	}
+
+	// load macro information
+	result = transaction.Query(snapshot, R"(
+SELECT schema_id, ducklake_macro.macro_id, macro_name, (
+		SELECT LIST({'dialect': dialect, 'sql':sql, 'type':type, 'params': (
+		    SELECT LIST({'parameter_name': parameter_name, 'parameter_type': parameter_type, 'default_value': default_value, 'default_value_type': default_value_type})
+				FROM {METADATA_CATALOG}.ducklake_macro_parameters
+		        WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
+		        AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
+		)})
+		FROM {METADATA_CATALOG}.ducklake_macro_impl
+		WHERE ducklake_macro.macro_id = ducklake_macro_impl.macro_id
+	) AS impl
+FROM {METADATA_CATALOG}.ducklake_macro
+WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < ducklake_macro.end_snapshot OR ducklake_macro.end_snapshot IS NULL)
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
+	}
+	auto &macros = catalog.macros;
+	for (auto &row : *result) {
+		DuckLakeMacroInfo macro_info;
+		macro_info.schema_id = SchemaIndex(row.GetValue<uint64_t>(0));
+		macro_info.macro_id = MacroIndex(row.GetValue<uint64_t>(1));
+		macro_info.macro_name = row.GetValue<string>(2);
+		auto macro_implementations = row.GetValue<Value>(3);
+		macro_info.implementations = LoadMacroImplementations(macro_implementations);
+		macros.push_back(std::move(macro_info));
 	}
 
 	// load partition information
@@ -1359,11 +1431,7 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 }
 
 template <class T>
-void DuckLakeMetadataManager::FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name,
-                                        const string &id_name, const set<T> &dropped_entries) {
-	if (dropped_entries.empty()) {
-		return;
-	}
+string GenerateIDList(const set<T> &dropped_entries) {
 	string dropped_id_list;
 	for (auto &dropped_id : dropped_entries) {
 		if (!dropped_id_list.empty()) {
@@ -1371,6 +1439,16 @@ void DuckLakeMetadataManager::FlushDrop(DuckLakeSnapshot commit_snapshot, const 
 		}
 		dropped_id_list += to_string(dropped_id.index);
 	}
+	return dropped_id_list;
+}
+
+template <class T>
+void DuckLakeMetadataManager::FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name,
+                                        const string &id_name, const set<T> &dropped_entries) {
+	if (dropped_entries.empty()) {
+		return;
+	}
+	auto dropped_id_list = GenerateIDList(dropped_entries);
 	auto dropped_id_query = StringUtil::Format(
 	    R"(UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND %s IN (%s);)",
 	    metadata_table_name, id_name, dropped_id_list);
@@ -1398,6 +1476,10 @@ void DuckLakeMetadataManager::DropTables(DuckLakeSnapshot commit_snapshot, const
 
 void DuckLakeMetadataManager::DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids) {
 	FlushDrop(commit_snapshot, "ducklake_view", "view_id", ids);
+}
+
+void DuckLakeMetadataManager::DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids) {
+	FlushDrop(commit_snapshot, "ducklake_macro", "macro_id", ids);
 }
 
 void DuckLakeMetadataManager::WriteNewSchemas(DuckLakeSnapshot commit_snapshot,
@@ -1574,6 +1656,47 @@ void DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snap
 		GetInlinedTableQueries(commit_snapshot, table, inlined_tables, inlined_table_queries);
 	}
 	ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
+}
+
+void DuckLakeMetadataManager::WriteNewMacros(DuckLakeSnapshot commit_snapshot,
+                                             const vector<DuckLakeMacroInfo> &new_macros) {
+	for (auto &macro : new_macros) {
+		// Insert in the macro table
+		auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL)
+)",
+		                                                                    macro.schema_id.index, macro.macro_id.index,
+		                                                                    macro.macro_name));
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
+		}
+		// Insert in the implementation table
+		for (idx_t impl_id = 0; impl_id < macro.implementations.size(); ++impl_id) {
+			auto &impl = macro.implementations[impl_id];
+			result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%s')
+)",
+			                                                               macro.macro_id.index, impl_id, impl.dialect,
+			                                                               impl.sql, impl.type));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
+			}
+			for (idx_t param_id = 0; param_id < impl.parameters.size(); ++param_id) {
+				// Insert in the parameter table
+				auto &param = impl.parameters[param_id];
+				result = transaction.Query(
+				    commit_snapshot,
+				    StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s', '%s')
+)",
+				                       macro.macro_id.index, impl_id, param_id, param.parameter_name,
+				                       param.parameter_type, param.default_value.ToString(), param.default_value_type));
+				if (result->HasError()) {
+					result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
+				}
+			}
+		}
+	}
 }
 
 void DuckLakeMetadataManager::WriteDroppedColumns(DuckLakeSnapshot commit_snapshot,
@@ -2309,7 +2432,6 @@ WHERE snapshot_id = (
 static unordered_map<idx_t, DuckLakePartitionInfo>
 GetNewPartitions(const vector<DuckLakePartitionInfo> &old_partitions,
                  const vector<DuckLakePartitionInfo> &new_partitions) {
-
 	unordered_map<idx_t, DuckLakePartitionInfo> new_partition_map;
 
 	for (auto &partition : new_partitions) {
@@ -2573,7 +2695,6 @@ static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
-
 	auto res = transaction.Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info
 FROM {METADATA_CATALOG}.ducklake_snapshot

@@ -528,7 +528,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		if (info.if_column_exists) {
 			return nullptr;
 		}
-		throw CatalogException("Cannot drop column %s - it does not exist", info.removed_column);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.removed_column);
 	}
 
 	auto &col = table_info.columns.GetColumn(info.removed_column);
@@ -706,7 +706,6 @@ const LogicalType &GetNestedChildType(const LogicalType &type, idx_t index) {
 unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLakeFieldId &source_id,
                                                                    const LogicalType &target, ColumnChangeInfo &result,
                                                                    optional_idx parent_idx) {
-
 	auto &source_type = source_id.Type();
 	if (source_type.id() != target.id()) {
 		throw NotImplementedException("Type evolution is not supported from type %s to type %s", source_type, target);
@@ -805,7 +804,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw CatalogException("Cannot change type of column %s - it does not exist", info.column_name);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumn(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
@@ -1022,7 +1021,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw CatalogException("Cannot set default of column %s - it does not exist", info.column_name);
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
