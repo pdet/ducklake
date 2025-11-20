@@ -1018,7 +1018,6 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 string
 DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
                                                             TableIndex table_id) {
-
 	if (requirements.empty()) {
 		return "";
 	}
@@ -1054,7 +1053,6 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 
 FilterPushdownQueryComponents
 DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info, TableIndex table_id) {
-
 	FilterPushdownQueryComponents result;
 
 	if (filter_info.column_filters.empty()) {
