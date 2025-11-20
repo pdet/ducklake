@@ -22,6 +22,7 @@ create table t (id integer, created_at timestamp default now());
 statement ok
 insert into t(id) values(1);
 
-query II
-select * from t;
+query I
+select created_at < NOW() from t;
 ----
+true

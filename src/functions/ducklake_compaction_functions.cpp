@@ -36,7 +36,7 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-                                             OperatorSourceInput &input) const {
+                                                     OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 

@@ -32,7 +32,8 @@ public:
 
 public:
 	// Source interface
-	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const override;
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
@@ -62,7 +63,7 @@ DuckLakeMergeInsert::DuckLakeMergeInsert(PhysicalPlan &physical_plan, const vect
 }
 
 SourceResultType DuckLakeMergeInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-                                              OperatorSourceInput &input) const {
+                                                      OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
