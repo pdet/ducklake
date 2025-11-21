@@ -29,39 +29,36 @@ select created_at < NOW() from t;
 ----
 true
 
+# Lets now create a table with
 statement ok
-CREATE TABLE t0(c0 BOOLEAN DEFAULT(true), c1 VARCHAR);
+create table t_1 (id integer, id_plus integer default 1);
 
 statement ok
-insert into t0(c1) values ('bla')
+insert into t_1(id) values (0);
 
 query II
-FROM t0;
+FROM t_1
 ----
-true	bla
+0	1
 
 statement ok
-CREATE TABLE t2(l0 BOOLEAN DEFAULT(NULL), l1 VARCHAR);
+ALTER TABLE t_1 ALTER id_plus SET DEFAULT round(pi())
 
 statement ok
-insert into t2(l0) values (true)
+insert into t_1(id) values (1);
 
-# query IIIIIIIIIIIIIII
-# FROM xx.ducklake_column
-# ----
-# 1	1	NULL	1	1	id	int32	NULL	NULL	true	NULL	literal	duckdb	literal	duckdb
-# 2	1	NULL	1	2	created_at	timestamp	now()	now()	true	NULL	expression	duckdb	expression	duckdb
-# 1	3	NULL	2	1	c0	boolean	CAST('t' AS BOOLEAN)	CAST('t' AS BOOLEAN)	true	NULL	literal	duckdb	literal	duckdb
-# 2	3	NULL	2	2	c1	varchar	NULL	NULL	true	NULL	literal	duckdb	literal	duckdb
+query II
+FROM t_1
+----
+0	1
+1	3
 
-statement ok
-CREATE TABLE tbl(
-    d DATE DEFAULT CURRENT_DATE,
-    t TIME WITH TIME ZONE DEFAULT CURRENT_TIME,
-    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    cur_user VARCHAR DEFAULT CURRENT_USER,
-    "user" VARCHAR DEFAULT USER,
-    sess_user VARCHAR DEFAULT SESSION_USER,
-    cur_catalog VARCHAR DEFAULT CURRENT_CATALOG,
-    cur_schema VARCHAR DEFAULT CURRENT_SCHEMA
-);
+# Now let's alter it
+query IIIII
+SELECT table_id, column_id, default_value, default_value_qualifier, default_value_dialect FROM xx.ducklake_column
+----
+1	1	NULL	literal	duckdb
+1	2	now()	expression	duckdb
+2	1	NULL	literal	duckdb
+2	2	1	literal	duckdb
+2	2	round(pi())	expression	duckdb

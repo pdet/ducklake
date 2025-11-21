@@ -1148,7 +1148,6 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string initial_default_val;
 	string initial_default_val_system;
 	string initial_default_val_qualifier;
-
 	initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
 	initial_default_val_system = "'duckdb'";
 	initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
@@ -1156,15 +1155,10 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string default_val;
 	string default_val_system;
 	string default_val_qualifier;
-	// if (!column.default_value) {
-	// 	default_val = "NULL";
-	// 	default_val_system = "NULL";
-	// 	default_val_qualifier = "NULL";
-	// } else {
 	default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
 	default_val_system = "'duckdb'";
 	default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
-	// }
+
 	auto column_id = column.id.index;
 	auto column_order = column_id;
 
