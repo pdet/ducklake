@@ -114,8 +114,8 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	// push the rowids into the delete
 	auto &delete_chunk = lstate.delete_chunk;
 	delete_chunk.SetCardinality(chunk.size());
-	idx_t delete_idx_start = chunk.ColumnCount() - 3;
-	for (idx_t i = 0; i < 3; i++) {
+	idx_t delete_idx_start = chunk.ColumnCount() - DELETION_INFO_SIZE;
+	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
 		delete_chunk.data[i].Reference(chunk.data[delete_idx_start + i]);
 	}
 
@@ -280,7 +280,7 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto &copy_op = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 	// plan the delete
 	vector<idx_t> row_id_indexes;
-	for (idx_t i = 0; i < 3; i++) {
+	for (idx_t i = 0; i < DuckLakeUpdate::DELETION_INFO_SIZE; i++) {
 		row_id_indexes.push_back(i);
 	}
 	auto &delete_op = DuckLakeDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes),
@@ -304,7 +304,10 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 				// Identity Partitions are already there
 				continue;
 			}
-			auto &child_expression = expressions[field.partition_key_index]->Cast<BoundReferenceExpression>();
+			optional_idx col_idx;
+			DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
+			D_ASSERT(col_idx.IsValid());
+			auto &child_expression = expressions[col_idx.GetIndex()]->Cast<BoundReferenceExpression>();
 			auto column_reference =
 			    make_uniq<BoundReferenceExpression>(child_expression.return_type, child_expression.index);
 			expressions.push_back(GetPartitionExpressionForUpdate(context, std::move(column_reference), field));

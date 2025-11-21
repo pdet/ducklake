@@ -523,6 +523,8 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::TIMESTAMP_NS;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
 			return LogicalType::TIMESTAMP_TZ;
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
+			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
 			LogicalType geo_type(LogicalTypeId::BLOB);
 			geo_type.SetAlias("GEOMETRY");

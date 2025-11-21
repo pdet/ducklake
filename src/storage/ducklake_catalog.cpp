@@ -399,8 +399,17 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		}
 		auto &schema_entry = entry->second.get();
 		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name);
-		auto macro_catalog_entry = make_uniq<DuckLakeMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
-		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		if (macro.implementations.front().type == "scalar") {
+			auto macro_catalog_entry =
+			    make_uniq<DuckLakeScalarMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
+			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		} else if (macro.implementations.front().type == "table") {
+			auto macro_catalog_entry =
+			    make_uniq<DuckLakeTableMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
+			schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
+		} else {
+			throw InvalidInputException("Macro type %s is not accepted", macro.implementations.front().type);
+		}
 	}
 
 	// load the partition entries

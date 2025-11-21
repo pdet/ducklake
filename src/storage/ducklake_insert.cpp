@@ -337,8 +337,8 @@ static void StripTrailingSeparator(FileSystem &fs, string &path) {
 	path = path.substr(0, path.size() - sep.size());
 }
 
-static const DuckLakeFieldId &GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
-                                                optional_idx &index) {
+const DuckLakeFieldId &DuckLakeInsert::GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
+                                                         optional_idx &index) {
 	if (!copy_input.field_data) {
 		throw InvalidInputException("Partitioning requires field ids");
 	}
@@ -369,7 +369,7 @@ static unique_ptr<Expression> CreateColumnReference(DuckLakeCopyInput &copy_inpu
 
 static unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, FieldIndex field_id) {
 	optional_idx index;
-	auto &column_field_id = GetTopLevelColumn(copy_input, field_id, index);
+	auto &column_field_id = DuckLakeInsert::GetTopLevelColumn(copy_input, field_id, index);
 	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
 }
 
@@ -448,7 +448,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		// just set up the correct references to the partition columns
 		for (auto &field : copy_input.partition_data->fields) {
 			optional_idx col_idx;
-			GetTopLevelColumn(copy_input, field.field_id, col_idx);
+			DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
 			copy_options.partition_columns.push_back(col_idx.GetIndex());
 		}
 		return;

@@ -213,7 +213,8 @@ static unique_ptr<MergeIntoOperator> DuckLakePlanMergeIntoAction(DuckLakeCatalog
 		auto &update_plan = catalog.PlanUpdate(context, planner, update, child_plan);
 		result->op = update_plan;
 		auto &dl_update = result->op->Cast<DuckLakeUpdate>();
-		dl_update.row_id_index = child_plan.types.size() - 1;
+		// The row_id comes before the deletion information, which is always the 3 last column of the chunk.
+		dl_update.row_id_index = child_plan.types.size() - DuckLakeUpdate::DELETION_INFO_SIZE - 1;
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {

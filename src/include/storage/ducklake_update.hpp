@@ -41,6 +41,8 @@ public:
 		return true;
 	}
 
+	static constexpr uint8_t DELETION_INFO_SIZE = 3;
+
 public:
 	// Sink interface
 	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override;

@@ -10,6 +10,12 @@
 #include "duckdb.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/planner/filter/in_filter.hpp"
+#include "duckdb/planner/expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 
@@ -33,6 +39,10 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 
 DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &transaction) {
 	return transaction.GetMetadataManager();
+}
+
+bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
+	return true;
 }
 
 FileSystem &DuckLakeMetadataManager::GetFileSystem() {
@@ -712,13 +722,384 @@ static void ParsePartialFileInfo(DuckLakeSnapshot snapshot, const string &partia
 	}
 }
 
-vector<DuckLakeFileListEntry>
-DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot, const string &filter) {
+string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
+                                                              unordered_set<string> &referenced_stats) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &constant_filter = filter.Cast<ConstantFilter>();
+		switch (type.id()) {
+		case LogicalTypeId::BLOB:
+			return string();
+		case LogicalTypeId::FLOAT:
+		case LogicalTypeId::DOUBLE:
+			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
+		default:
+			return GenerateConstantFilter(constant_filter, type, referenced_stats);
+		}
+	}
+	case TableFilterType::IS_NULL:
+		referenced_stats.insert("null_count");
+		return "null_count > 0";
+	case TableFilterType::IS_NOT_NULL:
+		referenced_stats.insert("value_count");
+		return "value_count > 0";
+	case TableFilterType::CONJUNCTION_OR: {
+		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
+		string result;
+		for (auto &child_filter : conjunction_or_filter.child_filters) {
+			if (!result.empty()) {
+				result += " OR ";
+			}
+			string child_str = GenerateFilterFromTableFilter(*child_filter, type, referenced_stats);
+			if (child_str.empty()) {
+				return string();
+			}
+			result += "(" + child_str + ")";
+		}
+		return result;
+	}
+	case TableFilterType::CONJUNCTION_AND: {
+		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
+		string result;
+		for (auto &child_filter : conjunction_and_filter.child_filters) {
+			string child_str = GenerateFilterFromTableFilter(*child_filter, type, referenced_stats);
+			if (child_str.empty()) {
+				continue;
+			}
+			if (!result.empty()) {
+				result += " AND ";
+			}
+			result += "(" + child_str + ")";
+		}
+		return result;
+	}
+	case TableFilterType::OPTIONAL_FILTER: {
+		auto &optional_filter = filter.Cast<OptionalFilter>();
+		return GenerateFilterFromTableFilter(*optional_filter.child_filter, type, referenced_stats);
+	}
+	case TableFilterType::IN_FILTER: {
+		auto &in_filter = filter.Cast<InFilter>();
+		string result;
+		for (auto &value : in_filter.values) {
+			if (!result.empty()) {
+				result += " OR ";
+			}
+			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
+			auto next_filter = GenerateFilterFromTableFilter(temporary_constant_filter, type, referenced_stats);
+			if (next_filter.empty()) {
+				return string();
+			}
+			result += "(" + next_filter + ")";
+		}
+		return result;
+	}
+	default:
+		return string();
+	}
+}
+
+bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
+	if (val.type().id() != LogicalTypeId::FLOAT && val.type().id() != LogicalTypeId::DOUBLE) {
+		return true;
+	}
+	double constant_val = val.GetValue<double>();
+	return Value::IsFinite(constant_val);
+}
+
+string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const LogicalType &type) {
+	if (type.IsNumeric() && ValueIsFinite(val)) {
+		// for (finite) numerics we directly emit the number
+		return val.ToString();
+	}
+	// convert to a string
+	return DuckLakeUtil::SQLLiteralToString(val.ToString());
+}
+
+string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type) {
+	// we only need to cast numerics
+	if (type.IsNumeric()) {
+		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
+	}
+	return stats;
+}
+
+string DuckLakeMetadataManager::GenerateConstantFilter(const ConstantFilter &constant_filter, const LogicalType &type,
+                                                       unordered_set<string> &referenced_stats) {
+	auto constant_str = CastValueToTarget(constant_filter.constant, type);
+	auto min_value = CastStatsToTarget("min_value", type);
+	auto max_value = CastStatsToTarget("max_value", type);
+	switch (constant_filter.comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		// x = constant
+		// this can only be true if "constant BETWEEN min AND max"
+		referenced_stats.insert("min_value");
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("%s BETWEEN %s AND %s", constant_str, min_value, max_value);
+	case ExpressionType::COMPARE_NOTEQUAL:
+		// x <> constant
+		// this can only be false if "constant = min AND constant = max" (i.e. min = max = constant)
+		referenced_stats.insert("min_value");
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("NOT (%s = %s AND %s = %s)", min_value, constant_str, max_value, constant_str);
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		// x >= constant
+		// this can only be true if "max >= C"
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("%s >= %s", max_value, constant_str);
+	case ExpressionType::COMPARE_GREATERTHAN:
+		// x > constant
+		// this can only be true if "max > C"
+		referenced_stats.insert("max_value");
+		return StringUtil::Format("%s > %s", max_value, constant_str);
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		// x <= constant
+		// this can only be true if "min <= C"
+		referenced_stats.insert("min_value");
+		return StringUtil::Format("%s <= %s", min_value, constant_str);
+	case ExpressionType::COMPARE_LESSTHAN:
+		// x < constant
+		// this can only be true if "min < C"
+		referenced_stats.insert("min_value");
+		return StringUtil::Format("%s < %s", min_value, constant_str);
+	default:
+		// unsupported
+		return string();
+	}
+}
+
+string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilter &constant_filter,
+                                                             const LogicalType &type,
+                                                             unordered_set<string> &referenced_stats) {
+	double constant_val = constant_filter.constant.GetValue<double>();
+	bool constant_is_nan = Value::IsNan(constant_val);
+	switch (constant_filter.comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		// x = constant
+		if (constant_is_nan) {
+			// x = NAN - check for `contains_nan`
+			referenced_stats.insert("contains_nan");
+			return "contains_nan";
+		}
+		// else check as if this is a numeric
+		return GenerateConstantFilter(constant_filter, type, referenced_stats);
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+	case ExpressionType::COMPARE_GREATERTHAN: {
+		if (constant_is_nan) {
+			// skip these filters if the constant is nan
+			// note that > and >= we can actually handle since nan is the biggest value
+			// (>= is equal to =, > is always false)
+			return string();
+		}
+		// generate the numeric filter
+		string filter = GenerateConstantFilter(constant_filter, type, referenced_stats);
+		if (filter.empty()) {
+			return string();
+		}
+		// since NaN is bigger than anything - we also need to check for contains_nan
+		referenced_stats.insert("contains_nan");
+		return filter + " OR contains_nan";
+	}
+	case ExpressionType::COMPARE_NOTEQUAL:
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+	case ExpressionType::COMPARE_LESSTHAN:
+		if (constant_is_nan) {
+			// skip these filters if the constant is nan
+			return string();
+		}
+		// these are equivalent to the numeric filter
+		return GenerateConstantFilter(constant_filter, type, referenced_stats);
+	default:
+		// unsupported
+		return string();
+	}
+}
+
+string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter,
+                                                       unordered_set<string> &referenced_stats) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &constant_filter = filter.Cast<ConstantFilter>();
+		auto &type = constant_filter.constant.type();
+		switch (type.id()) {
+		case LogicalTypeId::BLOB:
+			return string();
+		case LogicalTypeId::FLOAT:
+		case LogicalTypeId::DOUBLE:
+			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
+		default:
+			return GenerateConstantFilter(constant_filter, type, referenced_stats);
+		}
+	}
+	case TableFilterType::IS_NULL:
+		// IS NULL can only be true if the file has any NULL values
+		referenced_stats.insert("null_count");
+		return "null_count > 0";
+	case TableFilterType::IS_NOT_NULL:
+		// IS NOT NULL can only be true if the file has any valid values
+		referenced_stats.insert("value_count");
+		return "value_count > 0";
+	case TableFilterType::CONJUNCTION_OR: {
+		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
+		string result;
+		for (auto &child_filter : conjunction_or_filter.child_filters) {
+			if (!result.empty()) {
+				result += " OR ";
+			}
+			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
+			if (child_str.empty()) {
+				return string();
+			}
+			result += "(" + child_str + ")";
+		}
+		return result;
+	}
+	case TableFilterType::CONJUNCTION_AND: {
+		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
+		string result;
+		for (auto &child_filter : conjunction_and_filter.child_filters) {
+			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
+			if (child_str.empty()) {
+				continue; // skip this child, we can still use other children
+			}
+			if (!result.empty()) {
+				result += " AND ";
+			}
+			result += "(" + child_str + ")";
+		}
+		return result;
+	}
+	case TableFilterType::OPTIONAL_FILTER: {
+		auto &optional_filter = filter.Cast<OptionalFilter>();
+		return GenerateFilterPushdown(*optional_filter.child_filter, referenced_stats);
+	}
+	case TableFilterType::IN_FILTER: {
+		auto &in_filter = filter.Cast<InFilter>();
+		string result;
+		for (auto &value : in_filter.values) {
+			if (!result.empty()) {
+				result += " OR ";
+			}
+			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
+			auto next_filter = GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
+			if (next_filter.empty()) {
+				return string();
+			}
+			result += "(" + next_filter + ")";
+		}
+		return result;
+	}
+	default:
+		// unsupported filter
+		return string();
+	}
+}
+
+FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
+	FilterSQLResult result;
+	string conditions;
+
+	for (const auto &entry : filter_info.column_filters) {
+		const auto &column_filter = entry.second;
+
+		unordered_set<string> referenced_stats;
+		auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats);
+
+		if (filter_condition.empty()) {
+			continue;
+		}
+
+		string cte_name = StringUtil::Format("col_%d_stats", column_filter.column_field_index);
+
+		string null_checks;
+		for (const auto &stat : referenced_stats) {
+			null_checks += stat + " IS NULL OR ";
+		}
+
+		if (!conditions.empty()) {
+			conditions += " AND ";
+		}
+		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
+		                                 null_checks.c_str(), filter_condition.c_str());
+
+		CTERequirement req(column_filter.column_field_index, referenced_stats);
+		result.required_ctes.emplace(column_filter.column_field_index, std::move(req));
+	}
+
+	result.where_conditions = conditions;
+	return result;
+}
+
+string
+DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+                                                            TableIndex table_id) {
+	if (requirements.empty()) {
+		return "";
+	}
+
+	string cte_section = "WITH ";
+	bool first_cte = true;
+
+	for (const auto &entry : requirements) {
+		const auto &req = entry.second;
+
+		if (!first_cte) {
+			cte_section += ",\n";
+		}
+		first_cte = false;
+
+		string select_list = "data_file_id";
+		for (const auto &stat : req.referenced_stats) {
+			select_list += ", " + stat;
+		}
+
+		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
+
+		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
+		cte_section += StringUtil::Format("  SELECT %s\n", select_list.c_str());
+		cte_section += "  FROM {METADATA_CATALOG}.ducklake_file_column_stats\n";
+		cte_section +=
+		    StringUtil::Format("  WHERE column_id = %d AND table_id = %d\n", req.column_field_index, table_id.index);
+		cte_section += ")";
+	}
+
+	return cte_section + "\n";
+}
+
+FilterPushdownQueryComponents
+DuckLakeMetadataManager::GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info, TableIndex table_id) {
+	FilterPushdownQueryComponents result;
+
+	if (filter_info.column_filters.empty()) {
+		return result;
+	}
+
+	auto filter_result = ConvertFilterPushdownToSQL(filter_info);
+	result.cte_section = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
+	result.where_clause = filter_result.where_conditions;
+
+	return result;
+}
+
+vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
+                                                                        DuckLakeSnapshot snapshot,
+                                                                        const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
 	                     GetFileSelectList("del");
-	auto query = StringUtil::Format(R"(
+
+	string query;
+	string where_clause;
+
+	// Generate CTE section and WHERE clause if we have filter pushdown info
+	if (filter_info && !filter_info->column_filters.empty()) {
+		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
+		query = components.cte_section;
+		where_clause = components.where_clause;
+	}
+
+	// Add base query
+	query += StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
@@ -729,9 +1110,11 @@ LEFT JOIN (
     ) del USING (data_file_id)
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                                select_list, table_id.index, table_id.index);
-	if (!filter.empty()) {
-		query += "\nAND " + filter;
+	                            select_list, table_id.index, table_id.index);
+
+	// Add WHERE clause from filters if it was generated
+	if (!where_clause.empty()) {
+		query += "\nAND " + where_clause;
 	}
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
@@ -884,12 +1267,24 @@ USING (data_file_id), (
 	return files;
 }
 
-vector<DuckLakeFileListExtendedEntry> DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table,
-                                                                                        DuckLakeSnapshot snapshot,
-                                                                                        const string &filter) {
+vector<DuckLakeFileListExtendedEntry>
+DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+                                                  const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") + ", data.row_id_start, " + GetFileSelectList("del");
-	auto query = StringUtil::Format(R"(
+
+	string query;
+	string where_clause;
+
+	// Generate CTE section and WHERE clause if we have filter pushdown info
+	if (filter_info && !filter_info->column_filters.empty()) {
+		auto components = GenerateFilterPushdownComponents(*filter_info, table_id);
+		query = components.cte_section;
+		where_clause = components.where_clause;
+	}
+
+	// Add base query
+	query += StringUtil::Format(R"(
 SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN (
@@ -900,9 +1295,11 @@ LEFT JOIN (
     ) del USING (data_file_id)
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                                select_list, table_id.index, table_id.index);
-	if (!filter.empty()) {
-		query += "\nAND " + filter;
+	                            select_list, table_id.index, table_id.index);
+
+	// Add WHERE clause from filters if it was generated
+	if (!where_clause.empty()) {
+		query += "\nAND " + where_clause;
 	}
 
 	auto result = transaction.Query(snapshot, query);
@@ -1173,10 +1570,12 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 }
 
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
-	if (col.children.empty()) {
-		return DuckLakeTypes::FromString(col.type).ToString();
+	auto column_type = DuckLakeTypes::FromString(col.type);
+	if (!TypeIsNativelySupported(column_type)) {
+		return "VARCHAR";
 	}
-	if (col.type == "struct") {
+	switch (column_type.id()) {
+	case LogicalTypeId::STRUCT: {
 		string result;
 		for (auto &child : col.children) {
 			if (!result.empty()) {
@@ -1186,13 +1585,20 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 		}
 		return "STRUCT(" + result + ")";
 	}
-	if (col.type == "list") {
+	case LogicalTypeId::LIST: {
 		return GetColumnType(col.children[0]) + "[]";
 	}
-	if (col.type == "map") {
+	case LogicalTypeId::MAP: {
 		return StringUtil::Format("MAP(%s, %s)", GetColumnType(col.children[0]), GetColumnType(col.children[1]));
 	}
-	throw InternalException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType", col.type);
+	default:
+		if (!col.children.empty()) {
+			// This is a nested structure that we currently do not support.
+			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
+			                              col.type);
+		}
+		return column_type.ToString();
+	}
 }
 
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
@@ -1542,7 +1948,7 @@ static string GetProjection(const vector<string> &columns_to_read) {
 		if (!result.empty()) {
 			result += ", ";
 		}
-		result += KeywordHelper::WriteOptionallyQuoted(entry);
+		result += entry;
 	}
 	return result;
 }
@@ -2663,12 +3069,21 @@ WHERE snapshot_id IN (%s);
 	// get a list of tables that are no longer required after these deletions
 	result = transaction.Query(R"(
 SELECT table_id
-FROM {METADATA_CATALOG}.ducklake_table
-WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
+FROM {METADATA_CATALOG}.ducklake_table t
+WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
     SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
-);)");
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM {METADATA_CATALOG}.ducklake_table t2
+    WHERE t2.table_id = t.table_id
+      AND (t2.end_snapshot IS NULL OR  EXISTS (SELECT snapshot_id
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot))
+  );)");
+
 	vector<TableIndex> cleanup_tables;
 	for (auto &row : *result) {
 		cleanup_tables.push_back(TableIndex(row.GetValue<idx_t>(0)));
