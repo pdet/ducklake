@@ -1542,19 +1542,21 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 		result += ",";
 	}
 	string parent_idx = parent.IsValid() ? to_string(parent.GetIndex()) : "NULL";
-	string initial_default_val;
-	string initial_default_val_system;
-	string initial_default_val_qualifier;
-	initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
-	initial_default_val_system = "'duckdb'";
-	initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
+	string initial_default_val = "'NULL'";
+	string initial_default_val_system = "'duckdb'";
+	string initial_default_val_qualifier = "'literal'";
+	if (column.initial_default) {
+		initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
+		initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
+	}
 
-	string default_val;
-	string default_val_system;
-	string default_val_qualifier;
-	default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
-	default_val_system = "'duckdb'";
-	default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
+	string default_val = "'NULL'";
+	string default_val_system = "'duckdb'";
+	string default_val_qualifier = "'literal'";
+	if (column.default_value) {
+		default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
+		default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
+	}
 
 	auto column_id = column.id.index;
 	auto column_order = column_id;
