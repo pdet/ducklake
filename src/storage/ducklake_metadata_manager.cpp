@@ -11,6 +11,7 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 
 namespace duckdb {
 
@@ -1121,7 +1122,15 @@ void DuckLakeMetadataManager::WriteNewSchemas(DuckLakeSnapshot commit_snapshot,
 
 string GetExpressionType(ParsedExpression &expression) {
 	switch (expression.type) {
+	case ExpressionType::OPERATOR_CAST: {
+		auto &cast_expression = expression.Cast<CastExpression>();
+		if (cast_expression.child->type == ExpressionType::VALUE_CONSTANT) {
+			return "literal";
+		}
+		return "expression";
+	}
 	case ExpressionType::FUNCTION:
+	case ExpressionType::COLUMN_REF:
 		return "expression";
 	case ExpressionType::VALUE_CONSTANT:
 		return "literal";
@@ -1139,27 +1148,23 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string initial_default_val;
 	string initial_default_val_system;
 	string initial_default_val_qualifier;
-	if (!column.initial_default) {
-		initial_default_val = "NULL";
-		initial_default_val_system = "NULL";
-		initial_default_val_qualifier = "NULL";
-	} else {
-		initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
-		initial_default_val_system = "'duckdb'";
-		initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
-	}
+
+	initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
+	initial_default_val_system = "'duckdb'";
+	initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
+
 	string default_val;
 	string default_val_system;
 	string default_val_qualifier;
-	if (!column.default_value) {
-		default_val = "NULL";
-		default_val_system = "NULL";
-		default_val_qualifier = "NULL";
-	} else {
-		default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
-		default_val_system = "'duckdb'";
-		default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
-	}
+	// if (!column.default_value) {
+	// 	default_val = "NULL";
+	// 	default_val_system = "NULL";
+	// 	default_val_qualifier = "NULL";
+	// } else {
+	default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
+	default_val_system = "'duckdb'";
+	default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
+	// }
 	auto column_id = column.id.index;
 	auto column_order = column_id;
 

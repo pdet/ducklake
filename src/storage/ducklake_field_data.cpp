@@ -43,14 +43,13 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, string name_p
 static unique_ptr<ParsedExpression> ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr,
                                                         const LogicalType &type) {
 	if (!default_expr) {
-		if (type.id() == LogicalTypeId::SQLNULL) {
-			idx_t i = 0;
-		}
 		return make_uniq<ConstantExpression>(Value(type));
 	}
 	switch (default_expr->type) {
 	case ExpressionType::VALUE_CONSTANT:
 	case ExpressionType::FUNCTION:
+	case ExpressionType::COLUMN_REF:
+	case ExpressionType::OPERATOR_CAST:
 		return default_expr->Copy();
 	default:
 		throw NotImplementedException(
