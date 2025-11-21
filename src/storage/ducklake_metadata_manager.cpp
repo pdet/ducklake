@@ -152,10 +152,10 @@ void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
-ALTER TABLE {METADATA_CATALOG}.initial_value_qualifier ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.initial_value_dialect ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.default_value_qualifier ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
-ALTER TABLE {METADATA_CATALOG}.default_value_dialect ADD COLUMN {IF_NOT_EXISTS} commit_extra_info VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} initial_value_qualifier VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} initial_value_dialect VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_qualifier VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -1144,9 +1144,9 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 		initial_default_val_system = "NULL";
 		initial_default_val_qualifier = "NULL";
 	} else {
-		initial_default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
+		initial_default_val = KeywordHelper::WriteQuoted(column.initial_default->ToString(), '\'');
 		initial_default_val_system = "'duckdb'";
-		initial_default_val_qualifier = "'" + GetExpressionType(*column.default_value) + "'";
+		initial_default_val_qualifier = "'" + GetExpressionType(*column.initial_default) + "'";
 	}
 	string default_val;
 	string default_val_system;

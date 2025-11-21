@@ -29,7 +29,6 @@
     "CHECK constraints are not supported in DuckLake",
     "Defining a compression type for a column is not supported in DuckLake",
     "FOREIGN KEY constraints are not supported in DuckLake",
-    "Only literals (e.g. 42 or 'hello world') are supported as default values",
     "Column type cannot be modified using an expression",
     "Default value for STRUCT type not supported",
     "Default value for LIST type not supported",
