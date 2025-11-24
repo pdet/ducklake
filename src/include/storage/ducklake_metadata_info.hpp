@@ -69,7 +69,7 @@ struct DuckLakeColumnInfo {
 	FieldIndex id;
 	string name;
 	string type;
-	unique_ptr<ParsedExpression> initial_default;
+	Value initial_default;
 	unique_ptr<ParsedExpression> default_value;
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
@@ -80,9 +80,7 @@ struct DuckLakeColumnInfo {
 	DuckLakeColumnInfo(const DuckLakeColumnInfo &other)
 	    : id(other.id), name(other.name), type(other.type), nulls_allowed(other.nulls_allowed),
 	      children(other.children), tags(other.tags) {
-		if (other.initial_default) {
-			initial_default = other.initial_default->Copy();
-		}
+		initial_default = other.initial_default;
 		if (other.default_value) {
 			default_value = other.default_value->Copy();
 		}
@@ -96,10 +94,7 @@ struct DuckLakeColumnInfo {
 			nulls_allowed = other.nulls_allowed;
 			children = other.children;
 			tags = other.tags;
-
-			if (other.initial_default) {
-				initial_default = other.initial_default->Copy();
-			}
+			initial_default = other.initial_default;
 
 			if (other.default_value) {
 				default_value = other.default_value->Copy();

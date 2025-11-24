@@ -40,8 +40,8 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, string name_p
 	}
 }
 
-static unique_ptr<ParsedExpression> ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr,
-                                                        const LogicalType &type) {
+static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const ParsedExpression> default_expr,
+                                                             const LogicalType &type) {
 	if (!default_expr) {
 		return make_uniq<ConstantExpression>(Value(type));
 	}
@@ -55,6 +55,17 @@ static unique_ptr<ParsedExpression> ExtractDefaultValue(optional_ptr<const Parse
 		throw NotImplementedException(
 		    "Only literals (e.g. 42 or 'hello world') and expressions (e.g., 'NOW()') are supported as default values");
 	}
+}
+
+static Value ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr, const LogicalType &type) {
+	if (!default_expr) {
+		return Value(type);
+	}
+	if (default_expr->type != ExpressionType::VALUE_CONSTANT) {
+		throw NotImplementedException("Only literals (e.g. 42 or 'hello world') are supported as default values");
+	}
+	auto &const_default = default_expr->Cast<ConstantExpression>();
+	return const_default.value.DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
@@ -96,8 +107,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 	default:
 		break;
 	}
-	column_data.initial_default = ExtractDefaultValue(default_expr, type);
-	column_data.default_value = ExtractDefaultValue(default_expr, type);
+	column_data.initial_default = Value(type);
+	column_data.default_value = ExtractDefaultExpression(default_expr, type);
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), name, type, std::move(field_children));
 }
 
@@ -109,6 +120,7 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id) {
+	// FIXME: THis shuold return value()
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
 	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id);
 }
@@ -145,7 +157,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::Rename(const DuckLakeFieldId &field
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::SetDefault(const DuckLakeFieldId &field_id,
                                                         optional_ptr<const ParsedExpression> default_expr) {
 	auto result = field_id.Copy();
-	result->column_data.default_value = ExtractDefaultValue(default_expr, field_id.Type());
+	result->column_data.default_value = ExtractDefaultExpression(default_expr, field_id.Type());
 	return result;
 }
 

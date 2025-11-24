@@ -852,9 +852,9 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.id = col_data.id;
 	new_col.column_info.name = field_id.Name();
 	new_col.column_info.type = DuckLakeTypes::ToString(field_id.Type());
-	if (col_data.initial_default) {
-		new_col.column_info.initial_default = col_data.initial_default->Copy();
-	}
+
+	new_col.column_info.initial_default = col_data.initial_default;
+
 	if (col_data.default_value) {
 		new_col.column_info.default_value = col_data.default_value->Copy();
 	}
@@ -1103,9 +1103,8 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.id = field_index;
 	result.name = col.Name();
 	result.type = DuckLakeTypes::ToString(col.Type());
-	if (col_data.initial_default) {
-		result.initial_default = col_data.initial_default->Copy();
-	}
+	result.initial_default = col_data.initial_default;
+
 	if (col_data.default_value) {
 		result.default_value = col_data.default_value->Copy();
 	}
@@ -1149,9 +1148,9 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 	}
 	default: {
 		auto &column_data = field_id.GetColumnData();
-		if (column_data.initial_default) {
-			column_entry.initial_default = column_data.initial_default->Copy();
-		}
+
+		column_entry.initial_default = column_data.initial_default;
+
 		if (column_data.default_value) {
 			column_entry.default_value = column_data.default_value->Copy();
 		}

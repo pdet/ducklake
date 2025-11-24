@@ -195,9 +195,8 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	col_data.id = col.id;
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
-		if (col.initial_default) {
-			col_data.initial_default = col.initial_default->Copy();
-		}
+		col_data.initial_default = col.initial_default;
+
 		if (col.default_value) {
 			col_data.default_value = col.default_value->Copy();
 		}

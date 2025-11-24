@@ -23,14 +23,13 @@ class ColumnList;
 
 struct DuckLakeColumnData {
 	FieldIndex id;
-	unique_ptr<ParsedExpression> initial_default;
+	Value initial_default;
 	unique_ptr<ParsedExpression> default_value;
 	DuckLakeColumnData Copy() const {
 		DuckLakeColumnData copy;
 		copy.id = id;
-		if (initial_default) {
-			copy.initial_default = initial_default->Copy();
-		}
+		copy.initial_default = initial_default;
+
 		if (default_value) {
 			copy.default_value = default_value->Copy();
 		}

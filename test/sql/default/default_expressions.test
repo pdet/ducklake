@@ -55,7 +55,7 @@ FROM t_1
 
 # Now let's alter it
 query IIIII
-SELECT table_id, column_id, default_value, default_value_qualifier, default_value_dialect FROM xx.ducklake_column
+SELECT table_id, column_id, default_value, default_value_type, default_value_dialect FROM xx.ducklake_column
 ----
 1	1	NULL	literal	duckdb
 1	2	now()	expression	duckdb
