@@ -23,4 +23,8 @@ struct DuckLakeInlinedDataDeletes {
 	set<idx_t> rows;
 };
 
+struct DuckLakeInlinedDeletes {
+	unordered_map<idx_t, vector<idx_t>> map_file_deletes;
+};
+
 } // namespace duckdb

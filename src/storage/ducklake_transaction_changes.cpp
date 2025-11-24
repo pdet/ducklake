@@ -69,7 +69,7 @@ ChangeType ParseChangeType(const string &changes_made, idx_t &pos) {
 		return ChangeType::COMPACTED_TABLE;
 	} else if (StringUtil::CIEquals(change_type_str, "inlined_insert")) {
 		return ChangeType::INSERTED_INTO_TABLE_INLINED;
-	} else if (StringUtil::CIEquals(change_type_str, "inlined_delete")) {
+	} else if (StringUtil::CIEquals(change_type_str, "inlined_data_delete")) {
 		return ChangeType::DELETED_FROM_TABLE_INLINED;
 	} else if (StringUtil::CIEquals(change_type_str, "flushed_inlined")) {
 		return ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE;

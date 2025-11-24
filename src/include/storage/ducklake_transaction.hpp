@@ -41,6 +41,7 @@ struct DuckLakeCommitState;
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
+	unique_ptr<DuckLakeInlinedDeletes> new_inlined_delete;
 	unordered_map<string, DuckLakeDeleteFile> new_delete_files;
 	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
 	vector<DuckLakeCompactionEntry> compactions;

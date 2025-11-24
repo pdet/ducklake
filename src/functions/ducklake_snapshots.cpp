@@ -139,7 +139,7 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	PushIDChangeList(change_keys, change_values, other_changes.dropped_table_macros, "table_macros_dropped");
 	PushIDChangeList(change_keys, change_values, other_changes.altered_views, "views_altered");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_inserted_inlined, "inlined_insert");
-	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_inlined, "inlined_delete");
+	PushIDChangeList(change_keys, change_values, other_changes.tables_deleted_inlined, "inlined_data_delete");
 	PushIDChangeList(change_keys, change_values, other_changes.tables_flushed_inlined, "flushed_inlined");
 
 	row_values.push_back(Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),

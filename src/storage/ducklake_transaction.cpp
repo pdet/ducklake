@@ -116,6 +116,7 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
+	set<TableIndex> tables_deleted_data_inlined;
 	set<TableIndex> tables_flushed_inlined;
 	set<TableIndex> tables_compacted;
 };
@@ -325,11 +326,14 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	if (table_changes.new_inlined_data) {
 		changes.tables_inserted_inlined.insert(table_id);
 	}
+	if (table_changes.new_inlined_delete) {
+		changes.tables_deleted_inlined.insert(table_id);
+	}
 	if (!table_changes.new_delete_files.empty()) {
 		changes.tables_deleted_from.insert(table_id);
 	}
 	if (!table_changes.new_inlined_data_deletes.empty()) {
-		changes.tables_deleted_inlined.insert(table_id);
+		changes.tables_deleted_data_inlined.insert(table_id);
 	}
 	if (!table_changes.compactions.empty()) {
 		changes.tables_compacted.insert(table_id);
@@ -435,7 +439,7 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
 	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
 	AddChangeInfo(commit_state, change_info, changes.tables_inserted_inlined, "inlined_insert");
-	AddChangeInfo(commit_state, change_info, changes.tables_deleted_inlined, "inlined_delete");
+	AddChangeInfo(commit_state, change_info, changes.tables_deleted_data_inlined, "inlined_data_delete");
 	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "flushed_inlined");
 	if (!changes.tables_compacted.empty() && !change_info.changes_made.empty()) {
 		throw InvalidInputException("Transactions can either make changes OR perform compaction - not both");
@@ -632,6 +636,12 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 				ConflictCheck(file.second, deleted_files.deleted_from_files, "delete from file", "deleted from it");
 			}
 		}
+	}
+	for (auto &table_id : changes.tables_deleted_data_inlined) {
+		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
+		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
+		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
+		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "delete from table", "flushed the inlined data");
 	}
 	for (auto &table_id : changes.tables_deleted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
@@ -1207,6 +1217,7 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 struct NewDataInfo {
 	vector<DuckLakeFileInfo> new_files;
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
+	vector<DuckLakeInlinedDeletionInfo> new_inlined_deletion;
 };
 
 NewDataInfo DuckLakeTransaction::GetNewDataFiles(DuckLakeCommitState &commit_state) {

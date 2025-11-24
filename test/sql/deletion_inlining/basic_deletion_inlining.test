@@ -1,0 +1,57 @@
+# name: test/sql/deletion_inlining/basic_deletion_inlining.test
+# description: test deletion inlining
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/basic_deletion_inlining', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+use ducklake;
+
+statement ok
+CREATE TABLE test(i INTEGER, j INTEGER);
+
+query IIIII
+SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inlined_data_1_1
+
+# This does not get inlined
+statement ok
+insert into test values (1,0), (2,0), (3,0), (4,0), (5,0), (6,0), (7,1)
+
+# This gets inlined
+statement ok
+insert into test values (8,1)
+
+query III
+FROM ducklake_meta.ducklake_inlined_data_tables
+----
+1	ducklake_inlined_data_1_1	1
+
+query II
+FROM ducklake_meta.ducklake_inlined_deletion_tables
+----
+1	ducklake_inlined_delete_1_1
+
+
+query IIIII
+SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+7	3	NULL	8	1
+
+statement ok
+delete from test where i = 8
+
+query IIIII
+SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inlined_data_1_1
+----
+7	3	4	8	1
+

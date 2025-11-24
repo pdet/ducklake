@@ -160,6 +160,11 @@ struct DuckLakeInlinedDataInfo {
 	optional_ptr<DuckLakeInlinedData> data;
 };
 
+struct DuckLakeInlinedDeletionInfo {
+	TableIndex table_id;
+	unordered_map<idx_t, vector<idx_t>> file_row_id_map;
+};
+
 struct DuckLakeDeletedInlinedDataInfo {
 	TableIndex table_id;
 	string table_name;

@@ -1850,7 +1850,6 @@ WHERE table_id = %d AND table_name LIKE '%%data%%' AND schema_version=(
 			string inlined_deletion_tables;
 			string inlined_table_queries;
 			commit_snapshot.schema_version++;
-			// FIXME: We need to do deletion stuff here
 			inlined_table_name = GetInlinedTableQueries(commit_snapshot, table_info, inlined_data_tables,
 			                                            inlined_table_queries, inlined_table_queries)
 			                         .data_table_name;
