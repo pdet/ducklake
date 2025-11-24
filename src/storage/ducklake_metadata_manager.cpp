@@ -78,6 +78,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_partition_column(partition_id BIGINT, t
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_partition_value(data_file_id BIGINT, table_id BIGINT, partition_key_index BIGINT, partition_value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion(data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, schedule_start TIMESTAMPTZ);
 CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_data_tables(table_id BIGINT, table_name VARCHAR, schema_version BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_deletion_tables(table_id BIGINT, table_name VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);
 CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT);
@@ -162,6 +163,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT,
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
+CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_deletion_tables(table_id BIGINT, table_name VARCHAR);
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 }
@@ -1555,18 +1557,28 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	}
 }
 
-string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
+string DuckLakeMetadataManager::GetInlinedTableQueries(const DuckLakeTableInfo &table,
+                                                       const InlinedTables &table_name) {
+	// We first get the columns of the og table, to create the data table
 	string columns;
-
 	for (auto &col : table.columns) {
 		if (!columns.empty()) {
 			columns += ", ";
 		}
 		columns += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
 	}
-	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
-	                          "end_snapshot BIGINT, %s);",
-	                          SQLIdentifier(table_name), columns);
+	// Data table is: row_id, start, end, data columns
+	string result_query =
+	    StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(row_id BIGINT, begin_snapshot BIGINT, "
+	                       "end_snapshot BIGINT, %s);",
+	                       SQLIdentifier(table_name.data_table_name), columns);
+	// Now the deletion inlined table
+	// Deletion table is: file_id, row_id, begin_snapshot
+	result_query += StringUtil::Format(
+	    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT,row_id BIGINT, begin_snapshot BIGINT);",
+	    SQLIdentifier(table_name.data_table_name));
+
+	return result_query;
 }
 
 void DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
@@ -1606,36 +1618,59 @@ void DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
 	WriteNewInlinedTables(commit_snapshot, new_tables);
 }
 
-static string GetInlinedTableName(const DuckLakeTableInfo &table, const DuckLakeSnapshot &snapshot) {
-	return StringUtil::Format("ducklake_inlined_data_%d_%d", table.id.index, snapshot.schema_version);
+static InlinedTables GetInlinedInsertTableName(const DuckLakeTableInfo &table, const DuckLakeSnapshot &snapshot) {
+	InlinedTables inlined_table_names;
+	inlined_table_names.data_table_name =
+	    StringUtil::Format("ducklake_inlined_data_%d_%d", table.id.index, snapshot.schema_version);
+	inlined_table_names.deleted_table_name =
+	    StringUtil::Format("ducklake_inlined_delete_%d_%d", table.id.index, snapshot.schema_version);
+	return inlined_table_names;
 }
 
-string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
-                                                       string &inlined_tables, string &inlined_table_queries) {
-	if (!inlined_tables.empty()) {
-		inlined_tables += ", ";
+InlinedTables DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot,
+                                                              const DuckLakeTableInfo &table,
+                                                              string &inlined_data_tables,
+                                                              string &inlined_deletion_tables,
+                                                              string &inlined_table_queries) {
+	if (!inlined_data_tables.empty()) {
+		D_ASSERT(!inlined_deletion_tables.empty());
+		inlined_data_tables += ", ";
+		inlined_deletion_tables += ", ";
 	}
 	auto schema_version = commit_snapshot.schema_version;
-	string inlined_table_name = GetInlinedTableName(table, commit_snapshot);
-	inlined_tables += StringUtil::Format("(%d, %s, %d)", table.id.index, SQLString(inlined_table_name), schema_version);
+	auto inlined_table_names = GetInlinedInsertTableName(table, commit_snapshot);
+	inlined_data_tables += StringUtil::Format("(%d, %s, %d)", table.id.index,
+	                                          SQLString(inlined_table_names.data_table_name), schema_version);
+	inlined_deletion_tables +=
+	    StringUtil::Format("(%d, %s)", table.id.index, SQLString(inlined_table_names.deleted_table_name));
+
 	if (!inlined_table_queries.empty()) {
 		inlined_table_queries += "\n";
 	}
-	inlined_table_queries += GetInlinedTableQuery(table, inlined_table_name);
-	return inlined_table_name;
+	inlined_table_queries += GetInlinedTableQueries(table, inlined_table_names);
+	return inlined_table_names;
 }
 
-void DuckLakeMetadataManager::ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
-                                                         const string &inlined_table_queries) {
-	if (inlined_tables.empty()) {
-		return;
-	}
-	inlined_tables = "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables;
+void DuckLakeMetadataManager::InsertInlinedTable(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
+                                                 string inline_table_type) {
+	inlined_tables = "INSERT INTO {METADATA_CATALOG}." + inline_table_type + " VALUES " + inlined_tables;
 	auto result = transaction.Query(commit_snapshot, inlined_tables);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to write new inlined tables table to DuckLake: ");
 	}
-	result = transaction.Query(commit_snapshot, inlined_table_queries);
+}
+
+void DuckLakeMetadataManager::ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_data_tables,
+                                                         string &inlined_deletion_tables,
+                                                         const string &inlined_table_queries) {
+	if (inlined_data_tables.empty()) {
+		D_ASSERT(inlined_deletion_tables.empty());
+		return;
+	}
+
+	InsertInlinedTable(commit_snapshot, inlined_data_tables, "ducklake_inlined_data_tables");
+	InsertInlinedTable(commit_snapshot, inlined_deletion_tables, "ducklake_inlined_deletion_tables");
+	auto result = transaction.Query(commit_snapshot, inlined_table_queries);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to write new inlined tables to DuckLake: ");
 	}
@@ -1644,16 +1679,18 @@ void DuckLakeMetadataManager::ExecuteInlinedTableQueries(DuckLakeSnapshot commit
 void DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
                                                     const vector<DuckLakeTableInfo> &new_tables) {
 	auto &catalog = transaction.GetCatalog();
-	string inlined_tables;
+	string inlined_data_tables;
+	string inlined_deletion_tables;
 	string inlined_table_queries;
 	for (auto &table : new_tables) {
 		if (catalog.DataInliningRowLimit(table.schema_id, table.id) == 0 || table.id.IsTransactionLocal()) {
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
 			continue;
 		}
-		GetInlinedTableQueries(commit_snapshot, table, inlined_tables, inlined_table_queries);
+		GetInlinedTableQueries(commit_snapshot, table, inlined_data_tables, inlined_deletion_tables,
+		                       inlined_table_queries);
 	}
-	ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
+	ExecuteInlinedTableQueries(commit_snapshot, inlined_data_tables, inlined_deletion_tables, inlined_table_queries);
 }
 
 void DuckLakeMetadataManager::WriteNewMacros(DuckLakeSnapshot commit_snapshot,
@@ -1782,7 +1819,7 @@ void DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_snaps
 		auto query = StringUtil::Format(R"(
 SELECT table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-WHERE table_id = %d AND schema_version=(
+WHERE table_id = %d AND table_name LIKE '%%data%%' AND schema_version=(
     SELECT MAX(schema_version)
     FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
     WHERE table_id=%d
@@ -1809,12 +1846,16 @@ WHERE table_id = %d AND schema_version=(
 			table_info.columns = table.GetTableColumns();
 
 			// write the new inlined table
-			string inlined_tables;
+			string inlined_data_tables;
+			string inlined_deletion_tables;
 			string inlined_table_queries;
 			commit_snapshot.schema_version++;
-			inlined_table_name =
-			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
-			ExecuteInlinedTableQueries(commit_snapshot, inlined_tables, inlined_table_queries);
+			// FIXME: We need to do deletion stuff here
+			inlined_table_name = GetInlinedTableQueries(commit_snapshot, table_info, inlined_data_tables,
+			                                            inlined_table_queries, inlined_table_queries)
+			                         .data_table_name;
+			ExecuteInlinedTableQueries(commit_snapshot, inlined_data_tables, inlined_table_queries,
+			                           inlined_table_queries);
 		}
 
 		// append the data

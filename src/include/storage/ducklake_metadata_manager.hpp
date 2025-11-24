@@ -55,6 +55,11 @@ struct FilterSQLResult {
 	}
 };
 
+struct InlinedTables {
+	string deleted_table_name;
+	string data_table_name;
+};
+
 struct ColumnFilterInfo {
 	idx_t column_field_index;
 	LogicalType column_type;
@@ -146,11 +151,13 @@ public:
 	virtual void WriteNewInlinedDeletes(DuckLakeSnapshot commit_snapshot,
 	                                    const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
 	virtual void WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
-	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
-	                                      string &inlined_tables, string &inlined_table_queries);
+	virtual InlinedTables GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
+	                                             string &inlined_data_tables, string &inlined_deletion_tables,
+	                                             string &inlined_table_queries);
 	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
-	virtual void ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
-	                                        const string &inlined_table_queries);
+	virtual void ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_data_tables,
+	                                        string &inlined_deletion_tables, const string &inlined_table_queries);
+	virtual void InsertInlinedTable(DuckLakeSnapshot commit_snapshot, string &inlined_tables, string inline_table_type);
 	virtual void DropDataFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
 	virtual void DropDeleteFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
 	virtual void WriteNewDeleteFiles(DuckLakeSnapshot commit_snapshot,
@@ -202,7 +209,7 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 
 protected:
-	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
+	string GetInlinedTableQueries(const DuckLakeTableInfo &table, const InlinedTables &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result);
 
