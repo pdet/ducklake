@@ -62,7 +62,22 @@ FROM t_1
 0	1
 1	3
 
-# Now let's alter it
+
+# Try literal with function name
+statement ok
+create table t_2 (a integer, b varchar);
+
+statement ok
+ALTER TABLE t_2 ALTER b SET DEFAULT 'random()';
+
+statement ok
+insert into t_2(a) values (1)
+
+query II
+FROM t_2
+----
+1	random()
+
 query IIIII
 SELECT table_id, column_id, default_value, default_value_type, default_value_dialect FROM xx.ducklake_column
 ----
@@ -72,3 +87,6 @@ SELECT table_id, column_id, default_value, default_value_type, default_value_dia
 2	1	NULL	literal	duckdb
 2	2	1	literal	duckdb
 2	2	round(pi())	expression	duckdb
+3	1	NULL	literal	duckdb
+3	2	NULL	literal	duckdb
+3	2	'random()'	literal	duckdb
