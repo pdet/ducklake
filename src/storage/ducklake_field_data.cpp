@@ -107,8 +107,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 	default:
 		break;
 	}
-	column_data.initial_default = Value(type);
-	column_data.default_value = ExtractDefaultExpression(default_expr, type);
+	column_data.initial_default = ExtractDefaultValue(default_expr, type);
+	column_data.default_value = make_uniq<ConstantExpression>(column_data.initial_default);
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), name, type, std::move(field_children));
 }
 
@@ -120,7 +120,6 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id) {
-	// FIXME: THis shuold return value()
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
 	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id);
 }
