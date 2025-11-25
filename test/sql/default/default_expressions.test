@@ -90,3 +90,8 @@ SELECT table_id, column_id, default_value, default_value_type, default_value_dia
 3	1	NULL	literal	duckdb
 3	2	NULL	literal	duckdb
 3	2	'random()'	literal	duckdb
+
+statement error
+ALTER TABLE t_2 ADD COLUMN j INTEGER DEFAULT RANDOM()
+----
+Only literals (e.g. 42 or 'hello world') are supported as initial values
