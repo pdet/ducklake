@@ -57,14 +57,14 @@ static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const 
 	}
 }
 
-static Value ExtractDefaultValue(optional_ptr<const ParsedExpression> default_expr, const LogicalType &type) {
-	if (!default_expr) {
+static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type) {
+	if (!initial_expr) {
 		return Value(type);
 	}
-	if (default_expr->type != ExpressionType::VALUE_CONSTANT) {
-		throw NotImplementedException("Only literals (e.g. 42 or 'hello world') are supported as default values");
+	if (initial_expr->type != ExpressionType::VALUE_CONSTANT) {
+		throw NotImplementedException("Only literals (e.g. 42 or 'hello world') are supported as initial values");
 	}
-	auto &const_default = default_expr->Cast<ConstantExpression>();
+	auto &const_default = initial_expr->Cast<ConstantExpression>();
 	return const_default.value.DefaultCastAs(type);
 }
 
@@ -107,7 +107,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 	default:
 		break;
 	}
-	column_data.initial_default = ExtractDefaultValue(default_expr, type);
+	column_data.initial_default = ExtractInitialValue(default_expr, type);
 	column_data.default_value = make_uniq<ConstantExpression>(column_data.initial_default);
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), name, type, std::move(field_children));
 }

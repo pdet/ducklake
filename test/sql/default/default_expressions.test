@@ -18,8 +18,17 @@ ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/de
 statement ok
 use ducklake
 
-statement ok
+statement error
 create table t (id integer, created_at timestamp default now());
+----
+Only literals (e.g. 42 or 'hello world') are supported as initial values
+
+
+statement ok
+create table t (id integer, created_at timestamp);
+
+statement ok
+ALTER TABLE t ALTER created_at SET DEFAULT NOW();
 
 statement ok
 insert into t(id) values(1);
@@ -58,6 +67,7 @@ query IIIII
 SELECT table_id, column_id, default_value, default_value_type, default_value_dialect FROM xx.ducklake_column
 ----
 1	1	NULL	literal	duckdb
+1	2	NULL	literal	duckdb
 1	2	now()	expression	duckdb
 2	1	NULL	literal	duckdb
 2	2	1	literal	duckdb
