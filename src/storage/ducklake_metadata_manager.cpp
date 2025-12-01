@@ -417,11 +417,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			column_info.initial_default = Value(row.GetValue<string>(COLUMN_INDEX_START + 3));
 		}
 		if (!row.IsNull(COLUMN_INDEX_START + 4)) {
-			auto sql_expr = Parser::ParseExpressionList(row.GetValue<string>(COLUMN_INDEX_START + 4));
-			if (sql_expr.size() != 1) {
-				throw InternalException("Expected a single expression");
-			}
-			column_info.default_value = std::move(sql_expr[0]);
+			column_info.default_value = Value(row.GetValue<string>(COLUMN_INDEX_START + 4));
 		}
 		column_info.nulls_allowed = row.GetValue<bool>(COLUMN_INDEX_START + 5);
 		if (!row.IsNull(COLUMN_INDEX_START + 7)) {
@@ -1543,9 +1539,14 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string default_val = "'NULL'";
 	string default_val_system = "'duckdb'";
 	string default_val_type = "'literal'";
-	if (column.default_value) {
-		default_val = KeywordHelper::WriteQuoted(column.default_value->ToString(), '\'');
-		default_val_type = "'" + GetExpressionType(*column.default_value) + "'";
+
+	if (!column.default_value.IsNull()) {
+		auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
+		if (sql_expr.size() != 1) {
+			throw InternalException("Expected a single expression");
+		}
+		default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
+		default_val_type = "'" + GetExpressionType(*sql_expr[0]) + "'";
 	}
 
 	auto column_id = column.id.index;

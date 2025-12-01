@@ -856,7 +856,9 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.initial_default = col_data.initial_default;
 
 	if (col_data.default_value) {
-		new_col.column_info.default_value = col_data.default_value->Copy();
+		new_col.column_info.default_value = col_data.default_value->ToString();
+	} else {
+		new_col.column_info.default_value = Value(LogicalTypeId::VARCHAR);
 	}
 	new_col.parent_idx = parent_idx.index;
 	new_fields.push_back(std::move(new_col));
@@ -1106,7 +1108,9 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.initial_default = col_data.initial_default;
 
 	if (col_data.default_value) {
-		result.default_value = col_data.default_value->Copy();
+		result.default_value = col_data.default_value->ToString();
+	} else {
+		result.default_value = Value(LogicalTypeId::VARCHAR);
 	}
 	result.nulls_allowed = GetNotNullFields().count(col.Name()) == 0;
 	return result;
@@ -1152,7 +1156,9 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 		column_entry.initial_default = column_data.initial_default;
 
 		if (column_data.default_value) {
-			column_entry.default_value = column_data.default_value->Copy();
+			column_entry.default_value = column_data.default_value->ToString();
+		} else {
+			column_entry.default_value = Value(LogicalTypeId::VARCHAR);
 		}
 		break;
 	}
