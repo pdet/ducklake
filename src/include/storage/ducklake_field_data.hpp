@@ -69,10 +69,11 @@ public:
 	unique_ptr<DuckLakeFieldId> Copy() const;
 	unique_ptr<ParsedExpression> GetDefault() const;
 
-	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id);
+	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
+	                                                     bool add_column = false);
 	static unique_ptr<DuckLakeFieldId> FieldIdFromType(const string &name, const LogicalType &type,
 	                                                   optional_ptr<const ParsedExpression> default_expr,
-	                                                   idx_t &column_id);
+	                                                   idx_t &column_id, bool add_column);
 	static unique_ptr<DuckLakeFieldId> Rename(const DuckLakeFieldId &field_id, const string &new_name);
 	static unique_ptr<DuckLakeFieldId> SetDefault(const DuckLakeFieldId &field_id,
 	                                              optional_ptr<const ParsedExpression> default_expr);

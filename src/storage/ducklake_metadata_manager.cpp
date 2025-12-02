@@ -1551,7 +1551,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
 		if (column.default_value_type == "literal") {
-			default_val =  KeywordHelper::WriteQuoted(value, '\'');
+			default_val = KeywordHelper::WriteQuoted(value, '\'');
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
 				default_val = "''";

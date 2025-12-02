@@ -54,12 +54,17 @@ static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const 
 	return default_expr->Copy();
 }
 
-static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type) {
+static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type,
+                                 bool add_column) {
 	if (!initial_expr) {
 		return Value(type);
 	}
 	if (initial_expr->type != ExpressionType::VALUE_CONSTANT) {
-		throw NotImplementedException("Only literals (e.g. 42 or 'hello world') are supported as initial values");
+		if (!add_column) {
+			return Value(type);
+		}
+		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
+		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
 	auto &const_default = initial_expr->Cast<ConstantExpression>();
 	return const_default.value.DefaultCastAs(type);
@@ -67,7 +72,7 @@ static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_ex
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name, const LogicalType &type,
                                                              optional_ptr<const ParsedExpression> default_expr,
-                                                             idx_t &column_id) {
+                                                             idx_t &column_id, bool add_column) {
 	DuckLakeColumnData column_data;
 	column_data.id = FieldIndex(column_id++);
 	vector<unique_ptr<DuckLakeFieldId>> field_children;
@@ -78,7 +83,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 			throw NotImplementedException("Default value for STRUCT type not supported");
 		}
 		for (auto &entry : StructType::GetChildTypes(type)) {
-			field_children.push_back(FieldIdFromType(entry.first, entry.second, nullptr, column_id));
+			field_children.push_back(FieldIdFromType(entry.first, entry.second, nullptr, column_id, add_column));
 		}
 		break;
 	}
@@ -86,26 +91,31 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 		if (default_expr) {
 			throw NotImplementedException("Default value for LIST type not supported");
 		}
-		field_children.push_back(FieldIdFromType("element", ListType::GetChildType(type), nullptr, column_id));
+		field_children.push_back(
+		    FieldIdFromType("element", ListType::GetChildType(type), nullptr, column_id, add_column));
 		break;
 	case LogicalTypeId::ARRAY:
 		if (default_expr) {
 			throw NotImplementedException("Default value for LIST type not supported");
 		}
-		field_children.push_back(FieldIdFromType("element", ArrayType::GetChildType(type), nullptr, column_id));
+		field_children.push_back(
+		    FieldIdFromType("element", ArrayType::GetChildType(type), nullptr, column_id, add_column));
 		break;
 	case LogicalTypeId::MAP:
 		if (default_expr) {
 			throw NotImplementedException("Default value for MAP type not supported");
 		}
-		field_children.push_back(FieldIdFromType("key", MapType::KeyType(type), nullptr, column_id));
-		field_children.push_back(FieldIdFromType("value", MapType::ValueType(type), nullptr, column_id));
+		field_children.push_back(FieldIdFromType("key", MapType::KeyType(type), nullptr, column_id, add_column));
+		field_children.push_back(FieldIdFromType("value", MapType::ValueType(type), nullptr, column_id, add_column));
 		break;
 	default:
 		break;
 	}
-	column_data.initial_default = ExtractInitialValue(default_expr, type);
-	column_data.default_value = make_uniq<ConstantExpression>(column_data.initial_default);
+	column_data.initial_default = ExtractInitialValue(default_expr, type, add_column);
+	if (default_expr) {
+		column_data.default_value = default_expr->Copy();
+	}
+
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), name, type, std::move(field_children));
 }
 
@@ -116,9 +126,10 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetDefault() const {
 	return nullptr;
 }
 
-unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id) {
+unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
+                                                               bool add_column) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
-	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id);
+	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id, add_column);
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns) {
@@ -297,7 +308,7 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::AddColumn(const DuckLakeFieldDa
 	for (auto &existing_id : field_data.field_ids) {
 		result->Add(existing_id->Copy());
 	}
-	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id);
+	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id, true);
 	result->Add(std::move(field_id));
 	return result;
 }
