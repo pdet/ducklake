@@ -196,16 +196,20 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
-		if (col.default_value_type == "literal") {
-			col_data.default_value = make_uniq<ConstantExpression>(col.default_value);
-		} else if (col.default_value_type == "expression") {
-			auto sql_expr = Parser::ParseExpressionList(col.default_value.GetValue<string>());
-			if (sql_expr.size() != 1) {
-				throw InternalException("Expected a single expression");
-			}
-			col_data.default_value = std::move(sql_expr[0]);
+		if (col.default_value.IsNull()) {
+			col_data.default_value = make_uniq<ConstantExpression>(Value());
 		} else {
-			throw NotImplementedException("Column type %s is not supported", col.default_value_type);
+			if (col.default_value_type == "literal") {
+				col_data.default_value = make_uniq<ConstantExpression>(col.default_value);
+			} else if (col.default_value_type == "expression") {
+				auto sql_expr = Parser::ParseExpressionList(col.default_value.GetValue<string>());
+				if (sql_expr.size() != 1) {
+					throw InternalException("Expected a single expression");
+				}
+				col_data.default_value = std::move(sql_expr[0]);
+			} else {
+				throw NotImplementedException("Column type %s is not supported", col.default_value_type);
+			}
 		}
 		return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(col_type));
 	}

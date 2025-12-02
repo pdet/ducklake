@@ -1546,19 +1546,25 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 
 	string default_val = "'NULL'";
 	string default_val_system = "'duckdb'";
-	string default_val_type = "'literal'";
+	string default_val_type = "'" + column.default_value_type + "'";
 
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
-		if (value.empty()) {
-			default_val = "''";
-		} else {
-			auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
-			if (sql_expr.size() != 1) {
-				throw InternalException("Expected a single expression");
+		if (column.default_value_type == "literal") {
+			default_val =  KeywordHelper::WriteQuoted(value, '\'');
+		} else if (column.default_value_type == "expression") {
+			if (value.empty()) {
+				default_val = "''";
+			} else {
+				auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
+				if (sql_expr.size() != 1) {
+					throw InternalException("Expected a single expression");
+				}
+				default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
 			}
-			default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
-			default_val_type = "'" + GetExpressionType(*sql_expr[0]) + "'";
+		} else {
+			throw InvalidInputException("Expression type %s not implemented for default value",
+			                            column.default_value_type);
 		}
 	}
 

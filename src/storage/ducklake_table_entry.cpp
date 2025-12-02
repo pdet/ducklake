@@ -860,11 +860,14 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 			// We extract the value directly
 			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
 			new_col.column_info.default_value = constant_value.value;
+			new_col.column_info.default_value_type = "literal";
 		} else {
 			new_col.column_info.default_value = col_data.default_value->ToString();
+			new_col.column_info.default_value_type = "expression";
 		}
 	} else {
 		new_col.column_info.default_value = Value(LogicalTypeId::VARCHAR);
+		new_col.column_info.default_value_type = "literal";
 	}
 	new_col.parent_idx = parent_idx.index;
 	new_fields.push_back(std::move(new_col));
@@ -1118,11 +1121,14 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 			// We extract the value directly
 			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
 			result.default_value = constant_value.value;
+			result.default_value_type = "literal";
 		} else {
 			result.default_value = col_data.default_value->ToString();
+			result.default_value_type = "expression";
 		}
 	} else {
 		result.default_value = Value(LogicalTypeId::VARCHAR);
+		result.default_value_type = "literal";
 	}
 	result.nulls_allowed = GetNotNullFields().count(col.Name()) == 0;
 	return result;
@@ -1166,16 +1172,18 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 		auto &column_data = field_id.GetColumnData();
 
 		column_entry.initial_default = column_data.initial_default;
-
 		if (column_data.default_value) {
 			if (column_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
 				// We extract value directly
 				column_entry.default_value = column_data.default_value->Cast<ConstantExpression>().value;
+				column_entry.default_value_type = "literal";
 			} else {
 				column_entry.default_value = column_data.default_value->ToString();
+				column_entry.default_value_type = "expression";
 			}
 		} else {
 			column_entry.default_value = Value(LogicalTypeId::VARCHAR);
+			column_entry.default_value_type = "literal";
 		}
 		break;
 	}
