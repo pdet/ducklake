@@ -129,7 +129,9 @@
         "test/optimizer/sampling_pushdown.test",
         "test/sql/explain/explain_execute.test",
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
-        "test/optimizer/topn_window_elimination.test"
+        "test/optimizer/topn_window_elimination.test",
+        "test/optimizer/pushdown/filter_cannot_pushdown.test",
+        "test/optimizer/pushdown/filters_on_limit_optimizer.test"
       ]
     },
     {
@@ -291,7 +293,8 @@
         "test/sql/storage/bc/internal_schemas_0102.test",
         "test/sql/storage/unzip.test",
         "test/sql/storage/icu_collation.test",
-        "test/sql/attach/attach_read_only.test"
+        "test/sql/attach/attach_read_only.test",
+        "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test"
       ]
     },
     {
