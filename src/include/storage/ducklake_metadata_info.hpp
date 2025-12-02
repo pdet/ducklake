@@ -71,33 +71,10 @@ struct DuckLakeColumnInfo {
 	string type;
 	Value initial_default;
 	Value default_value;
+	string default_value_type;
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
 	vector<DuckLakeTag> tags;
-	DuckLakeColumnInfo() {
-	}
-
-	DuckLakeColumnInfo(const DuckLakeColumnInfo &other)
-	    : id(other.id), name(other.name), type(other.type), nulls_allowed(other.nulls_allowed),
-	      children(other.children), tags(other.tags) {
-		initial_default = other.initial_default;
-		default_value = other.default_value;
-	}
-
-	DuckLakeColumnInfo &operator=(const DuckLakeColumnInfo &other) {
-		if (this != &other) {
-			id = other.id;
-			name = other.name;
-			type = other.type;
-			nulls_allowed = other.nulls_allowed;
-			children = other.children;
-			tags = other.tags;
-			initial_default = other.initial_default;
-
-			default_value = other.default_value;
-		}
-		return *this;
-	}
 };
 
 struct DuckLakeInlinedTableInfo {

@@ -45,16 +45,13 @@ static unique_ptr<ParsedExpression> ExtractDefaultExpression(optional_ptr<const 
 	if (!default_expr) {
 		return make_uniq<ConstantExpression>(Value(type));
 	}
-	switch (default_expr->type) {
-	case ExpressionType::VALUE_CONSTANT:
-	case ExpressionType::FUNCTION:
-	case ExpressionType::COLUMN_REF:
-	case ExpressionType::OPERATOR_CAST:
-		return default_expr->Copy();
-	default:
-		throw NotImplementedException(
-		    "Only literals (e.g. 42 or 'hello world') and expressions (e.g., 'NOW()') are supported as default values");
+	if (default_expr->HasSubquery()) {
+		throw NotImplementedException("Expressions with subqueries are not yet supported as default expressions");
 	}
+	if (default_expr->IsWindow()) {
+		throw NotImplementedException("Expressions with window functions are not yet supported as default expressions");
+	}
+	return default_expr->Copy();
 }
 
 static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type) {

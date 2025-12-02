@@ -856,7 +856,13 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.initial_default = col_data.initial_default;
 
 	if (col_data.default_value) {
-		new_col.column_info.default_value = col_data.default_value->ToString();
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			new_col.column_info.default_value = constant_value.value;
+		} else {
+			new_col.column_info.default_value = col_data.default_value->ToString();
+		}
 	} else {
 		new_col.column_info.default_value = Value(LogicalTypeId::VARCHAR);
 	}
@@ -1108,7 +1114,13 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.initial_default = col_data.initial_default;
 
 	if (col_data.default_value) {
-		result.default_value = col_data.default_value->ToString();
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			result.default_value = constant_value.value;
+		} else {
+			result.default_value = col_data.default_value->ToString();
+		}
 	} else {
 		result.default_value = Value(LogicalTypeId::VARCHAR);
 	}
@@ -1156,7 +1168,12 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 		column_entry.initial_default = column_data.initial_default;
 
 		if (column_data.default_value) {
-			column_entry.default_value = column_data.default_value->ToString();
+			if (column_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+				// We extract value directly
+				column_entry.default_value = column_data.default_value->Cast<ConstantExpression>().value;
+			} else {
+				column_entry.default_value = column_data.default_value->ToString();
+			}
 		} else {
 			column_entry.default_value = Value(LogicalTypeId::VARCHAR);
 		}

@@ -163,7 +163,7 @@ void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
-ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT NULL;
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
@@ -352,7 +352,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags
+	) AS column_tags, default_value_type
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -417,7 +417,15 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			column_info.initial_default = Value(row.GetValue<string>(COLUMN_INDEX_START + 3));
 		}
 		if (!row.IsNull(COLUMN_INDEX_START + 4)) {
-			column_info.default_value = Value(row.GetValue<string>(COLUMN_INDEX_START + 4));
+			auto value = row.GetValue<string>(COLUMN_INDEX_START + 4);
+			if (value == "NULL") {
+				column_info.default_value = Value();
+			} else {
+				column_info.default_value = Value(value);
+			}
+		}
+		if (!row.IsNull(COLUMN_INDEX_START + 8)) {
+			column_info.default_value_type = row.GetValue<string>(COLUMN_INDEX_START + 8);
 		}
 		column_info.nulls_allowed = row.GetValue<bool>(COLUMN_INDEX_START + 5);
 		if (!row.IsNull(COLUMN_INDEX_START + 7)) {
@@ -1541,12 +1549,17 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	string default_val_type = "'literal'";
 
 	if (!column.default_value.IsNull()) {
-		auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
-		if (sql_expr.size() != 1) {
-			throw InternalException("Expected a single expression");
+		auto value = column.default_value.GetValue<string>();
+		if (value.empty()) {
+			default_val = "''";
+		} else {
+			auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
+			if (sql_expr.size() != 1) {
+				throw InternalException("Expected a single expression");
+			}
+			default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
+			default_val_type = "'" + GetExpressionType(*sql_expr[0]) + "'";
 		}
-		default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
-		default_val_type = "'" + GetExpressionType(*sql_expr[0]) + "'";
 	}
 
 	auto column_id = column.id.index;
