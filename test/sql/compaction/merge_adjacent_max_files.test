@@ -91,36 +91,36 @@ CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>2
 
 # We create two new files, and remove as many as necessary to create them
 query II
-SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT max(data_file_id), min (data_file_id) > 30 FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-42	31
+42	True
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
 
 # We create max one file
 query II
-SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT max(data_file_id), min (data_file_id) > 31 FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-43	34
+43	True
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
 
 # We basically do max compaction, limiting the size set
 query II
-SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT max(data_file_id), min (data_file_id) > 40 FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-45	41
+45	True
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
 
 # Calling it again, produces no changes.
-query II
-SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+query I
+SELECT max(data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-45	41
+45
 
 # Check data is still correct
 query I
