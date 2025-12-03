@@ -154,7 +154,7 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	double delete_threshold = 0.95;
-	uint64_t max_files = 0;
+	optional_idx max_files;
 
 	CompactionType type;
 };
@@ -283,14 +283,14 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				}
 				// this file can be compacted along with the neighbors
 				current_file_size += file_size;
-				compacted_files++;
-				if (compacted_files > max_files) {
-					break;
-				}
 			}
 
 			if (start_idx < compaction_idx) {
 				idx_t compaction_file_count = compaction_idx - start_idx;
+				if (compaction_file_count == 1) {
+					// If we only have one file to compact, we have nothing to compact
+					continue;
+				}
 				vector<DuckLakeCompactionFileEntry> compaction_files;
 				for (idx_t i = start_idx; i < compaction_idx; i++) {
 					compaction_files.push_back(std::move(files[candidate_list[i]]));
@@ -298,8 +298,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				compactions.push_back(GenerateCompactionCommand(std::move(compaction_files)));
 				start_idx += compaction_file_count - 1;
 			}
-
-			if (compacted_files > max_files) {
+			compacted_files++;
+			if (compacted_files >= max_files.GetIndex()) {
 				break;
 			}
 		}
@@ -543,15 +543,15 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	}
 
 	vector<unique_ptr<LogicalOperator>> compactions;
-	uint64_t max_files = NumericLimits<uint64_t>::Maximum();
+	uint64_t max_files = NumericLimits<uint64_t>::Maximum() - 1;
 	auto max_files_entry = input.named_parameters.find("max_compacted_files");
 	if (max_files_entry != input.named_parameters.end()) {
 		if (max_files_entry->second.IsNull()) {
 			throw BinderException("The max_compacted_files option must be a non-null integer.");
 		}
 		max_files = UBigIntValue::Get(max_files_entry->second);
-		if (max_files <= 1) {
-			throw BinderException("The max_compacted_files option must be greater than one.");
+		if (max_files == 0) {
+			throw BinderException("The max_compacted_files option must be greater than zero.");
 		}
 	}
 	if (input.inputs.size() == 1) {

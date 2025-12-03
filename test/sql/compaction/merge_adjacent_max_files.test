@@ -27,6 +27,35 @@ INSERT INTO example VALUES (${i});
 
 endloop
 
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
+
+# We create max one file, since we use the default size limits, one file should fit all
+query II
+SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+20	20
+
+statement ok
+DROP TABLE example;
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now());
+
+statement ok
+CALL ducklake.set_option('target_file_size', '1KB');
+
+statement ok
+CREATE TABLE example (key integer);
+
+# Generate 100 files
+loop i 0 20
+
+statement ok
+INSERT INTO example VALUES (${i});
+
+endloop
+
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
@@ -45,7 +74,7 @@ The max_compacted_files option must be a non-null integer
 statement error
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>0);
 ----
-The max_compacted_files option must be greater than one.
+The max_compacted_files option must be greater than zero.
 
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
@@ -55,55 +84,46 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
 query II
 SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-19	0
-
-# One file doesn't make much difference
-statement error
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
-----
-The max_compacted_files option must be greater than one.
+40	21
 
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>2);
 
-# We remove two files, and create a new one
+# We create two new files, and remove as many as necessary to create them
 query II
 SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-20	2
+42	31
 
 statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>10);
+CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1);
 
-# We remove ten files, and create a new one
+# We create max one file
 query II
 SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-21	11
+43	34
 
-statement ok
-CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>5);
-
-# We remove five files, and create a new one
-query II
-SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
-----
-22	15
-
-# We end up with one file
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
 
+# We basically do max compaction, limiting the size set
 query II
 SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-23	23
+45	41
 
-# It is safe to call it again
 statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1000);
 
+# Calling it again, produces no changes.
 query II
 SELECT max(data_file_id), min (data_file_id) FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-23	23
+45	41
+
+# Check data is still correct
+query I
+select count(*) FROM example;
+----
+20
