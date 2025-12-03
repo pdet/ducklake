@@ -16,6 +16,8 @@
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 
 namespace duckdb {
 
@@ -70,7 +72,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id B
 CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, partial_file_info VARCHAR, mapping_id BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT);
+CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);
@@ -161,6 +163,8 @@ void DuckLakeMetadataManager::MigrateV03(bool allow_failures) {
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
+ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
@@ -348,7 +352,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags
+	) AS column_tags, default_value_type
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -413,7 +417,15 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			column_info.initial_default = Value(row.GetValue<string>(COLUMN_INDEX_START + 3));
 		}
 		if (!row.IsNull(COLUMN_INDEX_START + 4)) {
-			column_info.default_value = Value(row.GetValue<string>(COLUMN_INDEX_START + 4));
+			auto value = row.GetValue<string>(COLUMN_INDEX_START + 4);
+			if (value == "NULL") {
+				column_info.default_value = Value();
+			} else {
+				column_info.default_value = Value(value);
+			}
+		}
+		if (!row.IsNull(COLUMN_INDEX_START + 8)) {
+			column_info.default_value_type = row.GetValue<string>(COLUMN_INDEX_START + 8);
 		}
 		column_info.nulls_allowed = row.GetValue<bool>(COLUMN_INDEX_START + 5);
 		if (!row.IsNull(COLUMN_INDEX_START + 7)) {
@@ -1503,21 +1515,63 @@ void DuckLakeMetadataManager::WriteNewSchemas(DuckLakeSnapshot commit_snapshot,
 	}
 }
 
+string GetExpressionType(ParsedExpression &expression) {
+	switch (expression.type) {
+	case ExpressionType::OPERATOR_CAST: {
+		auto &cast_expression = expression.Cast<CastExpression>();
+		if (cast_expression.child->type == ExpressionType::VALUE_CONSTANT) {
+			return "literal";
+		}
+		return "expression";
+	}
+	case ExpressionType::VALUE_CONSTANT:
+		return "literal";
+	default:
+		return "expression";
+	}
+}
+
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
                                  string &result) {
 	if (!result.empty()) {
 		result += ",";
 	}
 	string parent_idx = parent.IsValid() ? to_string(parent.GetIndex()) : "NULL";
-	string initial_default =
+
+	string initial_default_val =
 	    !column.initial_default.IsNull() ? KeywordHelper::WriteQuoted(column.initial_default.ToString(), '\'') : "NULL";
-	string default_val =
-	    !column.default_value.IsNull() ? KeywordHelper::WriteQuoted(column.default_value.ToString(), '\'') : "NULL";
+
+	string default_val = "'NULL'";
+	string default_val_system = "'duckdb'";
+	string default_val_type = "'" + column.default_value_type + "'";
+
+	if (!column.default_value.IsNull()) {
+		auto value = column.default_value.GetValue<string>();
+		if (column.default_value_type == "literal") {
+			default_val = KeywordHelper::WriteQuoted(value, '\'');
+		} else if (column.default_value_type == "expression") {
+			if (value.empty()) {
+				default_val = "''";
+			} else {
+				auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
+				if (sql_expr.size() != 1) {
+					throw InternalException("Expected a single expression");
+				}
+				default_val = KeywordHelper::WriteQuoted(sql_expr[0]->ToString(), '\'');
+			}
+		} else {
+			throw InvalidInputException("Expression type %s not implemented for default value",
+			                            column.default_value_type);
+		}
+	}
+
 	auto column_id = column.id.index;
 	auto column_order = column_id;
-	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %d, %s)", column_id, table_id.index,
-	                             column_order, SQLString(column.name), SQLString(column.type), initial_default,
-	                             default_val, column.nulls_allowed ? 1 : 0, parent_idx);
+
+	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %d, %s, %s, %s)", column_id,
+	                             table_id.index, column_order, SQLString(column.name), SQLString(column.type),
+	                             initial_default_val, default_val, column.nulls_allowed ? 1 : 0, parent_idx,
+	                             default_val_type, default_val_system);
 	for (auto &child : column.children) {
 		ColumnToSQLRecursive(child, table_id, column_id, result);
 	}
@@ -2688,7 +2742,7 @@ WHERE table_id=tid AND column_id=cid
 
 template <class T>
 static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row, idx_t col_idx) {
-	auto val = row.iterator.chunk->GetValue(col_idx, row.row);
+	auto val = row.GetChunk().GetValue(col_idx, row.GetRowInChunk());
 	return val.CastAs(context, LogicalType::TIMESTAMP_TZ).template GetValue<timestamp_tz_t>();
 }
 
@@ -2713,9 +2767,9 @@ ORDER BY snapshot_id
 		snapshot_info.time = GetTimestampTZFromRow(*context, row, 1);
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
 		snapshot_info.change_info.changes_made = row.IsNull(3) ? string() : row.GetValue<string>(3);
-		snapshot_info.author = row.iterator.chunk->GetValue(4, row.row);
-		snapshot_info.commit_message = row.iterator.chunk->GetValue(5, row.row);
-		snapshot_info.commit_extra_info = row.iterator.chunk->GetValue(6, row.row);
+		snapshot_info.author = row.GetChunk().GetValue(4, row.GetRowInChunk());
+		snapshot_info.commit_message = row.GetChunk().GetValue(5, row.GetRowInChunk());
+		snapshot_info.commit_extra_info = row.GetChunk().GetValue(6, row.GetRowInChunk());
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;

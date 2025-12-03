@@ -729,7 +729,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 			// type not found - this is a new entry
 			// first construct a new field id for this entry
 			idx_t next_col = next_column_id.GetIndex();
-			auto field_id = DuckLakeFieldId::FieldIdFromType(target_name, target_type, nullptr, next_col);
+			auto field_id = DuckLakeFieldId::FieldIdFromType(target_name, target_type, nullptr, next_col, false);
 			next_column_id = next_col;
 
 			// add the column to the list of "to-be-added" columns
@@ -852,8 +852,23 @@ void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &n
 	new_col.column_info.id = col_data.id;
 	new_col.column_info.name = field_id.Name();
 	new_col.column_info.type = DuckLakeTypes::ToString(field_id.Type());
+
 	new_col.column_info.initial_default = col_data.initial_default;
-	new_col.column_info.default_value = col_data.default_value;
+
+	if (col_data.default_value) {
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			new_col.column_info.default_value = constant_value.value;
+			new_col.column_info.default_value_type = "literal";
+		} else {
+			new_col.column_info.default_value = col_data.default_value->ToString();
+			new_col.column_info.default_value_type = "expression";
+		}
+	} else {
+		new_col.column_info.default_value = Value(LogicalTypeId::VARCHAR);
+		new_col.column_info.default_value_type = "literal";
+	}
 	new_col.parent_idx = parent_idx.index;
 	new_fields.push_back(std::move(new_col));
 	for (auto &child : field_id.Children()) {
@@ -1100,7 +1115,21 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetColumnInfo(FieldIndex field_index) con
 	result.name = col.Name();
 	result.type = DuckLakeTypes::ToString(col.Type());
 	result.initial_default = col_data.initial_default;
-	result.default_value = col_data.default_value;
+
+	if (col_data.default_value) {
+		if (col_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+			// We extract the value directly
+			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
+			result.default_value = constant_value.value;
+			result.default_value_type = "literal";
+		} else {
+			result.default_value = col_data.default_value->ToString();
+			result.default_value_type = "expression";
+		}
+	} else {
+		result.default_value = Value(LogicalTypeId::VARCHAR);
+		result.default_value_type = "literal";
+	}
 	result.nulls_allowed = GetNotNullFields().count(col.Name()) == 0;
 	return result;
 }
@@ -1141,8 +1170,21 @@ DuckLakeColumnInfo DuckLakeTableEntry::ConvertColumn(const string &name, const L
 	}
 	default: {
 		auto &column_data = field_id.GetColumnData();
+
 		column_entry.initial_default = column_data.initial_default;
-		column_entry.default_value = column_data.default_value;
+		if (column_data.default_value) {
+			if (column_data.default_value->type == ExpressionType::VALUE_CONSTANT) {
+				// We extract value directly
+				column_entry.default_value = column_data.default_value->Cast<ConstantExpression>().value;
+				column_entry.default_value_type = "literal";
+			} else {
+				column_entry.default_value = column_data.default_value->ToString();
+				column_entry.default_value_type = "expression";
+			}
+		} else {
+			column_entry.default_value = Value(LogicalTypeId::VARCHAR);
+			column_entry.default_value_type = "literal";
+		}
 		break;
 	}
 	}
