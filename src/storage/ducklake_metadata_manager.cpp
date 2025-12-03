@@ -1524,13 +1524,10 @@ string GetExpressionType(ParsedExpression &expression) {
 		}
 		return "expression";
 	}
-	case ExpressionType::FUNCTION:
-	case ExpressionType::COLUMN_REF:
-		return "expression";
 	case ExpressionType::VALUE_CONSTANT:
 		return "literal";
 	default:
-		throw NotImplementedException("Expression type not implemented for default column value");
+		return "expression";
 	}
 }
 
