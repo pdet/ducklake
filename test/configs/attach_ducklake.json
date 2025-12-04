@@ -125,7 +125,8 @@
         "test/optimizer/prefer_final_projected_columns_on_probe_side.test",
         "test/optimizer/sampling_pushdown.test",
         "test/sql/explain/explain_execute.test",
-        "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test"
+        "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
+        "test/optimizer/pushdown/filters_on_limit_optimizer.test"
       ]
     },
     {
