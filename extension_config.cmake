@@ -11,6 +11,10 @@ if(NOT DEFINED ENV{DISABLE_EXTENSIONS_FOR_TEST})
     duckdb_extension_load(tpch)
 endif()
 
+if(NOT DEFINED ENV{ENABLE_HTTPFS})
+    duckdb_extension_load(httpfs)
+endif()
+
 if($ENV{ENABLE_SQLITE_SCANNER})
     duckdb_extension_load(sqlite_scanner
         DONT_LINK
