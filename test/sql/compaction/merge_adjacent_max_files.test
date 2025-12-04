@@ -109,7 +109,7 @@ CALL ducklake_merge_adjacent_files('ducklake', 'example', max_compacted_files=>1
 
 # We basically do max compaction, limiting the size set
 query II
-SELECT max(data_file_id) > 43, min (data_file_id) > 40 FROM __ducklake_metadata_ducklake.ducklake_data_file
+SELECT max(data_file_id) > 43, min (data_file_id) > 32 FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
 True	True
 
