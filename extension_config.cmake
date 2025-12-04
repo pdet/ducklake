@@ -11,16 +11,6 @@ if(NOT DEFINED ENV{DISABLE_EXTENSIONS_FOR_TEST})
     duckdb_extension_load(tpch)
 endif()
 
-if(ENV{ENABLE_HTTPFS})
-   duckdb_extension_load(httpfs
-        DONT_LINK
-        GIT_URL https://github.com/duckdb/duckdb-httpfs
-        GIT_TAG 8ff2283fb14b443e673c58e2e9621e3c3215d794
-        INCLUDE_DIR src/include
-    )
-
-endif()
-
 if($ENV{ENABLE_SQLITE_SCANNER})
     duckdb_extension_load(sqlite_scanner
         DONT_LINK
