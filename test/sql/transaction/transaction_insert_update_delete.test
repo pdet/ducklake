@@ -1,20 +1,23 @@
-# name: test/sql/ducklake_basic.test
+# name: test/sql/transaction/transaction_insert_update_delete.test
 # description: test ducklake extension
-# group: [sql]
+# group: [transaction]
 
 require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
 statement ok
-ATTACH 'ducklake:__TEST_DIR__/ducklake.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/transaction_insert_update_delete/', METADATA_CATALOG 'metadata');
 
 statement ok
 USE ducklake;
 
 statement ok
 CREATE TABLE t1(c1 int);
-
 
 statement ok
 BEGIN;
