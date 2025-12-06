@@ -1616,8 +1616,8 @@ shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedD
 void DuckLakeTransaction::DropTransactionLocalDeleteFile(TableIndex table_id, const string &path) {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
-		throw InternalException(
-		    "DropTransactionLocalDeleteFile called for a table for which no transaction-local files exist");
+		// No file to remove delete from, was removed before.
+		return;
 	}
 	auto &table_changes = entry->second.new_data_files;
 	for (auto &table_file : table_changes) {
