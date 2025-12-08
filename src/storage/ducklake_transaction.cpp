@@ -1613,27 +1613,6 @@ shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedD
 	return result;
 }
 
-void DuckLakeTransaction::DropTransactionLocalDeleteFile(TableIndex table_id, const string &path) {
-	auto entry = table_data_changes.find(table_id);
-	if (entry == table_data_changes.end()) {
-		// No file to remove delete from, was removed before.
-		return;
-	}
-	auto &table_changes = entry->second.new_data_files;
-	for (auto &table_file : table_changes) {
-		if (table_file.delete_file) {
-			if (table_file.delete_file->file_name == path) {
-				table_file.delete_file.reset();
-				auto context_ref = context.lock();
-				auto &fs = FileSystem::GetFileSystem(*context_ref);
-				fs.RemoveFile(path);
-				return;
-			}
-		}
-	}
-	throw InternalException("Failed to find matching transaction-local file for DropTransactionLocalDeleteFile");
-}
-
 void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const string &path) {
 	auto entry = table_data_changes.find(table_id);
 	if (entry == table_data_changes.end()) {
@@ -1647,6 +1626,10 @@ void DuckLakeTransaction::DropTransactionLocalFile(TableIndex table_id, const st
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
+			if (file.delete_file) {
+				fs.RemoveFile(file.delete_file->file_name);
+				file.delete_file.reset();
+			}
 			// found the file - delete it from the table list and from disk
 			table_files.erase_at(i);
 			fs.RemoveFile(path);
