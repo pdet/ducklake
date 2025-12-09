@@ -139,27 +139,6 @@ DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog
       inlined_table(inlined_table_p) {
 }
 
-struct DuckLakeMultiFileBindData : public MultiFileBindData {
-	DuckLakeMultiFileBindData(MultiFileBindData &source) {
-		if (source.bind_data) {
-			bind_data = unique_ptr_cast<FunctionData, TableFunctionData>(source.bind_data->Copy());
-		}
-		file_list = source.file_list->Copy();
-		multi_file_reader = source.multi_file_reader->Copy();
-		interface = source.interface->Copy();
-		columns = source.columns;
-		reader_bind = source.reader_bind;
-		file_options = source.file_options;
-		types = source.types;
-		names = source.names;
-		virtual_columns = source.virtual_columns;
-		table_columns = source.table_columns;
-	}
-	bool SupportStatementCache() const override {
-		return false;
-	}
-};
-
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	// get the table entry at the specified snapshot
 	DuckLakeSnapshot snapshot(catalog.GetSnapshotForSchema(inlined_table.schema_version, transaction),
@@ -196,10 +175,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 
 	auto virtual_columns = table.GetVirtualColumns();
-	auto dl_bind_data = make_uniq<DuckLakeMultiFileBindData>(multi_file_bind_data);
-
 	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(dl_bind_data), copy_options.expected_types,
+	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
 	                          copy_options.names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -258,6 +235,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         idx_t bind_index, vector<string> &return_names) {
+	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
 	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
