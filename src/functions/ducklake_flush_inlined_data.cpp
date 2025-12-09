@@ -243,18 +243,48 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	auto &named_parameters = input.named_parameters;
 
 	unordered_map<idx_t, vector<reference<DuckLakeTableEntry>>> schema_table_map;
-	vector<reference<SchemaCatalogEntry>> schemas = ducklake_catalog.GetSchemas(context);
+	string schema, table;
 
-	// - scan all tables from the relevant schemas
-	for (auto &schema : schemas) {
-		schema.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-			if (entry.type == CatalogType::TABLE_ENTRY) {
-				auto &dl_schema = schema.get().Cast<DuckLakeSchemaEntry>();
-				schema_table_map[dl_schema.GetSchemaId().index].push_back(entry.Cast<DuckLakeTableEntry>());
-			}
-		});
+	auto schema_entry = named_parameters.find("schema_name");
+	if (schema_entry != named_parameters.end()) {
+		// specific schema
+		schema = StringValue::Get(schema_entry->second);
+	}
+	auto table_entry = named_parameters.find("table_name");
+	if (table_entry != named_parameters.end()) {
+		table = StringValue::Get(table_entry->second);
 	}
 
+	// no or table schema specified - scan all schemas
+	if (table.empty()) {
+		// no specific table
+		// scan all tables from schemas
+		vector<reference<SchemaCatalogEntry>> schemas;
+		if (schema.empty()) {
+			// no specific schema - fetch all schemas
+			schemas = ducklake_catalog.GetSchemas(context);
+		} else {
+			// specific schema - fetch it
+			schemas.push_back(ducklake_catalog.GetSchema(context, schema));
+		}
+
+		// - scan all tables from the relevant schemas
+		for (auto &schema_catalog_entry : schemas) {
+			schema_catalog_entry.get().Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+				if (entry.type == CatalogType::TABLE_ENTRY) {
+					auto &dl_schema = schema_catalog_entry.get().Cast<DuckLakeSchemaEntry>();
+					schema_table_map[dl_schema.GetSchemaId().index].push_back(entry.Cast<DuckLakeTableEntry>());
+				}
+			});
+		}
+	} else {
+		// specific table - fetch the table
+		auto table_catalog_entry =
+		    ducklake_catalog.GetEntry<TableCatalogEntry>(context, schema, table, OnEntryNotFound::THROW_EXCEPTION);
+		auto &dl_schema = table_catalog_entry->schema.Cast<DuckLakeSchemaEntry>();
+		schema_table_map[dl_schema.Cast<DuckLakeSchemaEntry>().GetSchemaId().index].push_back(
+		    table_catalog_entry.get()->Cast<DuckLakeTableEntry>());
+	}
 	// try to compact all tables
 	vector<unique_ptr<LogicalOperator>> flushes;
 	for (auto &schema_table : schema_table_map) {
@@ -293,6 +323,8 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
     : TableFunction("ducklake_flush_inlined_data", {LogicalType::VARCHAR}, nullptr, nullptr, nullptr) {
+	named_parameters["schema_name"] = LogicalType::VARCHAR;
+	named_parameters["table_name"] = LogicalType::VARCHAR;
 	bind_operator = FlushInlinedDataBind;
 }
 
