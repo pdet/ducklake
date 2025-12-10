@@ -162,6 +162,7 @@ SELECT
         stats_min := COALESCE(x.stats_min, x.stats_min_value),
         stats_max := COALESCE(x.stats_max, x.stats_max_value),
         stats_null_count := x.stats_null_count,
+		stats_num_values := x.num_values,
         total_compressed_size := x.total_compressed_size,
         geo_bbox := x.geo_bbox,
         geo_types := x.geo_types
@@ -348,20 +349,23 @@ FROM parquet_full_metadata(%s)
 		auto &stats_min_vec = *metadata_struct_children[1];
 		auto &stats_max_vec = *metadata_struct_children[2];
 		auto &stats_null_count_vec = *metadata_struct_children[3];
-		auto &total_compressed_size_vec = *metadata_struct_children[4];
-		auto &geo_bbox_vec = *metadata_struct_children[5];
-		auto &geo_types_vec = *metadata_struct_children[6];
+		auto &stats_num_values_vec = *metadata_struct_children[4];
+		auto &total_compressed_size_vec = *metadata_struct_children[5];
+		auto &geo_bbox_vec = *metadata_struct_children[6];
+		auto &geo_types_vec = *metadata_struct_children[7];
 
 		auto column_id_data = FlatVector::GetData<int64_t>(column_id_vec);
 		auto stats_min_data = FlatVector::GetData<string_t>(stats_min_vec);
 		auto stats_max_data = FlatVector::GetData<string_t>(stats_max_vec);
 		auto stats_null_count_data = FlatVector::GetData<int64_t>(stats_null_count_vec);
+		auto stats_num_values_data = FlatVector::GetData<int64_t>(stats_num_values_vec);
 		auto total_compressed_size_data = FlatVector::GetData<int64_t>(total_compressed_size_vec);
 
 		auto &column_id_validity = FlatVector::Validity(column_id_vec);
 		auto &stats_min_validity = FlatVector::Validity(stats_min_vec);
 		auto &stats_max_validity = FlatVector::Validity(stats_max_vec);
 		auto &stats_null_count_validity = FlatVector::Validity(stats_null_count_vec);
+		auto &stats_num_values_validity = FlatVector::Validity(stats_num_values_vec);
 		auto &total_compressed_size_validity = FlatVector::Validity(total_compressed_size_vec);
 		auto &geo_bbox_validity = FlatVector::Validity(geo_bbox_vec);
 		auto &geo_types_validity = FlatVector::Validity(geo_types_vec);
@@ -398,6 +402,11 @@ FROM parquet_full_metadata(%s)
 			if (stats_null_count_validity.RowIsValid(metadata_idx)) {
 				stats.has_null_count = true;
 				stats.null_count = stats_null_count_data[metadata_idx];
+			}
+
+			if (stats_num_values_validity.RowIsValid(metadata_idx)) {
+				stats.has_num_values = true;
+				stats.num_values = stats_num_values_data[metadata_idx];
 			}
 
 			if (total_compressed_size_validity.RowIsValid(metadata_idx)) {
@@ -919,6 +928,13 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				} else if (aggregated.has_null_count) {
 					aggregated.null_count += stats.null_count;
 				}
+
+				if (!stats.has_num_values) {
+					aggregated.has_num_values = false;
+				} else if (aggregated.has_num_values) {
+					aggregated.num_values += stats.num_values;
+				}
+
 				aggregated.column_size_bytes += stats.column_size_bytes;
 
 				if (!stats.has_contains_nan) {
