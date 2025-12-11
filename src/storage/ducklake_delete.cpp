@@ -23,6 +23,8 @@
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "common/ducklake_util.hpp"
+#include "storage/ducklake_delete_inline_data.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 
 namespace duckdb {
 
@@ -472,13 +474,28 @@ PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPl
 		throw BinderException("RETURNING clause not yet supported for deletion of a DuckLake table");
 	}
 	auto encryption_key = GenerateEncryptionKey(context);
+	optional_ptr<DuckLakeDeleteInlineData> inline_delete_data;
+	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
+	auto &ducklake_schema = ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
+	optional_ptr<PhysicalOperator> plan;
+	if (data_inlining_row_limit > 0) {
+		plan = planner.Make<DuckLakeDeleteInlineData>(child_plan, data_inlining_row_limit);
+		inline_delete_data = plan->Cast<DuckLakeDeleteInlineData>();
+	}
 	vector<idx_t> row_id_indexes;
 	for (idx_t i = 0; i < 3; i++) {
 		auto &bound_ref = op.expressions[i + 1]->Cast<BoundReferenceExpression>();
 		row_id_indexes.push_back(bound_ref.index);
 	}
-	return DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
-	                                  std::move(row_id_indexes), std::move(encryption_key));
+	auto &delete_plan = DuckLakeDelete::PlanDelete(context, planner, op.table.Cast<DuckLakeTableEntry>(), child_plan,
+	                                               std::move(row_id_indexes), std::move(encryption_key));
+
+	if (inline_delete_data) {
+		inline_delete_data->delete_op = delete_plan.Cast<DuckLakeDelete>();
+		return *plan;
+	}
+	return delete_plan;
 }
 
 } // namespace duckdb

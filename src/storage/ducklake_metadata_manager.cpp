@@ -1630,7 +1630,7 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(const DuckLakeTableInfo &
 	// Deletion table is: file_id, row_id, begin_snapshot
 	result_query += StringUtil::Format(
 	    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT,row_id BIGINT, begin_snapshot BIGINT);",
-	    SQLIdentifier(table_name.data_table_name));
+	    SQLIdentifier(table_name.deleted_table_name));
 
 	return result_query;
 }

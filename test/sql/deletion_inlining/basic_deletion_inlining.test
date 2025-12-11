@@ -47,6 +47,7 @@ SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inline
 ----
 7	3	NULL	8	1
 
+# Deletion of inlined data is easy
 statement ok
 delete from test where i = 8
 
@@ -55,3 +56,10 @@ SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inline
 ----
 7	3	4	8	1
 
+# Now we delete from a file
+statement ok
+delete from test where i = 5
+
+query III
+FROM ducklake_meta.ducklake_inlined_delete_1_1;
+----
