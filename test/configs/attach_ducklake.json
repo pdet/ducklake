@@ -29,7 +29,6 @@
     "CHECK constraints are not supported in DuckLake",
     "Defining a compression type for a column is not supported in DuckLake",
     "FOREIGN KEY constraints are not supported in DuckLake",
-    "Only literals (e.g. 42 or 'hello world') are supported as default values",
     "Column type cannot be modified using an expression",
     "Default value for STRUCT type not supported",
     "Default value for LIST type not supported",
@@ -104,7 +103,10 @@
         "test/sql/logging/test_logging_function.test",
         "test/sql/logging/logging_types.test",
         "test/sql/logging/logging.test",
-        "test/sql/logging/logging_csv.test"
+        "test/sql/logging/logging_csv.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
+        "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test"
       ]
     },
     {
@@ -126,7 +128,9 @@
         "test/optimizer/sampling_pushdown.test",
         "test/sql/explain/explain_execute.test",
         "test/optimizer/pushdown/pushdown_filter_on_coalesced_equal_outer_join_keys.test",
-        "test/optimizer/topn_window_elimination.test"
+        "test/optimizer/topn_window_elimination.test",
+        "test/optimizer/pushdown/filter_cannot_pushdown.test",
+        "test/optimizer/pushdown/filters_on_limit_optimizer.test"
       ]
     },
     {
@@ -288,7 +292,8 @@
         "test/sql/storage/bc/internal_schemas_0102.test",
         "test/sql/storage/unzip.test",
         "test/sql/storage/icu_collation.test",
-        "test/sql/attach/attach_read_only.test"
+        "test/sql/attach/attach_read_only.test",
+        "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test"
       ]
     },
     {
@@ -481,7 +486,8 @@
       "reason": "Expected different behavior between duckdb and ducklake wrt macros. Notice these are not ducklake bugs just tests that do not fit.",
       "paths": [
         "test/sql/catalog/function/test_table_macro_copy.test",
-        "test/sql/catalog/function/test_macro_type_overloads.test"
+        "test/sql/catalog/function/test_macro_type_overloads.test",
+        "test/sql/pragma/test_table_info.test"
         ]
     },
     {

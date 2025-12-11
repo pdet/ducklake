@@ -18,6 +18,7 @@
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "storage/ducklake_inlined_data.hpp"
+#include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
 
@@ -70,6 +71,7 @@ struct DuckLakeColumnInfo {
 	string type;
 	Value initial_default;
 	Value default_value;
+	string default_value_type;
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
 	vector<DuckLakeTag> tags;
