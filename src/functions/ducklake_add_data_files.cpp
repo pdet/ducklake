@@ -910,7 +910,21 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 
 	const auto partition_data = table.GetPartitionData().get();
 	if (partition_data) {
-		D_ASSERT(file.hive_partition_values.size() == partition_data->fields.size());
+		bool invalid_partition = false;
+		if (file.hive_partition_values.size() != partition_data->fields.size()) {
+			invalid_partition = true;
+		} else {
+			for (idx_t i = 0; i < partition_data->fields.size(); i++) {
+				if (file.hive_partition_values[i].field_index.index != partition_data->fields[i].field_id.index) {
+					invalid_partition = true;
+					break;
+				}
+			}
+		}
+		if (invalid_partition) {
+			throw InvalidInputException("File \"%s\" contains an invalid partition value for the table configuration.",
+			                            file.filename);
+		}
 		unordered_map<idx_t, idx_t> field_partition_key_map;
 		for (auto &partition_fields : partition_data->fields) {
 			field_partition_key_map[partition_fields.field_id.index] = partition_fields.partition_key_index;
