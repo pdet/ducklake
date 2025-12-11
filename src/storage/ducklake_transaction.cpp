@@ -1174,10 +1174,17 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, Duc
 		if (stats.has_null_count) {
 			if (stats.has_num_values) {
 				column_stats.value_count = to_string(stats.num_values);
+				column_stats.null_count = to_string(stats.null_count);
 			} else {
-				column_stats.value_count = to_string(file.row_count - stats.null_count);
+				if (stats.null_count > file.row_count) {
+					// Something went wrong with the stats, make them NULL
+					column_stats.value_count = "NULL";
+					column_stats.null_count = "NULL";
+				} else {
+					column_stats.value_count = to_string(file.row_count - stats.null_count);
+					column_stats.null_count = to_string(stats.null_count);
+				}
 			}
-			column_stats.null_count = to_string(stats.null_count);
 			if (stats.null_count == file.row_count) {
 				// all values are NULL for this file
 				stats.any_valid = false;
