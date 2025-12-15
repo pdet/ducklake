@@ -1640,19 +1640,23 @@ void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<Du
 }
 
 void DuckLakeMetadataManager::WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
-                                                  const vector<DuckLakeInlinedDataInfo> &new_data) {
+                                                  const vector<DuckLakeInlinedDataInfo> &new_data,
+                                                  const vector<DuckLakeTableInfo> &new_tables) {
 	if (new_data.empty()) {
 		return;
 	}
 
 	auto context_ptr = transaction.context.lock();
 	auto &context = *context_ptr;
-
 	for (auto &entry : new_data) {
-		// get the latest table to insert into
-		// FIXME: we could keep this cached some other way to avoid the round-trip/dependency
 		string inlined_table_name;
-		auto query = StringUtil::Format(R"(
+		// get the latest table to insert into
+		auto it = inlined_table_name_cache.find(entry.table_id.index);
+		if (it != inlined_table_name_cache.end()) {
+			inlined_table_name = it->second;
+		}
+		if (inlined_table_name.empty()) {
+			auto query = StringUtil::Format(R"(
 SELECT table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d AND schema_version=(
@@ -1660,27 +1664,37 @@ WHERE table_id = %d AND schema_version=(
     FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
     WHERE table_id=%d
 );)",
-		                                entry.table_id.index, entry.table_id.index);
-		auto result = transaction.Query(commit_snapshot, query);
-		for (auto &row : *result) {
-			if (!inlined_table_name.empty()) {
-				throw InvalidInputException("Multiple inlined data table names found for table id %d",
-				                            entry.table_id.index);
+			                                entry.table_id.index, entry.table_id.index);
+			auto result = transaction.Query(commit_snapshot, query);
+			for (auto &row : *result) {
+				inlined_table_name = row.GetValue<string>(0);
+				inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 			}
-			inlined_table_name = row.GetValue<string>(0);
 		}
-		if (inlined_table_name.empty()) {
+
+		DuckLakeTableInfo table_info;
+		if (inlined_table_name_cache.empty()) {
 			// no inlined table yet - create a new one
 			// first fetch the table info
 			auto current_snapshot = transaction.GetSnapshot();
 			auto table_entry = transaction.GetCatalog().GetEntryById(transaction, current_snapshot, entry.table_id);
-			if (!table_entry) {
-				throw InternalException("Writing inlined data for a table that cannot be found in the catalog");
+			if (table_entry) {
+				auto &table = table_entry->Cast<DuckLakeTableEntry>();
+				table_info = table.GetTableInfo();
+				table_info.columns = table.GetTableColumns();
+			} else {
+				// We try from our added tables
+				bool found = false;
+				for (auto &new_table : new_tables) {
+					if (new_table.id == entry.table_id) {
+						table_info = new_table;
+						found = true;
+					}
+				}
+				if (!found) {
+					throw InternalException("Writing inlined data for a table that cannot be found in the catalog");
+				}
 			}
-			auto &table = table_entry->Cast<DuckLakeTableEntry>();
-			auto table_info = table.GetTableInfo();
-			table_info.columns = table.GetTableColumns();
-
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;

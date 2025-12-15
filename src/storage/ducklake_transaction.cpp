@@ -1254,7 +1254,8 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 	if (!table_data_changes.empty()) {
 		auto result = GetNewDataFiles(commit_state);
 		metadata_manager->WriteNewDataFiles(batch_queries, result.new_files, new_tables_result);
-		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data);
+		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data,
+		                                      new_tables_result);
 	}
 
 	// drop data files
