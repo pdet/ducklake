@@ -1255,7 +1255,6 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data);
 	}
 
-	// FIXME: HERE
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
@@ -1270,22 +1269,22 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 		set<DataFileIndex> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
 		metadata_manager->DropDeleteFiles(batch_queries, overwritten_delete_files);
-		metadata_manager->WriteNewDeleteFiles(commit_snapshot, file_list);
+		metadata_manager->WriteNewDeleteFiles(batch_queries, file_list);
 
 		// write new inlined deletes
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
-		metadata_manager->WriteNewInlinedDeletes(commit_snapshot, inlined_deletes);
+		metadata_manager->WriteNewInlinedDeletes(batch_queries, inlined_deletes);
 
 		// write compactions
 		auto compaction_merge_adjacent_changes =
 		    GetCompactionChanges(commit_snapshot, CompactionType::MERGE_ADJACENT_TABLES);
-		metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
+		metadata_manager->WriteCompactions(batch_queries, compaction_merge_adjacent_changes.compacted_files,
 		                                   CompactionType::MERGE_ADJACENT_TABLES);
 		metadata_manager->WriteNewDataFiles(batch_queries, compaction_merge_adjacent_changes.new_files);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, CompactionType::REWRITE_DELETES);
 		metadata_manager->WriteNewDataFiles(batch_queries, compaction_rewrite_delete_changes.new_files);
-		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
+		metadata_manager->WriteCompactions(batch_queries, compaction_rewrite_delete_changes.compacted_files,
 		                                   CompactionType::REWRITE_DELETES);
 	}
 }

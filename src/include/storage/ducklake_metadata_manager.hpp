@@ -142,22 +142,21 @@ public:
 	virtual void WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files);
 	virtual void WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
 	                                 const vector<DuckLakeInlinedDataInfo> &new_data);
-	virtual void WriteNewInlinedDeletes(DuckLakeSnapshot commit_snapshot,
-	                                    const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
+	virtual void WriteNewInlinedDeletes(string &batch_query, const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
 	virtual void WriteNewInlinedTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
 	                                   const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
 	virtual void DropDataFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
 	virtual void DropDeleteFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
-	virtual void WriteNewDeleteFiles(DuckLakeSnapshot commit_snapshot,
-	                                 const vector<DuckLakeDeleteFileInfo> &new_delete_files);
+	virtual void WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_delete_files);
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual void WriteNewColumnMappings(string batch_query,
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
-	virtual void WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
-	virtual void WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
-	virtual void WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type);
+	virtual void WriteMergeAdjacent(string &batch_query, const vector<DuckLakeCompactedFileInfo> &compactions);
+	virtual void WriteDeleteRewrites(string &batch_query, const vector<DuckLakeCompactedFileInfo> &compactions);
+	virtual void WriteCompactions(string &batch_query, const vector<DuckLakeCompactedFileInfo> &compactions,
+	                              CompactionType type);
 	virtual void InsertSnapshot(string &batch_query);
 	virtual void WriteSnapshotChanges(string &batch_query, const SnapshotChangeInfo &change_info,
 	                                  const DuckLakeSnapshotCommit &commit_info);
