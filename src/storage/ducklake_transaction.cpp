@@ -1192,7 +1192,7 @@ struct CompactionInformation {
 	vector<DuckLakeFileInfo> new_files;
 };
 
-void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
+void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, string &batch_queries,
                                         TransactionChangeInformation &transaction_changes) {
 
 	auto &commit_snapshot = commit_state.commit_snapshot;
@@ -1206,69 +1206,70 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 	// drop entries
 	if (!dropped_tables.empty()) {
-		metadata_manager->DropTables(commit_snapshot, dropped_tables, false);
+		metadata_manager->DropTables(batch_queries, dropped_tables, false);
 	}
 
 	if (!renamed_tables.empty()) {
-		metadata_manager->DropTables(commit_snapshot, renamed_tables, true);
+		metadata_manager->DropTables(batch_queries, renamed_tables, true);
 	}
 
 	if (!dropped_views.empty()) {
-		metadata_manager->DropViews(commit_snapshot, dropped_views);
+		metadata_manager->DropViews(batch_queries, dropped_views);
 	}
 	if (!dropped_schemas.empty()) {
 		set<SchemaIndex> dropped_schema_ids;
 		for (auto &entry : dropped_schemas) {
 			dropped_schema_ids.insert(entry.first);
 		}
-		metadata_manager->DropSchemas(commit_snapshot, dropped_schema_ids);
+		metadata_manager->DropSchemas(batch_queries, dropped_schema_ids);
 	}
 	// write new schemas
 	if (new_schemas) {
 		auto schema_list = GetNewSchemas(commit_state);
-		metadata_manager->WriteNewSchemas(commit_snapshot, schema_list);
+		metadata_manager->WriteNewSchemas(batch_queries, schema_list);
 	}
 
 	// write new tables
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
-		metadata_manager->WriteNewTables(commit_snapshot, result.new_tables);
-		metadata_manager->WriteNewPartitionKeys(commit_snapshot, result.new_partition_keys);
-		metadata_manager->WriteNewViews(commit_snapshot, result.new_views);
-		metadata_manager->WriteNewTags(commit_snapshot, result.new_tags);
-		metadata_manager->WriteNewColumnTags(commit_snapshot, result.new_column_tags);
-		metadata_manager->WriteDroppedColumns(commit_snapshot, result.dropped_columns);
-		metadata_manager->WriteNewColumns(commit_snapshot, result.new_columns);
-		metadata_manager->WriteNewInlinedTables(commit_snapshot, result.new_inlined_data_tables);
+		metadata_manager->WriteNewTables(batch_queries, commit_snapshot, result.new_tables);
+		metadata_manager->WriteNewPartitionKeys(batch_queries, commit_snapshot, result.new_partition_keys);
+		metadata_manager->WriteNewViews(batch_queries, result.new_views);
+		metadata_manager->WriteNewTags(batch_queries, result.new_tags);
+		metadata_manager->WriteNewColumnTags(batch_queries, result.new_column_tags);
+		metadata_manager->WriteDroppedColumns(batch_queries, result.dropped_columns);
+		metadata_manager->WriteNewColumns(batch_queries, result.new_columns);
+		metadata_manager->WriteNewInlinedTables(batch_queries, commit_snapshot, result.new_inlined_data_tables);
 	}
 
 	// write new name maps
 	if (!new_name_maps.name_maps.empty()) {
 		auto result = GetNewNameMaps(commit_state);
-		metadata_manager->WriteNewColumnMappings(commit_snapshot, result.new_column_mappings);
+		metadata_manager->WriteNewColumnMappings(batch_queries, result.new_column_mappings);
 	}
 
 	// write new data / data files
 	if (!table_data_changes.empty()) {
 		auto result = GetNewDataFiles(commit_state);
-		metadata_manager->WriteNewDataFiles(commit_snapshot, result.new_files);
-		metadata_manager->WriteNewInlinedData(commit_snapshot, result.new_inlined_data);
+		metadata_manager->WriteNewDataFiles(batch_queries, result.new_files);
+		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data);
 	}
 
+	// FIXME: HERE
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
 		for (auto &entry : dropped_files) {
 			dropped_indexes.insert(entry.second);
 		}
-		metadata_manager->DropDataFiles(commit_snapshot, dropped_indexes);
+		metadata_manager->DropDataFiles(batch_queries, dropped_indexes);
 	}
 
 	if (!table_data_changes.empty()) {
 		// write new delete files
 		set<DataFileIndex> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
-		metadata_manager->DropDeleteFiles(commit_snapshot, overwritten_delete_files);
+		metadata_manager->DropDeleteFiles(batch_queries, overwritten_delete_files);
 		metadata_manager->WriteNewDeleteFiles(commit_snapshot, file_list);
 
 		// write new inlined deletes
@@ -1280,10 +1281,10 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		    GetCompactionChanges(commit_snapshot, CompactionType::MERGE_ADJACENT_TABLES);
 		metadata_manager->WriteCompactions(compaction_merge_adjacent_changes.compacted_files,
 		                                   CompactionType::MERGE_ADJACENT_TABLES);
-		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_merge_adjacent_changes.new_files);
+		metadata_manager->WriteNewDataFiles(batch_queries, compaction_merge_adjacent_changes.new_files);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_snapshot, CompactionType::REWRITE_DELETES);
-		metadata_manager->WriteNewDataFiles(commit_snapshot, compaction_rewrite_delete_changes.new_files);
+		metadata_manager->WriteNewDataFiles(batch_queries, compaction_rewrite_delete_changes.new_files);
 		metadata_manager->WriteCompactions(compaction_rewrite_delete_changes.compacted_files,
 		                                   CompactionType::REWRITE_DELETES);
 	}
@@ -1393,6 +1394,7 @@ void DuckLakeTransaction::FlushChanges() {
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
 	DuckLakeSnapshot commit_snapshot;
+
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		commit_snapshot = GetSnapshot();
 		commit_snapshot.snapshot_id++;
@@ -1410,7 +1412,13 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
-			CommitChanges(commit_state, transaction_changes);
+			string batch_queries;
+			CommitChanges(commit_state, batch_queries, transaction_changes);
+
+			auto res = Query(commit_snapshot, batch_queries);
+			if (res->HasError()) {
+				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
+			}
 
 			// write the new snapshot
 			metadata_manager->InsertSnapshot(commit_snapshot);

@@ -157,7 +157,8 @@ private:
 	void CleanupFiles();
 	void FlushChanges();
 	void FlushSettingChanges();
-	void CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
+	void CommitChanges(DuckLakeCommitState &commit_state, string &batch_queries,
+	                   TransactionChangeInformation &transaction_changes);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);
 	void FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name, const string &id_name,
 	               unordered_set<idx_t> &dropped_entries);
@@ -179,6 +180,7 @@ private:
 	void WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges();
+	void GetBatchQueries(string &batch_queries, TransactionChangeInformation &changes);
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);

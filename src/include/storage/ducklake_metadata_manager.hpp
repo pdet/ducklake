@@ -126,35 +126,34 @@ public:
 	                                                          const string &separator);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
-	virtual void DropSchemas(DuckLakeSnapshot commit_snapshot, const set<SchemaIndex> &ids);
-	virtual void DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids, bool renamed);
-	virtual void DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids);
-	virtual void WriteNewSchemas(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeSchemaInfo> &new_schemas);
-	virtual void WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables);
-	virtual void WriteNewViews(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeViewInfo> &new_views);
-	virtual void WriteNewPartitionKeys(DuckLakeSnapshot commit_snapshot,
+	virtual void DropSchemas(string &batch_query, const set<SchemaIndex> &ids);
+	virtual void DropTables(string &batch_query, const set<TableIndex> &ids, bool renamed);
+	virtual void DropViews(string &batch_query, const set<TableIndex> &ids);
+	virtual void WriteNewSchemas(string &batch_query, const vector<DuckLakeSchemaInfo> &new_schemas);
+	virtual void WriteNewTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
+	                            const vector<DuckLakeTableInfo> &new_tables);
+	virtual void WriteNewViews(string &batch_query, const vector<DuckLakeViewInfo> &new_views);
+	virtual void WriteNewPartitionKeys(string &batch_query, DuckLakeSnapshot commit_snapshot,
 	                                   const vector<DuckLakePartitionInfo> &new_partitions);
-	virtual void WriteDroppedColumns(DuckLakeSnapshot commit_snapshot,
-	                                 const vector<DuckLakeDroppedColumn> &dropped_columns);
-	virtual void WriteNewColumns(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeNewColumn> &new_columns);
-	virtual void WriteNewTags(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTagInfo> &new_tags);
-	virtual void WriteNewColumnTags(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeColumnTagInfo> &new_tags);
-	virtual void WriteNewDataFiles(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeFileInfo> &new_files);
-	virtual void WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
+	virtual void WriteDroppedColumns(string &batch_query, const vector<DuckLakeDroppedColumn> &dropped_columns);
+	virtual void WriteNewColumns(string &batch_query, const vector<DuckLakeNewColumn> &new_columns);
+	virtual void WriteNewTags(string &batch_query, const vector<DuckLakeTagInfo> &new_tags);
+	virtual void WriteNewColumnTags(string &batch_query, const vector<DuckLakeColumnTagInfo> &new_tags);
+	virtual void WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files);
+	virtual void WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
 	                                 const vector<DuckLakeInlinedDataInfo> &new_data);
 	virtual void WriteNewInlinedDeletes(DuckLakeSnapshot commit_snapshot,
 	                                    const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
-	virtual void WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
+	virtual void WriteNewInlinedTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
+	                                   const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
-	virtual void ExecuteInlinedTableQueries(DuckLakeSnapshot commit_snapshot, string &inlined_tables,
-	                                        const string &inlined_table_queries);
-	virtual void DropDataFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
-	virtual void DropDeleteFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files);
+	virtual void DropDataFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
+	virtual void DropDeleteFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
 	virtual void WriteNewDeleteFiles(DuckLakeSnapshot commit_snapshot,
 	                                 const vector<DuckLakeDeleteFileInfo> &new_delete_files);
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
-	virtual void WriteNewColumnMappings(DuckLakeSnapshot commit_snapshot,
+	virtual void WriteNewColumnMappings(string batch_query,
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	virtual void WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
@@ -218,7 +217,7 @@ protected:
 
 private:
 	template <class T>
-	void FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name, const string &id_name,
+	void FlushDrop(string &batch_query, const string &metadata_table_name, const string &id_name,
 	               const set<T> &dropped_entries);
 	template <class T>
 	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
