@@ -2141,7 +2141,7 @@ ORDER BY mapping_id, parent_column NULLS FIRST
 	return column_maps;
 }
 
-void DuckLakeMetadataManager::WriteNewColumnMappings(string batch_query,
+void DuckLakeMetadataManager::WriteNewColumnMappings(string &batch_query,
                                                      const vector<DuckLakeColumnMappingInfo> &new_column_mappings) {
 	string column_mapping_insert_query;
 	string name_map_insert_query;
@@ -2165,7 +2165,6 @@ void DuckLakeMetadataManager::WriteNewColumnMappings(string batch_query,
 			                       name_map_column.target_field_id.index, parent_column, is_partition);
 		}
 	}
-	// Batch the two INSERT queries into a single multi-statement query
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column_mapping VALUES " + column_mapping_insert_query + ";";
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_name_mapping VALUES " + name_map_insert_query + ";";
 }

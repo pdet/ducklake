@@ -154,7 +154,7 @@ public:
 	virtual void WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables);
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
-	virtual void WriteNewColumnMappings(string batch_query,
+	virtual void WriteNewColumnMappings(string &batch_query,
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	virtual void WriteMergeAdjacent(string &batch_query, const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteDeleteRewrites(string &batch_query, const vector<DuckLakeCompactedFileInfo> &compactions);
