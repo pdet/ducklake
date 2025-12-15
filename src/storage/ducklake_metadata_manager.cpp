@@ -1385,14 +1385,50 @@ void DuckLakeMetadataManager::DropSchemas(DuckLakeSnapshot commit_snapshot, cons
 }
 
 void DuckLakeMetadataManager::DropTables(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids, bool renamed) {
-	FlushDrop(commit_snapshot, "ducklake_table", "table_id", ids);
+	if (ids.empty()) {
+		return;
+	}
+
+	// Batch all drop operations into a single multi-statement query to reduce round-trips
+	string batch_query;
+	string dropped_id_list;
+	for (auto &dropped_id : ids) {
+		if (!dropped_id_list.empty()) {
+			dropped_id_list += ", ";
+		}
+		dropped_id_list += to_string(dropped_id.index);
+	}
+
+	// Always drop from ducklake_table
+	batch_query += StringUtil::Format(
+	    R"(UPDATE {METADATA_CATALOG}.ducklake_table SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+	    dropped_id_list);
+
 	if (renamed == false) {
-		FlushDrop(commit_snapshot, "ducklake_partition_info", "table_id", ids);
-		FlushDrop(commit_snapshot, "ducklake_column", "table_id", ids);
-		FlushDrop(commit_snapshot, "ducklake_column_tag", "table_id", ids);
-		FlushDrop(commit_snapshot, "ducklake_data_file", "table_id", ids);
-		FlushDrop(commit_snapshot, "ducklake_delete_file", "table_id", ids);
-		FlushDrop(commit_snapshot, "ducklake_tag", "object_id", ids);
+		// Drop from related tables only if not renamed
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_partition_info SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+		    dropped_id_list);
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_column SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+		    dropped_id_list);
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_column_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+		    dropped_id_list);
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+		    dropped_id_list);
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
+		    dropped_id_list);
+		batch_query += StringUtil::Format(
+		    R"(UPDATE {METADATA_CATALOG}.ducklake_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND object_id IN (%s);)",
+		    dropped_id_list);
+	}
+
+	auto result = transaction.Query(commit_snapshot, batch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to drop tables from DuckLake: ");
 	}
 }
 
@@ -1491,8 +1527,14 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 
 void DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
                                              const vector<DuckLakeTableInfo> &new_tables) {
+	if (new_tables.empty()) {
+		return;
+	}
+
+	string batch_query;
 	string column_insert_sql;
 	string table_insert_sql;
+
 	for (auto &table : new_tables) {
 		if (!table_insert_sql.empty()) {
 			table_insert_sql += ", ";
@@ -1506,22 +1548,22 @@ void DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
 			ColumnToSQLRecursive(column, table.id, optional_idx(), column_insert_sql);
 		}
 	}
+
+	// Batch table and column inserts into a single multi-statement query
 	if (!table_insert_sql.empty()) {
-		// insert table entries
-		table_insert_sql = "INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES " + table_insert_sql;
-		auto result = transaction.Query(commit_snapshot, table_insert_sql);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to write new table to DuckLake: ");
-		}
+		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES " + table_insert_sql + ";";
 	}
 	if (!column_insert_sql.empty()) {
-		// insert column entries
-		column_insert_sql = "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql;
-		auto result = transaction.Query(commit_snapshot, column_insert_sql);
+		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
+	}
+
+	if (!batch_query.empty()) {
+		auto result = transaction.Query(commit_snapshot, batch_query);
 		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to write column information to DuckLake: ");
+			result->GetErrorObject().Throw("Failed to write new tables to DuckLake: ");
 		}
 	}
+
 	// write new data-inlining tables (if data-inlining is enabled)
 	WriteNewInlinedTables(commit_snapshot, new_tables);
 }
@@ -1550,12 +1592,13 @@ void DuckLakeMetadataManager::ExecuteInlinedTableQueries(DuckLakeSnapshot commit
 	if (inlined_tables.empty()) {
 		return;
 	}
+
+	// Batch both INSERT queries into a single multi-statement query to reduce round-trips
+	string batch_query;
 	inlined_tables = "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables;
-	auto result = transaction.Query(commit_snapshot, inlined_tables);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write new inlined tables table to DuckLake: ");
-	}
-	result = transaction.Query(commit_snapshot, inlined_table_queries);
+	batch_query = inlined_tables + ";" + inlined_table_queries;
+
+	auto result = transaction.Query(commit_snapshot, batch_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to write new inlined tables to DuckLake: ");
 	}
@@ -2027,28 +2070,27 @@ void DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot commit_snapshot
 	if (data_file_insert_query.empty()) {
 		throw InternalException("No files found!?");
 	}
+
+	// Batch all INSERT queries into a single multi-statement query to reduce round-trips
+	string batch_query;
+
 	// insert the data files
-	data_file_insert_query =
-	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES %s", data_file_insert_query);
-	auto result = transaction.Query(commit_snapshot, data_file_insert_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write data file information to DuckLake: ");
-	}
+	batch_query +=
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES %s;", data_file_insert_query);
+
 	// insert the column stats
-	column_stats_insert_query = StringUtil::Format(
-	    "INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES %s", column_stats_insert_query);
-	result = transaction.Query(commit_snapshot, column_stats_insert_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write column stats information to DuckLake: ");
-	}
+	batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES %s;",
+	                                  column_stats_insert_query);
+
 	if (!partition_insert_query.empty()) {
 		// insert the partition values
-		partition_insert_query = StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES %s", partition_insert_query);
-		result = transaction.Query(commit_snapshot, partition_insert_query);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to write partition value information to DuckLake: ");
-		}
+		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES %s;",
+		                                  partition_insert_query);
+	}
+
+	auto result = transaction.Query(commit_snapshot, batch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to write data file information to DuckLake: ");
 	}
 }
 
@@ -2153,14 +2195,16 @@ void DuckLakeMetadataManager::WriteNewColumnMappings(DuckLakeSnapshot commit_sna
 			                       name_map_column.target_field_id.index, parent_column, is_partition);
 		}
 	}
+	// Batch the two INSERT queries into a single multi-statement query
+	string batch_query;
 	column_mapping_insert_query =
-	    "INSERT INTO {METADATA_CATALOG}.ducklake_column_mapping VALUES " + column_mapping_insert_query;
-	auto result = transaction.Query(commit_snapshot, column_mapping_insert_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write new column mapping information to DuckLake: ");
-	}
-	name_map_insert_query = "INSERT INTO {METADATA_CATALOG}.ducklake_name_mapping VALUES " + name_map_insert_query;
-	result = transaction.Query(commit_snapshot, name_map_insert_query);
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_column_mapping VALUES " + column_mapping_insert_query + ";";
+	name_map_insert_query =
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_name_mapping VALUES " + name_map_insert_query + ";";
+
+	batch_query = column_mapping_insert_query + name_map_insert_query;
+
+	auto result = transaction.Query(commit_snapshot, batch_query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to write new column mapping information to DuckLake: ");
 	}
@@ -2381,30 +2425,33 @@ void DuckLakeMetadataManager::WriteNewPartitionKeys(DuckLakeSnapshot commit_snap
 			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
 		}
 	}
+	// Batch all partition queries into a single multi-statement query
+	string batch_query;
+
 	// update old partition information for any tables that have been altered
 	auto update_partition_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_partition_info
 SET end_snapshot = {SNAPSHOT_ID}
-WHERE table_id IN (%s) AND end_snapshot IS NULL)",
+WHERE table_id IN (%s) AND end_snapshot IS NULL
+;)",
 	                                                 old_partition_table_ids);
-	auto result = transaction.Query(commit_snapshot, update_partition_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update old partition information in DuckLake: ");
-	}
+	batch_query += update_partition_query;
+
 	if (!new_partition_values.empty()) {
-		new_partition_values = "INSERT INTO {METADATA_CATALOG}.ducklake_partition_info VALUES " + new_partition_values;
-		auto result = transaction.Query(commit_snapshot, new_partition_values);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to insert new partition information in DuckLake: ");
-		}
+		new_partition_values =
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_partition_info VALUES " + new_partition_values + ";";
+		batch_query += new_partition_values;
 	}
 	if (!insert_partition_cols.empty()) {
 		insert_partition_cols =
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_partition_column VALUES " + insert_partition_cols;
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_partition_column VALUES " + insert_partition_cols + ";";
+		batch_query += insert_partition_cols;
+	}
 
-		auto result = transaction.Query(commit_snapshot, insert_partition_cols);
+	if (!batch_query.empty()) {
+		auto result = transaction.Query(commit_snapshot, batch_query);
 		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to insert new partition information in DuckLake:");
+			result->GetErrorObject().Throw("Failed to write partition information to DuckLake:");
 		}
 	}
 }
@@ -2422,8 +2469,11 @@ void DuckLakeMetadataManager::WriteNewTags(DuckLakeSnapshot commit_snapshot, con
 		}
 		tags_list += StringUtil::Format("(%d, %s)", tag.id, SQLString(tag.key));
 	}
+	// Batch the UPDATE and INSERT queries into a single multi-statement query
+	string batch_query;
+
 	// overwrite the snapshot for the old tags
-	auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
+	batch_query += StringUtil::Format(R"(
 WITH overwritten_tags(tid, key) AS (
 VALUES %s
 )
@@ -2431,11 +2481,9 @@ UPDATE {METADATA_CATALOG}.ducklake_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
 WHERE object_id=tid
-)",
-	                                                                    tags_list));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update tag information in DuckLake: ");
-	}
+;)",
+	                                  tags_list);
+
 	// now insert the new tags
 	string new_tag_query;
 	for (auto &tag : new_tags) {
@@ -2446,11 +2494,12 @@ WHERE object_id=tid
 		                                    tag.value.ToSQLString());
 	}
 
-	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_tag VALUES " + new_tag_query;
+	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_tag VALUES " + new_tag_query + ";";
+	batch_query += new_tag_query;
 
-	result = transaction.Query(commit_snapshot, new_tag_query);
+	auto result = transaction.Query(commit_snapshot, batch_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert new tag information in DuckLake:");
+		result->GetErrorObject().Throw("Failed to write tag information to DuckLake:");
 	}
 }
 
@@ -2468,8 +2517,11 @@ void DuckLakeMetadataManager::WriteNewColumnTags(DuckLakeSnapshot commit_snapsho
 		}
 		tags_list += StringUtil::Format("(%d, %d, %s)", tag.table_id.index, tag.field_index.index, SQLString(tag.key));
 	}
+	// Batch the UPDATE and INSERT queries into a single multi-statement query
+	string batch_query;
+
 	// overwrite the snapshot for the old tags
-	auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
+	batch_query += StringUtil::Format(R"(
 WITH overwritten_tags(tid, cid, key) AS (
 VALUES %s
 )
@@ -2477,11 +2529,9 @@ UPDATE {METADATA_CATALOG}.ducklake_column_tag
 SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
 WHERE table_id=tid AND column_id=cid
-)",
-	                                                                    tags_list));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update column tag information in DuckLake: ");
-	}
+;)",
+	                                  tags_list);
+
 	// now insert the new tags
 	string new_tag_query;
 	for (auto &tag : new_tags) {
@@ -2492,11 +2542,12 @@ WHERE table_id=tid AND column_id=cid
 		                                    tag.field_index.index, SQLString(tag.key), tag.value.ToSQLString());
 	}
 
-	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_column_tag VALUES " + new_tag_query;
+	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_column_tag VALUES " + new_tag_query + ";";
+	batch_query += new_tag_query;
 
-	result = transaction.Query(commit_snapshot, new_tag_query);
+	auto result = transaction.Query(commit_snapshot, batch_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert new column tag information in DuckLake:");
+		result->GetErrorObject().Throw("Failed to write column tag information to DuckLake:");
 	}
 }
 
@@ -2527,31 +2578,22 @@ void DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsIn
 		                       contains_null, contains_nan, min_val, max_val, extra_stats_val);
 	}
 
+	string batch_query;
+
 	if (!stats.initialized) {
 		// stats have not been initialized yet - insert them
-		auto result = transaction.Query(
+		batch_query =
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
-		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to insert stats information in DuckLake: ");
-		}
-
-		result = transaction.Query(StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;", column_stats_values));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to insert stats information in DuckLake: ");
-		}
-		return;
-	}
-	// stats have been initialized - update them
-	auto result = transaction.Query(
-	    StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
-	                       "next_row_id=%d WHERE table_id=%d;",
-	                       stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update stats information in DuckLake: ");
-	}
-	result = transaction.Query(StringUtil::Format(R"(
+		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
+		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
+		                                  column_stats_values);
+	} else {
+		// stats have been initialized - update them
+		batch_query = StringUtil::Format(
+		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
+		    "next_row_id=%d WHERE table_id=%d;",
+		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		batch_query += StringUtil::Format(R"(
 WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (
 VALUES %s
 )
@@ -2560,9 +2602,12 @@ SET contains_null=new_contains_null, contains_nan=new_contains_nan, min_value=ne
 FROM new_values
 WHERE table_id=tid AND column_id=cid
 )",
-	                                              column_stats_values));
+		                                  column_stats_values);
+	}
+
+	auto result = transaction.Query(batch_query);
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update stats information in DuckLake: ");
+		result->GetErrorObject().Throw("Failed to write stats information in DuckLake: ");
 	}
 }
 
