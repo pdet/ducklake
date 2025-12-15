@@ -1831,7 +1831,28 @@ WHERE schema_id = %d;)",
 	                            schema_id.index);
 }
 
-string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id) {
+string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables) {
+	for (auto new_table : new_tables) {
+		if (new_table.id == table_id) {
+			// This is a table not yet in the catalog
+			auto result = transaction.Query(StringUtil::Format(R"(
+SELECT s.path, s.path_is_relative
+FROM {METADATA_CATALOG}.ducklake_schema s
+WHERE schema_id = %d;)",
+			                                                   new_table.schema_id.index));
+			for (auto &row : *result) {
+				DuckLakePath schema_path;
+				schema_path.path = row.GetValue<string>(0);
+				schema_path.path_is_relative = row.GetValue<bool>(1);
+				auto resolved_schema_path = FromRelativePath(schema_path);
+
+				DuckLakePath table_path;
+				table_path.path = new_table.path;
+				table_path.path_is_relative = true;
+				return FromRelativePath(table_path, resolved_schema_path);
+			}
+		}
+	}
 	auto result = transaction.Query(StringUtil::Format(R"(
 SELECT s.path, s.path_is_relative, t.path, t.path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema s
@@ -1876,7 +1897,7 @@ string DuckLakeMetadataManager::GetPath(SchemaIndex schema_id) {
 	return path;
 }
 
-string DuckLakeMetadataManager::GetPath(TableIndex table_id) {
+string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables) {
 	lock_guard<mutex> guard(paths_lock);
 	// get the path from the list of cached paths
 	auto entry = table_paths.find(table_id);
@@ -1890,7 +1911,7 @@ string DuckLakeMetadataManager::GetPath(TableIndex table_id) {
 	if (table) {
 		path = table->Cast<DuckLakeTableEntry>().DataPath();
 	} else {
-		path = GetPathForTable(table_id);
+		path = GetPathForTable(table_id, new_tables);
 	}
 	table_paths.emplace(table_id, path);
 	return path;
@@ -1905,8 +1926,9 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, con
 	return GetRelativePath(path, GetPath(schema_id));
 }
 
-DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path) {
-	return GetRelativePath(path, GetPath(table_id));
+DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
+                                                      const vector<DuckLakeTableInfo> &new_tables) {
+	return GetRelativePath(path, GetPath(table_id, new_tables));
 }
 
 DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const string &data_path) {
@@ -1952,10 +1974,11 @@ string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
 }
 
 string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const DuckLakePath &path) {
-	return FromRelativePath(path, GetPath(table_id));
+	return FromRelativePath(path, GetPath(table_id, {}));
 }
 
-void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files) {
+void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files,
+                                                const vector<DuckLakeTableInfo> &new_tables) {
 	if (new_files.empty()) {
 		return;
 	}
@@ -1986,7 +2009,7 @@ void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vecto
 		}
 		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
 		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
-		auto path = GetRelativePath(file.table_id, file.file_name);
+		auto path = GetRelativePath(file.table_id, file.file_name, new_tables);
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
@@ -2040,8 +2063,8 @@ void DuckLakeMetadataManager::DropDeleteFiles(string &batch_query, const set<Dat
 	FlushDrop(batch_query, "ducklake_delete_file", "data_file_id", dropped_files);
 }
 
-void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query,
-                                                  const vector<DuckLakeDeleteFileInfo> &new_files) {
+void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_files,
+                                                  const vector<DuckLakeTableInfo> &new_tables) {
 	if (new_files.empty()) {
 		return;
 	}
@@ -2055,7 +2078,7 @@ void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query,
 		auto data_file_index = file.data_file_id.index;
 		auto encryption_key =
 		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
-		auto path = GetRelativePath(file.table_id, file.path);
+		auto path = GetRelativePath(file.table_id, file.path, new_tables);
 		delete_file_insert_query += StringUtil::Format(
 		    "(%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
 		    data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false", file.delete_count,
@@ -2064,7 +2087,7 @@ void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query,
 
 	// insert the data files
 	batch_query +=
-	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES %s", delete_file_insert_query);
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES %s;", delete_file_insert_query);
 }
 
 vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(optional_idx start_from) {
@@ -2700,7 +2723,8 @@ WHERE data_file_id IN (%s);
 		                                  delete_from_tbl, deleted_file_ids);
 	}
 	// add the files we cleared to the deletion schedule
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions;
+	batch_query +=
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
 }
 void DuckLakeMetadataManager::WriteDeleteRewrites(string &batch_query,
                                                   const vector<DuckLakeCompactedFileInfo> &compactions) {
@@ -2772,7 +2796,7 @@ void DuckLakeMetadataManager::WriteDeleteRewrites(string &batch_query,
 		                                  deleted_file_ids);
 		// add the files we cleared to the deletion schedule
 		batch_query +=
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions;
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
 	}
 }
 
