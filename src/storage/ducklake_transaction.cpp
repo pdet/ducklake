@@ -900,7 +900,8 @@ struct DuckLakeNewGlobalStats {
 	bool initialized = false;
 };
 
-void DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_global_stats) {
+void DuckLakeTransaction::UpdateGlobalTableStats(string &batch_query, TableIndex table_id,
+                                                 const DuckLakeNewGlobalStats &new_global_stats) {
 	DuckLakeGlobalStatsInfo stats;
 	stats.table_id = table_id;
 
@@ -938,7 +939,7 @@ void DuckLakeTransaction::UpdateGlobalTableStats(TableIndex table_id, const Duck
 	stats.next_row_id = new_stats.next_row_id;
 	stats.table_size_bytes = new_stats.table_size_bytes;
 	// finally update the stats in the tables
-	metadata_manager->UpdateGlobalTableStats(stats);
+	metadata_manager->UpdateGlobalTableStats(batch_query, stats);
 }
 
 DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot,
@@ -1002,7 +1003,7 @@ struct NewDataInfo {
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
 };
 
-NewDataInfo DuckLakeTransaction::GetNewDataFiles(DuckLakeCommitState &commit_state) {
+NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state) {
 	NewDataInfo result;
 
 	for (auto &entry : table_data_changes) {
@@ -1073,7 +1074,7 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(DuckLakeCommitState &commit_sta
 			}
 		}
 		// update the global stats for this table based on the newly written data
-		UpdateGlobalTableStats(table_id, new_globals);
+		UpdateGlobalTableStats(batch_query, table_id, new_globals);
 	}
 	return result;
 }
@@ -1252,7 +1253,7 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 
 	// write new data / data files
 	if (!table_data_changes.empty()) {
-		auto result = GetNewDataFiles(commit_state);
+		auto result = GetNewDataFiles(batch_queries, commit_state);
 		metadata_manager->WriteNewDataFiles(batch_queries, result.new_files, new_tables_result);
 		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data,
 		                                      new_tables_result);

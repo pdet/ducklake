@@ -163,7 +163,7 @@ public:
 	virtual void InsertSnapshot(string &batch_query);
 	virtual void WriteSnapshotChanges(string &batch_query, const SnapshotChangeInfo &change_info,
 	                                  const DuckLakeSnapshotCommit &commit_info);
-	virtual void UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
+	virtual void UpdateGlobalTableStats(string &batch_query, const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot);
 	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();

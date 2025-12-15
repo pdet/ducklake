@@ -2477,7 +2477,7 @@ WHERE table_id=tid AND column_id=cid
 	batch_query += new_tag_query;
 }
 
-void DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
+void DuckLakeMetadataManager::UpdateGlobalTableStats(string &batch_query, const DuckLakeGlobalStatsInfo &stats) {
 	string column_stats_values;
 	for (auto &col_stats : stats.column_stats) {
 		if (!column_stats_values.empty()) {
@@ -2504,18 +2504,16 @@ void DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsIn
 		                       contains_null, contains_nan, min_val, max_val, extra_stats_val);
 	}
 
-	string batch_query;
-
 	if (!stats.initialized) {
 		// stats have not been initialized yet - insert them
-		batch_query =
+		batch_query +=
 		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
 		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
 		                                  column_stats_values);
 	} else {
 		// stats have been initialized - update them
-		batch_query = StringUtil::Format(
+		batch_query += StringUtil::Format(
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
@@ -2529,11 +2527,6 @@ FROM new_values
 WHERE table_id=tid AND column_id=cid;
 )",
 		                                  column_stats_values);
-	}
-
-	auto result = transaction.Query(batch_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write stats information in DuckLake: ");
 	}
 }
 
