@@ -158,8 +158,8 @@ public:
 	virtual void WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
 	virtual void WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type);
-	virtual void InsertSnapshot(DuckLakeSnapshot commit_snapshot);
-	virtual void WriteSnapshotChanges(DuckLakeSnapshot commit_snapshot, const SnapshotChangeInfo &change_info,
+	virtual void InsertSnapshot(string &batch_query);
+	virtual void WriteSnapshotChanges(string &batch_query, const SnapshotChangeInfo &change_info,
 	                                  const DuckLakeSnapshotCommit &commit_info);
 	virtual void UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot);
@@ -178,7 +178,7 @@ public:
 	                                                                 const string &inlined_table_name,
 	                                                                 const vector<string> &columns_to_read);
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	virtual void InsertNewSchema(const DuckLakeSnapshot &snapshot);
+	virtual void InsertNewSchema(const DuckLakeSnapshot &snapshot, string &batch_query);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);

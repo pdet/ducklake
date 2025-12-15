@@ -177,7 +177,8 @@ private:
 	void CheckForConflicts(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot);
-	void WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
+	void WriteSnapshotChanges(string &batch_query, DuckLakeCommitState &commit_state,
+	                          TransactionChangeInformation &changes);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges();
 	void GetBatchQueries(string &batch_queries, TransactionChangeInformation &changes);

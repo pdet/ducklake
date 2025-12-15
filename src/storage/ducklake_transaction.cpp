@@ -314,7 +314,7 @@ void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change
 	}
 }
 
-void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
+void DuckLakeTransaction::WriteSnapshotChanges(string &batch_query, DuckLakeCommitState &commit_state,
                                                TransactionChangeInformation &changes) {
 	SnapshotChangeInfo change_info;
 
@@ -372,7 +372,7 @@ void DuckLakeTransaction::WriteSnapshotChanges(DuckLakeCommitState &commit_state
 		change_info.changes_made += "compacted_table:";
 		change_info.changes_made += to_string(table_id.index);
 	}
-	metadata_manager->WriteSnapshotChanges(commit_state.commit_snapshot, change_info, commit_info);
+	metadata_manager->WriteSnapshotChanges(batch_query, change_info, commit_info);
 }
 
 void DuckLakeTransaction::CleanupFiles() {
@@ -1415,18 +1415,18 @@ void DuckLakeTransaction::FlushChanges() {
 			string batch_queries;
 			CommitChanges(commit_state, batch_queries, transaction_changes);
 
+			// write the new snapshot
+			metadata_manager->InsertSnapshot(batch_queries);
+
+			WriteSnapshotChanges(batch_queries, commit_state, transaction_changes);
+			if (SchemaChangesMade()) {
+				// Insert our new schema in our table that tracks schema changes
+				metadata_manager->InsertNewSchema(commit_snapshot, batch_queries);
+			}
+
 			auto res = Query(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
-			}
-
-			// write the new snapshot
-			metadata_manager->InsertSnapshot(commit_snapshot);
-
-			WriteSnapshotChanges(commit_state, transaction_changes);
-			if (SchemaChangesMade()) {
-				// Insert our new schema in our table that tracks schema changes
-				metadata_manager->InsertNewSchema(commit_snapshot);
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;

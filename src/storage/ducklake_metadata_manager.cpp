@@ -1440,7 +1440,7 @@ void DuckLakeMetadataManager::WriteNewSchemas(string &batch_query, const vector<
 		                                        new_schema.uuid, SQLString(new_schema.name), SQLString(path.path),
 		                                        path.path_is_relative ? "true" : "false");
 	}
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES " + schema_insert_sql;
+	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES " + schema_insert_sql + ";";
 }
 
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
@@ -1618,7 +1618,7 @@ void DuckLakeMetadataManager::WriteNewColumns(string &batch_query, const vector<
 	}
 
 	// insert column entries
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql;
+	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
 }
 
 void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<DuckLakeViewInfo> &new_views) {
@@ -1635,7 +1635,7 @@ void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<Du
 	}
 	if (!view_insert_sql.empty()) {
 		// insert table entries
-		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql;
+		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql + ";";
 	}
 }
 
@@ -1711,7 +1711,7 @@ WHERE table_id = %d AND schema_version=(
 				row_id++;
 			}
 		}
-		string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s",
+		string append_query = StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
 		                                         SQLIdentifier(inlined_table_name), values);
 		batch_query += append_query;
 	}
@@ -1742,7 +1742,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM deleted_row_list
-WHERE row_id=deleted_row_id
+WHERE row_id=deleted_row_id;
 )",
 		                                  row_id_list, entry.table_name);
 	}
@@ -2145,13 +2145,9 @@ void DuckLakeMetadataManager::WriteNewColumnMappings(string batch_query,
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_name_mapping VALUES " + name_map_insert_query + ";";
 }
 
-void DuckLakeMetadataManager::InsertSnapshot(const DuckLakeSnapshot commit_snapshot) {
-	auto result = transaction.Query(
-	    commit_snapshot,
-	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write new snapshot to DuckLake: ");
-	}
+void DuckLakeMetadataManager::InsertSnapshot(string &batch_query) {
+	batch_query +=
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -2161,18 +2157,13 @@ static string SQLStringOrNull(const string &str) {
 	return KeywordHelper::WriteQuoted(str, '\'');
 }
 
-void DuckLakeMetadataManager::WriteSnapshotChanges(DuckLakeSnapshot commit_snapshot,
-                                                   const SnapshotChangeInfo &change_info,
+void DuckLakeMetadataManager::WriteSnapshotChanges(string &batch_query, const SnapshotChangeInfo &change_info,
                                                    const DuckLakeSnapshotCommit &commit_info) {
 	// insert the snapshot changes
-	auto query = StringUtil::Format(
+	batch_query += StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
 	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
-	auto result = transaction.Query(commit_snapshot, query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to write new snapshot to DuckLake:");
-	}
 }
 
 SnapshotChangeInfo DuckLakeMetadataManager::GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot) {
@@ -2511,7 +2502,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
 SET contains_null=new_contains_null, contains_nan=new_contains_nan, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
-WHERE table_id=tid AND column_id=cid
+WHERE table_id=tid AND column_id=cid;
 )",
 		                                  column_stats_values);
 	}
@@ -3062,14 +3053,9 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 	}
 }
 
-void DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot) {
-	const auto insert_schema_change =
-	    StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu,%llu);)",
-	                       snapshot.snapshot_id, snapshot.schema_version);
-	const auto result = transaction.Query(insert_schema_change);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert new schema version to DuckLake:");
-	}
+void DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot, string &batch_query) {
+	batch_query += StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu,%llu);)",
+	                                  snapshot.snapshot_id, snapshot.schema_version);
 }
 
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
