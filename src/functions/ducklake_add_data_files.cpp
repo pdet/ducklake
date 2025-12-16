@@ -851,12 +851,19 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			map_entry->child_entries = MapColumns(file_metadata, column.child_columns, field_id.Children(), prefix);
 			break;
 		case LogicalTypeId::LIST:
-			// for lists we don't need to do any name mapping - the child element always maps to each other
-			// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
-			// (2) Parquet has a different convention on how to name list children - rename them to "list" here
-			column.child_columns[0]->child_columns[0]->name = "list";
-			map_entry->child_entries.push_back(
-			    MapColumn(file_metadata, *column.child_columns[0]->child_columns[0], *field_children[0], prefix));
+			if (column.child_columns[0]->name == "array") {
+				// With legacy avro list layout, we just access directly
+				map_entry->child_entries.push_back(
+				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix));
+			} else {
+				// for lists we don't need to do any name mapping - the child element always maps to each other
+				// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
+				// (2) Parquet has a different convention on how to name list children - rename them to "list" here
+				column.child_columns[0]->child_columns[0]->name = "list";
+				map_entry->child_entries.push_back(
+				    MapColumn(file_metadata, *column.child_columns[0]->child_columns[0], *field_children[0], prefix));
+			}
+
 			break;
 		case LogicalTypeId::MAP:
 			// for maps we don't need to do any name mapping - the child elements are always key/value
