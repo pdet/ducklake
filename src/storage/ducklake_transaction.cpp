@@ -1432,7 +1432,7 @@ void DuckLakeTransaction::FlushChanges() {
 				batch_queries += metadata_manager->InsertNewSchema(commit_snapshot);
 			}
 
-			auto res = Query(commit_snapshot, batch_queries);
+			auto res = metadata_manager->Execute(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}

@@ -1426,6 +1426,10 @@ string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids) {
 	return FlushDrop("ducklake_view", "view_id", ids);
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	return transaction.Query(snapshot, query);
+}
+
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas) {
 	if (new_schemas.empty()) {
 		throw InternalException("No schemas to create - should be handled elsewhere");
@@ -1456,9 +1460,9 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	    !column.default_value.IsNull() ? KeywordHelper::WriteQuoted(column.default_value.ToString(), '\'') : "NULL";
 	auto column_id = column.id.index;
 	auto column_order = column_id;
-	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %d, %s)", column_id, table_id.index,
+	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s)", column_id, table_id.index,
 	                             column_order, SQLString(column.name), SQLString(column.type), initial_default,
-	                             default_val, column.nulls_allowed ? 1 : 0, parent_idx);
+	                             default_val, column.nulls_allowed ? "true" : "false", parent_idx);
 	for (auto &child : column.children) {
 		ColumnToSQLRecursive(child, table_id, column_id, result);
 	}
@@ -2573,7 +2577,7 @@ WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max,
 VALUES %s
 )
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
-SET contains_null=new_contains_null, contains_nan=new_contains_nan, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
+SET contains_null=new_contains_null::boolean, contains_nan=new_contains_nan::boolean, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
 WHERE table_id=tid AND column_id=cid;
 )",

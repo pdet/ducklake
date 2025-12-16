@@ -61,6 +61,10 @@ public:
 	DuckLakeMetadataManager &GetMetadataManager() {
 		return *metadata_manager;
 	}
+
+	DuckLakeSnapshotCommit &GetCommitInfo() {
+		return commit_info;
+	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
 	Connection &GetConnection();
@@ -179,7 +183,6 @@ private:
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges();
-	void GetBatchQueries(string &batch_queries, TransactionChangeInformation &changes);
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
 	                     reference<CatalogEntry> table_entry, NewTableInfo &result,
 	                     TransactionChangeInformation &transaction_changes);

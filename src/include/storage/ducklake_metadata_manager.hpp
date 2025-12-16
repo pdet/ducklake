@@ -104,6 +104,8 @@ public:
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	virtual DuckLakeMetadata LoadDuckLake();
+
+	virtual unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query);
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);

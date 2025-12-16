@@ -18,6 +18,8 @@ public:
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
 
+	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
 };
