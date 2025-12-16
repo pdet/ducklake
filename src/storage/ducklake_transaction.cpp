@@ -1313,16 +1313,19 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 
 			idx_t row_id_limit = 0;
 			for (auto &compacted_file : compaction.source_files) {
+				idx_t previous_row_limit = row_id_limit;
 				row_id_limit += compacted_file.file.row_count;
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
 				}
 				if (!compacted_file.partial_files.empty()) {
-					// first process any partial file info that already existed for this file
-					if (!new_file.partial_file_info.empty()) {
-						throw InternalException("Only the first compacted file can have existing partial file info");
+					// we have existing partial file info
+					// we need to shift the row counts by the rows we have already written
+					for (auto &partial_info : compacted_file.partial_files) {
+						auto new_info = partial_info;
+						new_info.max_row_count += previous_row_limit;
+						new_file.partial_file_info.push_back(new_info);
 					}
-					new_file.partial_file_info = compacted_file.partial_files;
 				} else if (compaction.source_files.size() > 1) {
 					DuckLakePartialFileInfo partial_info;
 					partial_info.snapshot_id = compacted_file.file.begin_snapshot;

@@ -1,0 +1,118 @@
+# name: test/sql/compaction/reproduce_issue.test
+# description: Reproduce issue with REWRITE_DELETES and partial file info
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/reproduce_issue/')
+
+statement ok
+USE ducklake;
+
+# Set small target file size to control merging behavior
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '10KB');
+
+statement ok
+CREATE TABLE t (id INTEGER, data VARCHAR);
+
+# Create a LARGE file A that won't be merged (exceeds target_file_size)
+statement ok
+INSERT INTO t SELECT i, repeat('x', 100) FROM range(5000) t(i);
+
+# Create small files B and C that WILL be merged
+statement ok
+INSERT INTO t SELECT i + 5000, 'small1' FROM range(100) t(i);
+
+statement ok
+INSERT INTO t SELECT i + 5100, 'small2' FROM range(100) t(i);
+
+# At this point we have 3 files
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
+----
+3
+
+# Merge B+C into a single file (A is too big to merge)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# State now:
+# - File A (ids 0-4999): NO partial_file_info, begin_snapshot=2
+# - Merged BC (ids 5000-5199): HAS partial_file_info, begin_snapshot=3
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
+----
+2
+
+# Only merged BC has partial_file_info
+query I
+SELECT partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
+----
+NULL
+3:100|4:200
+
+statement ok
+INSERT INTO t SELECT i + 5200, 'small3' FROM range(10) t(i);
+
+statement ok
+INSERT INTO t SELECT i + 5210, 'small4' FROM range(10) t(i);
+
+# Set small target file size so only D & E get merged
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1KB');
+
+# Merge D+E into a single file (A is too big to merge)
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# State now:
+# - File A (ids 0-4999): NO partial_file_info, begin_snapshot=2
+# - Merged BC (ids 5000-5199): HAS partial_file_info, begin_snapshot=3
+# - Merged DE (ids 5200-5219): HAS partial_file_info, begin_snapshot=4
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS NULL;
+----
+3
+
+# Only merged BC has partial_file_info
+query I
+SELECT partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
+----
+NULL
+3:100|4:200
+6:10|7:20
+
+# Delete from file A (no partial_file_info)
+statement ok
+DELETE FROM t WHERE id < 4900;
+
+# Delete from merged file BC (has partial_file_info)
+statement ok
+DELETE FROM t WHERE id >= 5000 AND id < 5150;
+
+# Set large target to merge all files
+statement ok
+CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
+
+# Rewrite all data files, including ones with partial_file_info
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0);
+
+# Merge all of them into a single file
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't');
+
+# Verify that we ended up with a single file
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
+----
+1
