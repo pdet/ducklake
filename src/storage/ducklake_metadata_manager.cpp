@@ -1510,7 +1510,8 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 }
 
 void DuckLakeMetadataManager::WriteNewTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
-                                             const vector<DuckLakeTableInfo> &new_tables) {
+                                             const vector<DuckLakeTableInfo> &new_tables,
+                                             vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (new_tables.empty()) {
 		return;
 	}
@@ -1523,7 +1524,7 @@ void DuckLakeMetadataManager::WriteNewTables(string &batch_query, DuckLakeSnapsh
 			table_insert_sql += ", ";
 		}
 		auto schema_id = table.schema_id.index;
-		auto path = GetRelativePath(table.schema_id, table.path);
+		auto path = GetRelativePath(table.schema_id, table.path, new_schemas_result);
 		table_insert_sql +=
 		    StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s)", table.id.index, table.uuid, schema_id,
 		                       SQLString(table.name), SQLString(path.path), path.path_is_relative ? "true" : "false");
@@ -1829,7 +1830,16 @@ WHERE inlined_data.end_snapshot >= %d AND inlined_data.end_snapshot <= {SNAPSHOT
 	return TransformInlinedData(*result);
 }
 
-string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id) {
+string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
+                                                 vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	for (auto &schema : new_schemas_result) {
+		if (schema_id == schema.id) {
+			DuckLakePath path;
+			path.path = schema.path;
+			path.path_is_relative = false;
+			return FromRelativePath(path);
+		}
+	}
 	auto result = transaction.Query(StringUtil::Format(R"(
 SELECT path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
@@ -1845,7 +1855,8 @@ WHERE schema_id = %d;)",
 	                            schema_id.index);
 }
 
-string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables) {
+string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+                                                const vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	for (auto new_table : new_tables) {
 		if (new_table.id == table_id) {
 			// This is a table not yet in the catalog
@@ -1864,6 +1875,19 @@ WHERE schema_id = %d;)",
 				table_path.path = new_table.path;
 				table_path.path_is_relative = true;
 				return FromRelativePath(table_path, resolved_schema_path);
+			}
+			for (auto &schema : new_schemas_result) {
+				if (schema.id == new_table.schema_id) {
+					DuckLakePath schema_path;
+					schema_path.path = schema.path;
+					schema_path.path_is_relative = false;
+					auto resolved_schema_path = FromRelativePath(schema_path);
+
+					DuckLakePath table_path;
+					table_path.path = new_table.path;
+					table_path.path_is_relative = true;
+					return FromRelativePath(table_path, resolved_schema_path);
+				}
 			}
 		}
 	}
@@ -1890,7 +1914,7 @@ WHERE table_id = %d;)",
 	                            table_id.index);
 }
 
-string DuckLakeMetadataManager::GetPath(SchemaIndex schema_id) {
+string DuckLakeMetadataManager::GetPath(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	lock_guard<mutex> guard(paths_lock);
 	// get the path from the list of cached paths
 	auto entry = schema_paths.find(schema_id);
@@ -1905,13 +1929,14 @@ string DuckLakeMetadataManager::GetPath(SchemaIndex schema_id) {
 	if (schema) {
 		path = schema->Cast<DuckLakeSchemaEntry>().DataPath();
 	} else {
-		path = GetPathForSchema(schema_id);
+		path = GetPathForSchema(schema_id, new_schemas_result);
 	}
 	schema_paths.emplace(schema_id, path);
 	return path;
 }
 
-string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables) {
+string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+                                        const vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	lock_guard<mutex> guard(paths_lock);
 	// get the path from the list of cached paths
 	auto entry = table_paths.find(table_id);
@@ -1925,7 +1950,7 @@ string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLa
 	if (table) {
 		path = table->Cast<DuckLakeTableEntry>().DataPath();
 	} else {
-		path = GetPathForTable(table_id, new_tables);
+		path = GetPathForTable(table_id, new_tables, new_schemas_result);
 	}
 	table_paths.emplace(table_id, path);
 	return path;
@@ -1936,13 +1961,15 @@ DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path) {
 	return GetRelativePath(path, data_path);
 }
 
-DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path) {
-	return GetRelativePath(path, GetPath(schema_id));
+DuckLakePath DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
+                                                      vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	return GetRelativePath(path, GetPath(schema_id, new_schemas_result));
 }
 
 DuckLakePath DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
-                                                      const vector<DuckLakeTableInfo> &new_tables) {
-	return GetRelativePath(path, GetPath(table_id, new_tables));
+                                                      const vector<DuckLakeTableInfo> &new_tables,
+                                                      vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	return GetRelativePath(path, GetPath(table_id, new_tables, new_schemas_result));
 }
 
 DuckLakePath DuckLakeMetadataManager::GetRelativePath(const string &path, const string &data_path) {
@@ -1988,11 +2015,12 @@ string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
 }
 
 string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const DuckLakePath &path) {
-	return FromRelativePath(path, GetPath(table_id, {}));
+	return FromRelativePath(path, GetPath(table_id, {}, {}));
 }
 
 void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files,
-                                                const vector<DuckLakeTableInfo> &new_tables) {
+                                                const vector<DuckLakeTableInfo> &new_tables,
+                                                vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (new_files.empty()) {
 		return;
 	}
@@ -2023,7 +2051,7 @@ void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vecto
 		}
 		string footer_size = file.footer_size.IsValid() ? to_string(file.footer_size.GetIndex()) : "NULL";
 		string mapping = file.mapping_id.IsValid() ? to_string(file.mapping_id.index) : "NULL";
-		auto path = GetRelativePath(file.table_id, file.file_name, new_tables);
+		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
 		data_file_insert_query += StringUtil::Format(
 		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s)", data_file_index, table_id,
 		    begin_snapshot, SQLString(path.path), path.path_is_relative ? "true" : "false", file.row_count,
@@ -2078,7 +2106,8 @@ void DuckLakeMetadataManager::DropDeleteFiles(string &batch_query, const set<Dat
 }
 
 void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_files,
-                                                  const vector<DuckLakeTableInfo> &new_tables) {
+                                                  const vector<DuckLakeTableInfo> &new_tables,
+                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (new_files.empty()) {
 		return;
 	}
@@ -2092,7 +2121,7 @@ void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query, const vec
 		auto data_file_index = file.data_file_id.index;
 		auto encryption_key =
 		    file.encryption_key.empty() ? "NULL" : "'" + Blob::ToBase64(string_t(file.encryption_key)) + "'";
-		auto path = GetRelativePath(file.table_id, file.path, new_tables);
+		auto path = GetRelativePath(file.table_id, file.path, new_tables, new_schemas_result);
 		delete_file_insert_query += StringUtil::Format(
 		    "(%d, %d, {SNAPSHOT_ID}, NULL, %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
 		    data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false", file.delete_count,

@@ -131,7 +131,8 @@ public:
 	virtual void DropViews(string &batch_query, const set<TableIndex> &ids);
 	virtual void WriteNewSchemas(string &batch_query, const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual void WriteNewTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
-	                            const vector<DuckLakeTableInfo> &new_tables);
+	                            const vector<DuckLakeTableInfo> &new_tables,
+	                            vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual void WriteNewViews(string &batch_query, const vector<DuckLakeViewInfo> &new_views);
 	virtual void WriteNewPartitionKeys(string &batch_query, DuckLakeSnapshot commit_snapshot,
 	                                   const vector<DuckLakePartitionInfo> &new_partitions);
@@ -140,7 +141,8 @@ public:
 	virtual void WriteNewTags(string &batch_query, const vector<DuckLakeTagInfo> &new_tags);
 	virtual void WriteNewColumnTags(string &batch_query, const vector<DuckLakeColumnTagInfo> &new_tags);
 	virtual void WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files,
-	                               const vector<DuckLakeTableInfo> &new_tables);
+	                               const vector<DuckLakeTableInfo> &new_tables,
+	                               vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual void WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
 	                                 const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                 const vector<DuckLakeTableInfo> &new_tables);
@@ -152,7 +154,8 @@ public:
 	virtual void DropDataFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
 	virtual void DropDeleteFiles(string &batch_query, const set<DataFileIndex> &dropped_files);
 	virtual void WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                 const vector<DuckLakeTableInfo> &new_tables);
+	                                 const vector<DuckLakeTableInfo> &new_tables,
+	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual void WriteNewColumnMappings(string &batch_query,
 	                                    const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
@@ -186,8 +189,9 @@ public:
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
-	virtual string GetPathForSchema(SchemaIndex schema_id);
-	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables);
+	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
+	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
 
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
@@ -206,15 +210,18 @@ protected:
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
 	//! Get path relative to schema path
-	DuckLakePath GetRelativePath(SchemaIndex schema_id, const string &path);
+	DuckLakePath GetRelativePath(SchemaIndex schema_id, const string &path,
+	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
 	//! Get path relative to table path
-	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables);
+	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
+	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);
 	string FromRelativePath(TableIndex table_id, const DuckLakePath &path);
-	string GetPath(SchemaIndex schema_id);
-	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables);
+	string GetPath(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
+	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+	               const vector<DuckLakeSchemaInfo> &new_schemas_result);
 	FileSystem &GetFileSystem();
 
 private:
