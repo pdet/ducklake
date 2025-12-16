@@ -145,7 +145,8 @@ public:
 	                               vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual void WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
 	                                 const vector<DuckLakeInlinedDataInfo> &new_data,
-	                                 const vector<DuckLakeTableInfo> &new_tables);
+	                                 const vector<DuckLakeTableInfo> &new_tables,
+	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
 	virtual void WriteNewInlinedDeletes(string &batch_query, const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
 	virtual void WriteNewInlinedTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
 	                                   const vector<DuckLakeTableInfo> &tables);

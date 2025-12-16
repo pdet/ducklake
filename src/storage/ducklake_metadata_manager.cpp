@@ -1642,7 +1642,8 @@ void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<Du
 
 void DuckLakeMetadataManager::WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
                                                   const vector<DuckLakeInlinedDataInfo> &new_data,
-                                                  const vector<DuckLakeTableInfo> &new_tables) {
+                                                  const vector<DuckLakeTableInfo> &new_tables,
+                                                  const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
 	if (new_data.empty()) {
 		return;
 	}
@@ -1651,10 +1652,17 @@ void DuckLakeMetadataManager::WriteNewInlinedData(string &batch_query, DuckLakeS
 	auto &context = *context_ptr;
 	for (auto &entry : new_data) {
 		string inlined_table_name;
-		// get the latest table to insert into
-		auto it = inlined_table_name_cache.find(entry.table_id.index);
-		if (it != inlined_table_name_cache.end()) {
-			inlined_table_name = it->second;
+		for (auto &inlined_table : new_inlined_data_tables_result) {
+			if (inlined_table.id == entry.table_id) {
+				inlined_table_name = GetInlinedTableName(inlined_table, commit_snapshot);
+			}
+		}
+		if (inlined_table_name.empty()) {
+			// get the latest table to insert into
+			auto it = inlined_table_name_cache.find(entry.table_id.index);
+			if (it != inlined_table_name_cache.end()) {
+				inlined_table_name = it->second;
+			}
 		}
 		if (inlined_table_name.empty()) {
 			auto query = StringUtil::Format(R"(
@@ -1674,7 +1682,7 @@ WHERE table_id = %d AND schema_version=(
 		}
 
 		DuckLakeTableInfo table_info;
-		if (inlined_table_name_cache.empty()) {
+		if (inlined_table_name.empty()) {
 			// no inlined table yet - create a new one
 			// first fetch the table info
 			auto current_snapshot = transaction.GetSnapshot();
@@ -1873,7 +1881,7 @@ WHERE schema_id = %d;)",
 
 				DuckLakePath table_path;
 				table_path.path = new_table.path;
-				table_path.path_is_relative = true;
+				table_path.path_is_relative = false;
 				return FromRelativePath(table_path, resolved_schema_path);
 			}
 			for (auto &schema : new_schemas_result) {
@@ -1885,7 +1893,7 @@ WHERE schema_id = %d;)",
 
 					DuckLakePath table_path;
 					table_path.path = new_table.path;
-					table_path.path_is_relative = true;
+					table_path.path_is_relative = false;
 					return FromRelativePath(table_path, resolved_schema_path);
 				}
 			}

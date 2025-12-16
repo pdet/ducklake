@@ -1233,6 +1233,7 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
+	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
 	if (!new_tables.empty()) {
 		auto result = GetNewTables(commit_state, transaction_changes);
 		metadata_manager->WriteNewTables(batch_queries, commit_snapshot, result.new_tables, new_schemas_result);
@@ -1244,6 +1245,7 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 		metadata_manager->WriteNewColumns(batch_queries, result.new_columns);
 		metadata_manager->WriteNewInlinedTables(batch_queries, commit_snapshot, result.new_inlined_data_tables);
 		new_tables_result = result.new_tables;
+		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}
 
 	// write new name maps
@@ -1257,7 +1259,7 @@ void DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state, strin
 		auto result = GetNewDataFiles(batch_queries, commit_state);
 		metadata_manager->WriteNewDataFiles(batch_queries, result.new_files, new_tables_result, new_schemas_result);
 		metadata_manager->WriteNewInlinedData(batch_queries, commit_snapshot, result.new_inlined_data,
-		                                      new_tables_result);
+		                                      new_tables_result, new_inlined_data_tables_result);
 	}
 
 	// drop data files
