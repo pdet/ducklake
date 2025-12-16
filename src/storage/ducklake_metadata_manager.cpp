@@ -1359,10 +1359,10 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 }
 
 template <class T>
-void DuckLakeMetadataManager::FlushDrop(string &batch_query, const string &metadata_table_name, const string &id_name,
-                                        const set<T> &dropped_entries) {
+string DuckLakeMetadataManager::FlushDrop(const string &metadata_table_name, const string &id_name,
+                                          const set<T> &dropped_entries) {
 	if (dropped_entries.empty()) {
-		return;
+		return {};
 	}
 	string dropped_id_list;
 	for (auto &dropped_id : dropped_entries) {
@@ -1371,18 +1371,18 @@ void DuckLakeMetadataManager::FlushDrop(string &batch_query, const string &metad
 		}
 		dropped_id_list += to_string(dropped_id.index);
 	}
-	batch_query += StringUtil::Format(
+	return StringUtil::Format(
 	    R"(UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND %s IN (%s);)",
 	    metadata_table_name, id_name, dropped_id_list);
 }
 
-void DuckLakeMetadataManager::DropSchemas(string &batch_query, const set<SchemaIndex> &ids) {
-	FlushDrop(batch_query, "ducklake_schema", "schema_id", ids);
+string DuckLakeMetadataManager::DropSchemas(const set<SchemaIndex> &ids) {
+	return FlushDrop("ducklake_schema", "schema_id", ids);
 }
 
-void DuckLakeMetadataManager::DropTables(string &batch_query, const set<TableIndex> &ids, bool renamed) {
+string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed) {
 	if (ids.empty()) {
-		return;
+		return {};
 	}
 
 	string dropped_id_list;
@@ -1392,7 +1392,7 @@ void DuckLakeMetadataManager::DropTables(string &batch_query, const set<TableInd
 		}
 		dropped_id_list += to_string(dropped_id.index);
 	}
-
+	string batch_query;
 	// Always drop from ducklake_table
 	batch_query += StringUtil::Format(
 	    R"(UPDATE {METADATA_CATALOG}.ducklake_table SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
@@ -1419,13 +1419,14 @@ void DuckLakeMetadataManager::DropTables(string &batch_query, const set<TableInd
 		    R"(UPDATE {METADATA_CATALOG}.ducklake_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND object_id IN (%s);)",
 		    dropped_id_list);
 	}
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::DropViews(string &batch_query, const set<TableIndex> &ids) {
-	FlushDrop(batch_query, "ducklake_view", "view_id", ids);
+string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids) {
+	return FlushDrop("ducklake_view", "view_id", ids);
 }
 
-void DuckLakeMetadataManager::WriteNewSchemas(string &batch_query, const vector<DuckLakeSchemaInfo> &new_schemas) {
+string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas) {
 	if (new_schemas.empty()) {
 		throw InternalException("No schemas to create - should be handled elsewhere");
 	}
@@ -1440,7 +1441,7 @@ void DuckLakeMetadataManager::WriteNewSchemas(string &batch_query, const vector<
 		                                        new_schema.uuid, SQLString(new_schema.name), SQLString(path.path),
 		                                        path.path_is_relative ? "true" : "false");
 	}
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES " + schema_insert_sql + ";";
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES " + schema_insert_sql + ";";
 }
 
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
@@ -1509,11 +1510,11 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	                          SQLIdentifier(table_name), columns);
 }
 
-void DuckLakeMetadataManager::WriteNewTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
-                                             const vector<DuckLakeTableInfo> &new_tables,
-                                             vector<DuckLakeSchemaInfo> &new_schemas_result) {
+string DuckLakeMetadataManager::WriteNewTables(DuckLakeSnapshot commit_snapshot,
+                                               const vector<DuckLakeTableInfo> &new_tables,
+                                               vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (new_tables.empty()) {
-		return;
+		return {};
 	}
 
 	string column_insert_sql;
@@ -1532,7 +1533,7 @@ void DuckLakeMetadataManager::WriteNewTables(string &batch_query, DuckLakeSnapsh
 			ColumnToSQLRecursive(column, table.id, optional_idx(), column_insert_sql);
 		}
 	}
-
+	string batch_query;
 	// Batch table and column inserts into a single multi-statement query
 	if (!table_insert_sql.empty()) {
 		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES " + table_insert_sql + ";";
@@ -1542,7 +1543,9 @@ void DuckLakeMetadataManager::WriteNewTables(string &batch_query, DuckLakeSnapsh
 	}
 
 	// write new data-inlining tables (if data-inlining is enabled)
-	WriteNewInlinedTables(batch_query, commit_snapshot, new_tables);
+	batch_query += WriteNewInlinedTables(commit_snapshot, new_tables);
+
+	return batch_query;
 }
 
 static string GetInlinedTableName(const DuckLakeTableInfo &table, const DuckLakeSnapshot &snapshot) {
@@ -1564,8 +1567,8 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 	return inlined_table_name;
 }
 
-void DuckLakeMetadataManager::WriteNewInlinedTables(string &batch_query, DuckLakeSnapshot commit_snapshot,
-                                                    const vector<DuckLakeTableInfo> &new_tables) {
+string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
+                                                      const vector<DuckLakeTableInfo> &new_tables) {
 	auto &catalog = transaction.GetCatalog();
 	string inlined_tables;
 	string inlined_table_queries;
@@ -1577,17 +1580,18 @@ void DuckLakeMetadataManager::WriteNewInlinedTables(string &batch_query, DuckLak
 		GetInlinedTableQueries(commit_snapshot, table, inlined_tables, inlined_table_queries);
 	}
 	if (inlined_tables.empty()) {
-		return;
+		return {};
 	}
+	string batch_query;
 	// Batch both INSERT queries into a single multi-statement query to reduce round-trips
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";
 	batch_query += inlined_table_queries;
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteDroppedColumns(string &batch_query,
-                                                  const vector<DuckLakeDroppedColumn> &dropped_columns) {
+string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns) {
 	if (dropped_columns.empty()) {
-		return;
+		return {};
 	}
 	string dropped_cols;
 	for (auto &dropped_col : dropped_columns) {
@@ -1597,7 +1601,7 @@ void DuckLakeMetadataManager::WriteDroppedColumns(string &batch_query,
 		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
 	}
 	// overwrite the snapshot for the old columns
-	batch_query += StringUtil::Format(R"(
+	return StringUtil::Format(R"(
 WITH dropped_cols(tid, cid) AS (
 VALUES %s
 )
@@ -1606,12 +1610,12 @@ SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
 WHERE table_id=tid AND column_id=cid
 ;)",
-	                                  dropped_cols);
+	                          dropped_cols);
 }
 
-void DuckLakeMetadataManager::WriteNewColumns(string &batch_query, const vector<DuckLakeNewColumn> &new_columns) {
+string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns) {
 	if (new_columns.empty()) {
-		return;
+		return {};
 	}
 	string column_insert_sql;
 	for (auto &new_col : new_columns) {
@@ -1619,10 +1623,10 @@ void DuckLakeMetadataManager::WriteNewColumns(string &batch_query, const vector<
 	}
 
 	// insert column entries
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
 }
 
-void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<DuckLakeViewInfo> &new_views) {
+string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views) {
 	string view_insert_sql;
 	for (auto &view : new_views) {
 		if (!view_insert_sql.empty()) {
@@ -1636,16 +1640,18 @@ void DuckLakeMetadataManager::WriteNewViews(string &batch_query, const vector<Du
 	}
 	if (!view_insert_sql.empty()) {
 		// insert table entries
-		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql + ";";
+		return "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql + ";";
 	}
+	return {};
 }
 
-void DuckLakeMetadataManager::WriteNewInlinedData(string &batch_query, DuckLakeSnapshot &commit_snapshot,
-                                                  const vector<DuckLakeInlinedDataInfo> &new_data,
-                                                  const vector<DuckLakeTableInfo> &new_tables,
-                                                  const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
+                                                    const vector<DuckLakeInlinedDataInfo> &new_data,
+                                                    const vector<DuckLakeTableInfo> &new_tables,
+                                                    const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+	string batch_query;
 	if (new_data.empty()) {
-		return;
+		return batch_query;
 	}
 
 	auto context_ptr = transaction.context.lock();
@@ -1738,12 +1744,13 @@ WHERE table_id = %d AND schema_version=(
 		                                         SQLIdentifier(inlined_table_name), values);
 		batch_query += append_query;
 	}
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteNewInlinedDeletes(string &batch_query,
-                                                     const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
+string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
+	string batch_queries;
 	if (new_deletes.empty()) {
-		return;
+		return batch_queries;
 	}
 	for (auto &entry : new_deletes) {
 		// get a list of all deleted row-ids for this table
@@ -1755,7 +1762,7 @@ void DuckLakeMetadataManager::WriteNewInlinedDeletes(string &batch_query,
 			row_id_list += StringUtil::Format("(%d)", deleted_id);
 		}
 		// overwrite the snapshot for the old tags
-		batch_query += StringUtil::Format(R"(
+		batch_queries += StringUtil::Format(R"(
 WITH deleted_row_list(deleted_row_id) AS (
 VALUES %s
 )
@@ -1764,8 +1771,9 @@ SET end_snapshot = {SNAPSHOT_ID}
 FROM deleted_row_list
 WHERE row_id=deleted_row_id;
 )",
-		                                  row_id_list, entry.table_name);
+		                                    row_id_list, entry.table_name);
 	}
+	return batch_queries;
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {
@@ -2026,11 +2034,12 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 	return FromRelativePath(path, GetPath(table_id, {}, {}));
 }
 
-void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vector<DuckLakeFileInfo> &new_files,
-                                                const vector<DuckLakeTableInfo> &new_tables,
-                                                vector<DuckLakeSchemaInfo> &new_schemas_result) {
+string DuckLakeMetadataManager::WriteNewDataFiles(const vector<DuckLakeFileInfo> &new_files,
+                                                  const vector<DuckLakeTableInfo> &new_tables,
+                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
+	string batch_query;
 	if (new_files.empty()) {
-		return;
+		return batch_query;
 	}
 	string data_file_insert_query;
 	string column_stats_insert_query;
@@ -2103,21 +2112,22 @@ void DuckLakeMetadataManager::WriteNewDataFiles(string &batch_query, const vecto
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES %s;",
 		                                  partition_insert_query);
 	}
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::DropDataFiles(string &batch_query, const set<DataFileIndex> &dropped_files) {
-	FlushDrop(batch_query, "ducklake_data_file", "data_file_id", dropped_files);
+string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {
+	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
 
-void DuckLakeMetadataManager::DropDeleteFiles(string &batch_query, const set<DataFileIndex> &dropped_files) {
-	FlushDrop(batch_query, "ducklake_delete_file", "data_file_id", dropped_files);
+string DuckLakeMetadataManager::DropDeleteFiles(const set<DataFileIndex> &dropped_files) {
+	return FlushDrop("ducklake_delete_file", "data_file_id", dropped_files);
 }
 
-void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query, const vector<DuckLakeDeleteFileInfo> &new_files,
-                                                  const vector<DuckLakeTableInfo> &new_tables,
-                                                  vector<DuckLakeSchemaInfo> &new_schemas_result) {
+string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
+                                                    const vector<DuckLakeTableInfo> &new_tables,
+                                                    vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	if (new_files.empty()) {
-		return;
+		return {};
 	}
 	string delete_file_insert_query;
 	for (auto &file : new_files) {
@@ -2137,8 +2147,8 @@ void DuckLakeMetadataManager::WriteNewDeleteFiles(string &batch_query, const vec
 	}
 
 	// insert the data files
-	batch_query +=
-	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES %s;", delete_file_insert_query);
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES %s;",
+	                          delete_file_insert_query);
 }
 
 vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(optional_idx start_from) {
@@ -2178,8 +2188,7 @@ ORDER BY mapping_id, parent_column NULLS FIRST
 	return column_maps;
 }
 
-void DuckLakeMetadataManager::WriteNewColumnMappings(string &batch_query,
-                                                     const vector<DuckLakeColumnMappingInfo> &new_column_mappings) {
+string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings) {
 	string column_mapping_insert_query;
 	string name_map_insert_query;
 	for (auto &column_mapping : new_column_mappings) {
@@ -2202,13 +2211,14 @@ void DuckLakeMetadataManager::WriteNewColumnMappings(string &batch_query,
 			                       name_map_column.target_field_id.index, parent_column, is_partition);
 		}
 	}
+	string batch_query;
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column_mapping VALUES " + column_mapping_insert_query + ";";
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_name_mapping VALUES " + name_map_insert_query + ";";
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::InsertSnapshot(string &batch_query) {
-	batch_query +=
-	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+string DuckLakeMetadataManager::InsertSnapshot() {
+	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, NOW(), {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -2218,10 +2228,10 @@ static string SQLStringOrNull(const string &str) {
 	return KeywordHelper::WriteQuoted(str, '\'');
 }
 
-void DuckLakeMetadataManager::WriteSnapshotChanges(string &batch_query, const SnapshotChangeInfo &change_info,
-                                                   const DuckLakeSnapshotCommit &commit_info) {
+string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
+                                                     const DuckLakeSnapshotCommit &commit_info) {
 	// insert the snapshot changes
-	batch_query += StringUtil::Format(
+	return StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
 	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
@@ -2372,10 +2382,10 @@ GetNewPartitions(const vector<DuckLakePartitionInfo> &old_partitions,
 	return new_partition_map;
 }
 
-void DuckLakeMetadataManager::WriteNewPartitionKeys(string &batch_query, DuckLakeSnapshot commit_snapshot,
-                                                    const vector<DuckLakePartitionInfo> &new_partitions) {
+string DuckLakeMetadataManager::WriteNewPartitionKeys(DuckLakeSnapshot commit_snapshot,
+                                                      const vector<DuckLakePartitionInfo> &new_partitions) {
 	if (new_partitions.empty()) {
-		return;
+		return {};
 	}
 	auto catalog = GetCatalogForSnapshot(commit_snapshot);
 
@@ -2385,7 +2395,7 @@ void DuckLakeMetadataManager::WriteNewPartitionKeys(string &batch_query, DuckLak
 
 	auto new_partition_map = GetNewPartitions(catalog.partitions, new_partitions);
 	if (new_partition_map.empty()) {
-		return;
+		return {};
 	}
 	for (auto &new_partition : new_partition_map) {
 		// set old partition data as no longer valid
@@ -2395,7 +2405,7 @@ void DuckLakeMetadataManager::WriteNewPartitionKeys(string &batch_query, DuckLak
 		old_partition_table_ids += to_string(new_partition.second.table_id.index);
 		if (!new_partition.second.id.IsValid()) {
 			// dropping partition data - we don't need to do anything
-			return;
+			return {};
 		}
 		auto partition_id = new_partition.second.id.GetIndex();
 		if (!new_partition_values.empty()) {
@@ -2420,7 +2430,7 @@ SET end_snapshot = {SNAPSHOT_ID}
 WHERE table_id IN (%s) AND end_snapshot IS NULL
 ;)",
 	                                                 old_partition_table_ids);
-	batch_query += update_partition_query;
+	string batch_query = update_partition_query;
 
 	if (!new_partition_values.empty()) {
 		new_partition_values =
@@ -2432,11 +2442,12 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 		    "INSERT INTO {METADATA_CATALOG}.ducklake_partition_column VALUES " + insert_partition_cols + ";";
 		batch_query += insert_partition_cols;
 	}
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteNewTags(string &batch_query, const vector<DuckLakeTagInfo> &new_tags) {
+string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
 	if (new_tags.empty()) {
-		return;
+		return {};
 	}
 	// update old tags (if there were any)
 	// get a list of all tags
@@ -2449,7 +2460,7 @@ void DuckLakeMetadataManager::WriteNewTags(string &batch_query, const vector<Duc
 	}
 
 	// overwrite the snapshot for the old tags
-	batch_query += StringUtil::Format(R"(
+	string batch_query = StringUtil::Format(R"(
 WITH overwritten_tags(tid, key) AS (
 VALUES %s
 )
@@ -2458,7 +2469,7 @@ SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
 WHERE object_id=tid
 ;)",
-	                                  tags_list);
+	                                        tags_list);
 
 	// now insert the new tags
 	string new_tag_query;
@@ -2472,11 +2483,12 @@ WHERE object_id=tid
 
 	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_tag VALUES " + new_tag_query + ";";
 	batch_query += new_tag_query;
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteNewColumnTags(string &batch_query, const vector<DuckLakeColumnTagInfo> &new_tags) {
+string DuckLakeMetadataManager::WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags) {
 	if (new_tags.empty()) {
-		return;
+		return {};
 	}
 	// update old tags (if there were any)
 	// get a list of all tags
@@ -2489,7 +2501,7 @@ void DuckLakeMetadataManager::WriteNewColumnTags(string &batch_query, const vect
 	}
 
 	// overwrite the snapshot for the old tags
-	batch_query += StringUtil::Format(R"(
+	string batch_query = StringUtil::Format(R"(
 WITH overwritten_tags(tid, cid, key) AS (
 VALUES %s
 )
@@ -2498,7 +2510,7 @@ SET end_snapshot = {SNAPSHOT_ID}
 FROM overwritten_tags
 WHERE table_id=tid AND column_id=cid
 ;)",
-	                                  tags_list);
+	                                        tags_list);
 
 	// now insert the new tags
 	string new_tag_query;
@@ -2512,9 +2524,10 @@ WHERE table_id=tid AND column_id=cid
 
 	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_column_tag VALUES " + new_tag_query + ";";
 	batch_query += new_tag_query;
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::UpdateGlobalTableStats(string &batch_query, const DuckLakeGlobalStatsInfo &stats) {
+string DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats) {
 	string column_stats_values;
 	for (auto &col_stats : stats.column_stats) {
 		if (!column_stats_values.empty()) {
@@ -2540,6 +2553,7 @@ void DuckLakeMetadataManager::UpdateGlobalTableStats(string &batch_query, const 
 		    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s)", stats.table_id.index, col_stats.column_id.index,
 		                       contains_null, contains_nan, min_val, max_val, extra_stats_val);
 	}
+	string batch_query;
 
 	if (!stats.initialized) {
 		// stats have not been initialized yet - insert them
@@ -2565,6 +2579,7 @@ WHERE table_id=tid AND column_id=cid;
 )",
 		                                  column_stats_values);
 	}
+	return batch_query;
 }
 
 template <class T>
@@ -2731,16 +2746,15 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 	throw InternalException("Invalid result for GetNextColumnId");
 }
 
-void DuckLakeMetadataManager::WriteMergeAdjacent(string &batch_query,
-                                                 const vector<DuckLakeCompactedFileInfo> &compactions) {
+string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions) {
 	if (compactions.empty()) {
-		return;
+		return {};
 	}
 	string deleted_file_ids;
 	string scheduled_deletions;
 	for (auto &compaction : compactions) {
 		D_ASSERT(!compaction.path.empty());
-		// add data file id to list of files to delete
+		// add a data file id to list of files to delete
 		if (!deleted_file_ids.empty()) {
 			deleted_file_ids += ", ";
 		}
@@ -2758,6 +2772,7 @@ void DuckLakeMetadataManager::WriteMergeAdjacent(string &batch_query,
 	// including all other info (stats, delete files, partition values, etc)
 	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
 	                                      "ducklake_file_partition_value"};
+	string batch_query;
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -2768,11 +2783,11 @@ WHERE data_file_id IN (%s);
 	// add the files we cleared to the deletion schedule
 	batch_query +=
 	    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
+	return batch_query;
 }
-void DuckLakeMetadataManager::WriteDeleteRewrites(string &batch_query,
-                                                  const vector<DuckLakeCompactedFileInfo> &compactions) {
+string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions) {
 	if (compactions.empty()) {
-		return;
+		return {};
 	}
 	// Delete Rewrites only deletes the deletion files.
 	string deleted_file_ids;
@@ -2790,6 +2805,7 @@ void DuckLakeMetadataManager::WriteDeleteRewrites(string &batch_query,
 		}
 	}
 
+	string batch_query;
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
@@ -2841,18 +2857,16 @@ void DuckLakeMetadataManager::WriteDeleteRewrites(string &batch_query,
 		batch_query +=
 		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
 	}
+	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteCompactions(string &batch_query,
-                                               const vector<DuckLakeCompactedFileInfo> &compactions,
-                                               CompactionType type) {
+string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,
+                                                 CompactionType type) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
-		WriteMergeAdjacent(batch_query, compactions);
-		return;
+		return WriteMergeAdjacent(compactions);
 	case CompactionType::REWRITE_DELETES:
-		WriteDeleteRewrites(batch_query, compactions);
-		return;
+		return WriteDeleteRewrites(compactions);
 	default:
 		throw InternalException("DuckLakeMetadataManager::WriteCompactions: CompactionType is not accepted");
 	}
@@ -3084,9 +3098,9 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 	}
 }
 
-void DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot, string &batch_query) {
-	batch_query += StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu,%llu);)",
-	                                  snapshot.snapshot_id, snapshot.schema_version);
+string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot) {
+	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu,%llu);)",
+	                          snapshot.snapshot_id, snapshot.schema_version);
 }
 
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {

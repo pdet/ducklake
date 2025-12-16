@@ -157,8 +157,7 @@ private:
 	void CleanupFiles();
 	void FlushChanges();
 	void FlushSettingChanges();
-	void CommitChanges(DuckLakeCommitState &commit_state, string &batch_queries,
-	                   TransactionChangeInformation &transaction_changes);
+	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);
 	void FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name, const string &id_name,
 	               unordered_set<idx_t> &dropped_entries);
@@ -173,12 +172,11 @@ private:
 	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state);
 	vector<DuckLakeDeleteFileInfo> GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 	                                                 set<DataFileIndex> &overwritten_delete_files) const;
-	void UpdateGlobalTableStats(string &batch_query, TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
+	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	void CheckForConflicts(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot);
-	void WriteSnapshotChanges(string &batch_query, DuckLakeCommitState &commit_state,
-	                          TransactionChangeInformation &changes);
+	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges();
 	void GetBatchQueries(string &batch_queries, TransactionChangeInformation &changes);
