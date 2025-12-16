@@ -50,10 +50,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
-
-	string pg_query = "CALL postgres_execute(" + catalog_literal + ", ";
-	pg_query += "$$" + query + "$$);";
-	return connection.Query(pg_query);
+	return connection.Query(StringUtil::Format("CALL postgres_execute(%s, %s)", catalog_literal, SQLString(query)));
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
