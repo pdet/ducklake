@@ -61,6 +61,10 @@ public:
 	DuckLakeMetadataManager &GetMetadataManager() {
 		return *metadata_manager;
 	}
+
+	DuckLakeSnapshotCommit &GetCommitInfo() {
+		return commit_info;
+	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
 	Connection &GetConnection();
@@ -157,7 +161,7 @@ private:
 	void CleanupFiles();
 	void FlushChanges();
 	void FlushSettingChanges();
-	void CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
+	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);
 	void FlushDrop(DuckLakeSnapshot commit_snapshot, const string &metadata_table_name, const string &id_name,
 	               unordered_set<idx_t> &dropped_entries);
@@ -169,14 +173,14 @@ private:
 	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
 	DuckLakeFileInfo GetNewDataFile(DuckLakeDataFile &file, DuckLakeSnapshot &commit_snapshot, TableIndex table_id,
 	                                optional_idx row_id_start);
-	NewDataInfo GetNewDataFiles(DuckLakeCommitState &commit_state);
+	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state);
 	vector<DuckLakeDeleteFileInfo> GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 	                                                 set<DataFileIndex> &overwritten_delete_files) const;
-	void UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
+	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
 	void CheckForConflicts(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot);
-	void WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
+	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges();
 	void GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
