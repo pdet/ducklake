@@ -1318,19 +1318,24 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 				if (!compacted_file.delete_files.empty()) {
 					row_id_limit -= compacted_file.delete_files.back().row_count;
 				}
-				if (!compacted_file.partial_files.empty()) {
-					// we have existing partial file info
-					// we need to shift the row counts by the rows we have already written
-					for (auto &partial_info : compacted_file.partial_files) {
-						auto new_info = partial_info;
-						new_info.max_row_count += previous_row_limit;
-						new_file.partial_file_info.push_back(new_info);
+				// For REWRITE_DELETES, do NOT carry forward partial_file_info from source files.
+				// The rewritten file's begin_snapshot is set to the delete snapshot, so time travel
+				// to earlier snapshots will read from the original file (which retains its partial_file_info).
+				if (type == CompactionType::MERGE_ADJACENT_TABLES) {
+					if (!compacted_file.partial_files.empty()) {
+						// we have existing partial file info
+						// we need to shift the row counts by the rows we have already written
+						for (auto &partial_info : compacted_file.partial_files) {
+							auto new_info = partial_info;
+							new_info.max_row_count += previous_row_limit;
+							new_file.partial_file_info.push_back(new_info);
+						}
+					} else if (compaction.source_files.size() > 1) {
+						DuckLakePartialFileInfo partial_info;
+						partial_info.snapshot_id = compacted_file.file.begin_snapshot;
+						partial_info.max_row_count = row_id_limit;
+						new_file.partial_file_info.push_back(partial_info);
 					}
-				} else if (compaction.source_files.size() > 1) {
-					DuckLakePartialFileInfo partial_info;
-					partial_info.snapshot_id = compacted_file.file.begin_snapshot;
-					partial_info.max_row_count = row_id_limit;
-					new_file.partial_file_info.push_back(partial_info);
 				}
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
