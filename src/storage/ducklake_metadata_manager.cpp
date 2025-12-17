@@ -2268,7 +2268,7 @@ SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapsh
         FROM {METADATA_CATALOG}.ducklake_snapshot
     );
 	)";
-	auto result = transaction.Query(start_snapshot, query);
+	auto result = Query(start_snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and snapshot "
 		                               "changes for conflict resolution:");
