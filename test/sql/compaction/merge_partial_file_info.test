@@ -1,5 +1,5 @@
-# name: test/sql/compaction/reproduce_issue.test
-# description: Reproduce issue with REWRITE_DELETES and partial file info
+# name: test/sql/compaction/merge_partial_file_info.test
+# description: Reproduce issue ##551 with REWRITE_DELETES and partial file info
 # group: [compaction]
 
 require ducklake
@@ -83,7 +83,6 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't') WHERE delete_file IS N
 ----
 3
 
-# Only merged BC has partial_file_info
 query I
 SELECT partial_file_info FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL;
 ----
