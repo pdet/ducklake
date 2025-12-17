@@ -529,16 +529,18 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	}
 }
 
-void DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
-                                            const TransactionChangeInformation &changes) {
-
+DuckLakeSnapshot DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
+                                                        const TransactionChangeInformation &changes) {
+	DuckLakeSnapshot snapshot;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = metadata_manager->GetChangesMadeAfterSnapshot(transaction_snapshot);
+	auto changes_made = metadata_manager->GetSnapshotAndChangesMadeAfterSnapshot(transaction_snapshot, snapshot);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot);
+
+	return snapshot;
 }
 
 vector<DuckLakeSchemaInfo> DuckLakeTransaction::GetNewSchemas(DuckLakeCommitState &commit_state) {
@@ -1405,19 +1407,20 @@ void DuckLakeTransaction::FlushChanges() {
 	DuckLakeSnapshot commit_snapshot;
 
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
-		commit_snapshot = GetSnapshot();
-		commit_snapshot.snapshot_id++;
-		if (SchemaChangesMade()) {
-			// we changed the schema - need to get a new schema version
-			commit_snapshot.schema_version++;
-		}
 		bool can_retry;
 		try {
 			can_retry = false;
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				CheckForConflicts(transaction_snapshot, transaction_changes);
+				commit_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+			} else {
+				commit_snapshot = GetSnapshot();
+			}
+			commit_snapshot.snapshot_id++;
+			if (SchemaChangesMade()) {
+				// we changed the schema - need to get a new schema version
+				commit_snapshot.schema_version++;
 			}
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);

@@ -2241,21 +2241,41 @@ string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &c
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
 }
 
-SnapshotChangeInfo DuckLakeMetadataManager::GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot) {
+SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot,
+                                                                                   DuckLakeSnapshot &current_snapshot) {
 	// get all changes made to the system after the snapshot was started
 	auto result = transaction.Query(start_snapshot, R"(
-	SELECT COALESCE(STRING_AGG(changes_made), '')
-	FROM {METADATA_CATALOG}.ducklake_snapshot_changes
-	WHERE snapshot_id > {SNAPSHOT_ID}
+    SELECT
+        snapshot_id,
+        schema_version,
+        next_catalog_id,
+        next_file_id,
+    COALESCE(
+        (
+            SELECT STRING_AGG(changes_made, '')
+            FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
+            WHERE c.snapshot_id > {SNAPSHOT_ID}
+        ),
+        ''
+    ) AS changes
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE snapshot_id = (
+        SELECT MAX(snapshot_id)
+        FROM {METADATA_CATALOG}.ducklake_snapshot
+    );
 	)");
 	if (result->HasError()) {
-		result->GetErrorObject().Throw(
-		    "Failed to commit DuckLake transaction - failed to get snapshot changes for conflict resolution:");
+		result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and snapshot "
+		                               "changes for conflict resolution:");
 	}
 	// parse changes made by other transactions
 	SnapshotChangeInfo change_info;
 	for (auto &row : *result) {
-		change_info.changes_made = row.GetValue<string>(0);
+		current_snapshot.snapshot_id = row.GetValue<idx_t>(0);
+		current_snapshot.schema_version = row.GetValue<idx_t>(1);
+		current_snapshot.next_catalog_id = row.GetValue<idx_t>(2);
+		current_snapshot.next_file_id = row.GetValue<idx_t>(3);
+		change_info.changes_made = row.GetValue<string>(4);
 	}
 	return change_info;
 }

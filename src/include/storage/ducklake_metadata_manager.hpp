@@ -166,7 +166,8 @@ public:
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
-	virtual SnapshotChangeInfo GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot);
+	virtual SnapshotChangeInfo GetSnapshotAndChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot,
+	                                                                  DuckLakeSnapshot &current_snapshot);
 	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
