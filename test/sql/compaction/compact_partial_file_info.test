@@ -142,7 +142,7 @@ SELECT * FROM (
 06_count_after_D	5210
 07_count_after_E	5220
 08_count_after_DE	5220
-09_count_after_delete_from_A 	320
+09_count_after_delete_from_A	320
 10_count_after_delete_from_BC	170
 11_count_after_rewrite	170
 12_final	170
