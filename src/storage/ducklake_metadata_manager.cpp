@@ -454,38 +454,29 @@ ORDER BY part.table_id, partition_id, partition_key_index
 	return catalog;
 }
 
-vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
-	// query the most recent stats
-	auto result = transaction.Query(snapshot, R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
-FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
-WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
-ORDER BY table_id;
-)");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
+vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result, idx_t from_column = 0) {
+	if (result.HasError()) {
+		result.GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
 	}
 	vector<DuckLakeGlobalStatsInfo> global_stats;
-	for (auto &row : *result) {
-		auto table_id = TableIndex(row.GetValue<uint64_t>(0));
+	for (auto &row : result) {
+		auto table_id = TableIndex(row.GetValue<uint64_t>(0 + from_column));
 		if (global_stats.empty() || global_stats.back().table_id != table_id) {
 			// new stats
 			DuckLakeGlobalStatsInfo new_entry;
-
 			// set up the table-level stats
 			new_entry.table_id = table_id;
 			new_entry.initialized = true;
-			new_entry.record_count = row.GetValue<uint64_t>(2);
-			new_entry.next_row_id = row.GetValue<uint64_t>(3);
-			new_entry.table_size_bytes = row.GetValue<uint64_t>(4);
+			new_entry.record_count = row.GetValue<uint64_t>(2 + from_column);
+			new_entry.next_row_id = row.GetValue<uint64_t>(3 + from_column);
+			new_entry.table_size_bytes = row.GetValue<uint64_t>(4 + from_column);
 			global_stats.push_back(std::move(new_entry));
 		}
 		auto &stats_entry = global_stats.back();
 
 		DuckLakeGlobalColumnStatsInfo column_stats;
-		column_stats.column_id = FieldIndex(row.GetValue<uint64_t>(1));
-		static constexpr const idx_t COLUMN_STATS_START = 5;
+		column_stats.column_id = FieldIndex(row.GetValue<uint64_t>(1 + from_column));
+		const idx_t COLUMN_STATS_START = 5 + from_column;
 		if (row.IsNull(COLUMN_STATS_START)) {
 			column_stats.has_contains_null = false;
 		} else {
@@ -521,6 +512,18 @@ ORDER BY table_id;
 		stats_entry.column_stats.push_back(std::move(column_stats));
 	}
 	return global_stats;
+}
+
+vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
+	// query the most recent stats
+	auto result = transaction.Query(snapshot, R"(
+SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
+FROM {METADATA_CATALOG}.ducklake_table_stats
+LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
+WHERE record_count IS NOT NULL AND file_size_bytes IS NOT NULL
+ORDER BY table_id;
+)");
+	return TransformGlobalStats(*result);
 }
 
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
@@ -2245,30 +2248,67 @@ string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &c
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
 }
 
-SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot,
-                                                                                   DuckLakeSnapshot &current_snapshot) {
+SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
+                                                                          SnapshotAndStats &current_snapshot) {
 	// get all changes made to the system after the snapshot was started
-	string query = R"(
+	string query = R"( WITH latest_snapshot AS (
     SELECT
         snapshot_id,
         schema_version,
         next_catalog_id,
         next_file_id,
-    COALESCE(
-        (
-            SELECT STRING_AGG(changes_made, '')
-            FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
-            WHERE c.snapshot_id > {SNAPSHOT_ID}
-        ),
-        ''
-    ) AS changes
+        COALESCE(
+            (
+                SELECT STRING_AGG(changes_made, '')
+                FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
+                WHERE c.snapshot_id > {SNAPSHOT_ID}
+            ),
+            ''
+        ) AS changes
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id = (
         SELECT MAX(snapshot_id)
         FROM {METADATA_CATALOG}.ducklake_snapshot
-    );
+    )
+)
+SELECT
+    s.snapshot_id,
+    s.schema_version,
+    s.next_catalog_id,
+    s.next_file_id,
+    s.changes,
+    t.table_id,
+    t.column_id,
+    t.record_count,
+    t.next_row_id,
+    t.file_size_bytes,
+    t.contains_null,
+    t.contains_nan,
+    t.min_value,
+    t.max_value,
+    t.extra_stats
+FROM latest_snapshot s
+LEFT JOIN LATERAL (
+    SELECT
+        table_id,
+        column_id,
+        record_count,
+        next_row_id,
+        file_size_bytes,
+        contains_null,
+        contains_nan,
+        min_value,
+        max_value,
+        extra_stats
+    FROM {METADATA_CATALOG}.ducklake_table_stats
+    LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
+        USING (table_id)
+    WHERE record_count IS NOT NULL
+      AND file_size_bytes IS NOT NULL
+) t ON true
+ORDER BY t.table_id;
 	)";
-	auto result = transaction.Query(start_snapshot, query);
+	auto result = Query(start_snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and snapshot "
 		                               "changes for conflict resolution:");
@@ -2276,12 +2316,14 @@ SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapsh
 	// parse changes made by other transactions
 	SnapshotChangeInfo change_info;
 	for (auto &row : *result) {
-		current_snapshot.snapshot_id = row.GetValue<idx_t>(0);
-		current_snapshot.schema_version = row.GetValue<idx_t>(1);
-		current_snapshot.next_catalog_id = row.GetValue<idx_t>(2);
-		current_snapshot.next_file_id = row.GetValue<idx_t>(3);
+		current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
+		current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
+		current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
+		current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
 		change_info.changes_made = row.GetValue<string>(4);
+		break;
 	}
+	current_snapshot.stats = TransformGlobalStats(*result, 5);
 	return change_info;
 }
 

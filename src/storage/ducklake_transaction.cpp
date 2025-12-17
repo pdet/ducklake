@@ -529,18 +529,18 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 	}
 }
 
-DuckLakeSnapshot DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
+SnapshotAndStats DuckLakeTransaction::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                                         const TransactionChangeInformation &changes) {
-	DuckLakeSnapshot snapshot;
+	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = metadata_manager->GetSnapshotAndChangesMadeAfterSnapshot(transaction_snapshot, snapshot);
+	auto changes_made = metadata_manager->GetSnapshotAndStatsAndChanges(transaction_snapshot, snapshot_and_stats);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot);
 
-	return snapshot;
+	return snapshot_and_stats;
 }
 
 vector<DuckLakeSchemaInfo> DuckLakeTransaction::GetNewSchemas(DuckLakeCommitState &commit_state) {
@@ -1005,9 +1005,16 @@ struct NewDataInfo {
 	vector<DuckLakeInlinedDataInfo> new_inlined_data;
 };
 
-NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state) {
+NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
+                                                 optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
 	NewDataInfo result;
-
+	// get the global table stats
+	DuckLakeNewGlobalStats new_globals;
+	unique_ptr<DuckLakeStats> dl_stats;
+	if (stats) {
+		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		dl_stats = ducklake_catalog.ConstructStatsMap(*stats, schema);
+	}
 	for (auto &entry : table_data_changes) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		if (table_id.IsTransactionLocal()) {
@@ -1018,9 +1025,16 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			// no new data - skip this entry
 			continue;
 		}
-		// get the global table stats
-		DuckLakeNewGlobalStats new_globals;
-		auto current_stats = ducklake_catalog.GetTableStats(*this, table_id);
+		optional_ptr<DuckLakeTableStats> current_stats;
+		if (dl_stats) {
+			auto dl_stats_entry = dl_stats->table_stats.find(table_id);
+			if (dl_stats_entry != dl_stats->table_stats.end()) {
+				current_stats = dl_stats_entry->second.get();
+			}
+		} else {
+			current_stats = ducklake_catalog.GetTableStats(*this, table_id);
+		}
+
 		if (current_stats) {
 			new_globals.stats = *current_stats;
 			new_globals.initialized = true;
@@ -1196,7 +1210,8 @@ struct CompactionInformation {
 };
 
 string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
-                                          TransactionChangeInformation &transaction_changes) {
+                                          TransactionChangeInformation &transaction_changes,
+                                          optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
 
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
@@ -1258,7 +1273,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 	// write new data / data files
 	if (!table_data_changes.empty()) {
-		auto result = GetNewDataFiles(batch_queries, commit_state);
+		auto result = GetNewDataFiles(batch_queries, commit_state, stats);
 		batch_queries += metadata_manager->WriteNewDataFiles(result.new_files, new_tables_result, new_schemas_result);
 		batch_queries += metadata_manager->WriteNewInlinedData(commit_snapshot, result.new_inlined_data,
 		                                                       new_tables_result, new_inlined_data_tables_result);
@@ -1404,8 +1419,9 @@ void DuckLakeTransaction::FlushChanges() {
 
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
-	DuckLakeSnapshot commit_snapshot;
-
+	SnapshotAndStats commit_stats_snapshot;
+	auto &commit_snapshot = commit_stats_snapshot.snapshot;
+	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		bool can_retry;
 		try {
@@ -1413,9 +1429,10 @@ void DuckLakeTransaction::FlushChanges() {
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, transaction_changes);
+				stats = &commit_stats_snapshot.stats;
 			} else {
-				commit_snapshot = GetSnapshot();
+				commit_stats_snapshot.snapshot = GetSnapshot();
 			}
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
@@ -1424,7 +1441,7 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			can_retry = true;
 			DuckLakeCommitState commit_state(commit_snapshot);
-			string batch_queries = CommitChanges(commit_state, transaction_changes);
+			string batch_queries = CommitChanges(commit_state, transaction_changes, stats);
 
 			// write the new snapshot
 			batch_queries += metadata_manager->InsertSnapshot();
