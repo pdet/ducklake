@@ -1430,6 +1430,10 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapsh
 	return transaction.Query(snapshot, query);
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
+	return transaction.Query(snapshot, query);
+}
+
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas) {
 	if (new_schemas.empty()) {
 		throw InternalException("No schemas to create - should be handled elsewhere");
@@ -2244,7 +2248,7 @@ string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &c
 SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot,
                                                                                    DuckLakeSnapshot &current_snapshot) {
 	// get all changes made to the system after the snapshot was started
-	auto result = transaction.Query(start_snapshot, R"(
+	string query = R"(
     SELECT
         snapshot_id,
         schema_version,
@@ -2263,7 +2267,8 @@ SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndChangesMadeAfterSnapsh
         SELECT MAX(snapshot_id)
         FROM {METADATA_CATALOG}.ducklake_snapshot
     );
-	)");
+	)";
+	auto result = transaction.Query(start_snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and snapshot "
 		                               "changes for conflict resolution:");
