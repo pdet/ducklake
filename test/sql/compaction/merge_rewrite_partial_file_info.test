@@ -1,4 +1,4 @@
-# name: test/sql/compaction/merge_partial_file_info.test
+# name: test/sql/compaction/merge_rewrite_partial_file_info.test
 # description: Reproduce issue ##551 with REWRITE_DELETES and partial file info
 # group: [compaction]
 
