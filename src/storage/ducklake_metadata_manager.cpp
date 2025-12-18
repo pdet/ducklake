@@ -459,7 +459,12 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result, idx_t 
 		result.GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
 	}
 	vector<DuckLakeGlobalStatsInfo> global_stats;
+	bool first_row = true;
 	for (auto &row : result) {
+		if (from_column !=0 && first_row) {
+			first_row = false;
+			continue;
+		}
 		auto table_id = TableIndex(row.GetValue<uint64_t>(0 + from_column));
 		if (global_stats.empty() || global_stats.back().table_id != table_id) {
 			// new stats
@@ -2251,62 +2256,54 @@ string DuckLakeMetadataManager::WriteSnapshotChanges(const SnapshotChangeInfo &c
 SnapshotChangeInfo DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
                                                                           SnapshotAndStats &current_snapshot) {
 	// get all changes made to the system after the snapshot was started
-	string query = R"( WITH latest_snapshot AS (
-    SELECT
-        snapshot_id,
-        schema_version,
-        next_catalog_id,
-        next_file_id,
-        COALESCE(
-            (
-                SELECT STRING_AGG(changes_made, '')
-                FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
-                WHERE c.snapshot_id > {SNAPSHOT_ID}
-            ),
-            ''
-        ) AS changes
+	string query = R"(
+SELECT
+    snapshot_id,
+    schema_version,
+    next_catalog_id,
+    next_file_id,
+    COALESCE((
+            SELECT STRING_AGG(changes_made, '')
+            FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
+            WHERE c.snapshot_id > {SNAPSHOT_ID}
+            ),'') AS changes,
+    NULL AS table_id,
+    NULL AS column_id,
+    NULL AS record_count,
+    NULL AS next_row_id,
+    NULL AS file_size_bytes,
+    NULL AS contains_null,
+    NULL AS contains_nan,
+    NULL AS min_value,
+    NULL AS max_value,
+    NULL AS extra_stats
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id = (
         SELECT MAX(snapshot_id)
-        FROM {METADATA_CATALOG}.ducklake_snapshot
-    )
-)
+        FROM {METADATA_CATALOG}.ducklake_snapshot)
+UNION ALL
 SELECT
-    s.snapshot_id,
-    s.schema_version,
-    s.next_catalog_id,
-    s.next_file_id,
-    s.changes,
-    t.table_id,
-    t.column_id,
-    t.record_count,
-    t.next_row_id,
-    t.file_size_bytes,
-    t.contains_null,
-    t.contains_nan,
-    t.min_value,
-    t.max_value,
-    t.extra_stats
-FROM latest_snapshot s
-LEFT JOIN LATERAL (
-    SELECT
-        table_id,
-        column_id,
-        record_count,
-        next_row_id,
-        file_size_bytes,
-        contains_null,
-        contains_nan,
-        min_value,
-        max_value,
-        extra_stats
-    FROM {METADATA_CATALOG}.ducklake_table_stats
-    LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
-        USING (table_id)
-    WHERE record_count IS NOT NULL
-      AND file_size_bytes IS NOT NULL
-) t ON true
-ORDER BY t.table_id;
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    table_id,
+    column_id,
+    record_count,
+    next_row_id,
+    file_size_bytes,
+    contains_null,
+    contains_nan,
+    min_value,
+    max_value,
+    extra_stats
+FROM {METADATA_CATALOG}.ducklake_table_stats
+LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
+    USING (table_id)
+WHERE record_count IS NOT NULL
+    AND file_size_bytes IS NOT NULL
+ORDER BY table_id NULLS FIRST;
 	)";
 	auto result = Query(start_snapshot, query);
 	if (result->HasError()) {
