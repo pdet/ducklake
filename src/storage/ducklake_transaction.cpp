@@ -1025,6 +1025,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			// no new data - skip this entry
 			continue;
 		}
+		// get the global table stats
+		DuckLakeNewGlobalStats new_globals;
 		optional_ptr<DuckLakeTableStats> current_stats;
 		if (dl_stats) {
 			auto dl_stats_entry = dl_stats->table_stats.find(table_id);
