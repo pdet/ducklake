@@ -34,6 +34,8 @@ class QueryResult;
 class FileSystem;
 class ConstantFilter;
 
+struct SnapshotAndStats;
+
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
 struct CTERequirement {
@@ -168,9 +170,9 @@ public:
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
-	virtual SnapshotChangeInfo GetSnapshotAndChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot,
-	                                                                  DuckLakeSnapshot &current_snapshot);
-	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot);
+	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
+	                                                         SnapshotAndStats &current_snapshot);
+	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);
