@@ -20,8 +20,13 @@ public:
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
+	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
+
 protected:
 	string GetLatestSnapshotQuery() const override;
+
+private:
+	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
 };
 
 } // namespace duckdb
