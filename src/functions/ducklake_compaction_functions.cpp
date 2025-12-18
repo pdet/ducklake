@@ -141,7 +141,8 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, uint64_t max_files);
+	                  Binder &binder, TableIndex table_id, uint64_t max_files, optional_idx min_file_size,
+	                  optional_idx max_file_size);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                  Binder &binder, TableIndex table_id, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
@@ -155,14 +156,18 @@ private:
 	TableIndex table_id;
 	double delete_threshold = 0.95;
 	optional_idx max_files;
+	optional_idx min_file_size;
+	optional_idx max_file_size;
 
 	CompactionType type;
 };
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, uint64_t max_files)
+                                     Binder &binder, TableIndex table_id, uint64_t max_files,
+                                     optional_idx min_file_size_p, optional_idx max_file_size_p)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      max_files(max_files), type(CompactionType::MERGE_ADJACENT_TABLES) {
+      max_files(max_files), min_file_size(min_file_size_p), max_file_size(max_file_size_p),
+      type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
@@ -220,10 +225,17 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
+	// determine the effective max file size threshold for filtering
+	idx_t effective_max_file_size = max_file_size.IsValid() ? max_file_size.GetIndex() : target_file_size;
 	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
 		auto &candidate = files[file_idx];
-		if (candidate.file.data.file_size_bytes >= target_file_size) {
-			// this file by itself exceeds the threshold - skip merging
+		idx_t file_size = candidate.file.data.file_size_bytes;
+		// skip files below the minimum size threshold
+		if (min_file_size.IsValid() && file_size < min_file_size.GetIndex()) {
+			continue;
+		}
+		// skip files at or above the maximum size threshold
+		if (file_size >= effective_max_file_size) {
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
@@ -261,21 +273,21 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// check if we can merge this file with subsequent files
 			idx_t current_file_size = 0;
 			idx_t compaction_idx;
-			for (compaction_idx = start_idx; compaction_idx < candidate_list.size(); compaction_idx++) {
-				if (current_file_size >= target_file_size) {
-					// we hit the target size already - stop
-					break;
-				}
-				auto candidate_idx = candidate_list[compaction_idx];
-				auto &candidate = files[candidate_idx];
-				idx_t file_size = candidate.file.data.file_size_bytes;
-				if (file_size >= target_file_size) {
-					// don't consider merging if the file is larger than the target size
-					break;
-				}
-				// this file can be compacted along with the neighbors
-				current_file_size += file_size;
+		for (compaction_idx = start_idx; compaction_idx < candidate_list.size(); compaction_idx++) {
+			if (current_file_size >= target_file_size) {
+				// we hit the target size already - stop
+				break;
 			}
+			auto candidate_idx = candidate_list[compaction_idx];
+			auto &candidate = files[candidate_idx];
+			idx_t file_size = candidate.file.data.file_size_bytes;
+			if (file_size >= effective_max_file_size) {
+				// don't consider merging if the file is larger than the max file size threshold
+				break;
+			}
+			// this file can be compacted along with the neighbors
+			current_file_size += file_size;
+		}
 
 			if (start_idx < compaction_idx) {
 				idx_t compaction_file_count = compaction_idx - start_idx;
@@ -496,11 +508,12 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
-                               uint64_t max_files, vector<unique_ptr<LogicalOperator>> &compactions) {
+                               uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
+                               vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            max_files);
+		                            max_files, min_file_size, max_file_size);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
@@ -546,6 +559,33 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 			throw BinderException("The max_compacted_files option must be greater than zero.");
 		}
 	}
+
+	optional_idx min_file_size;
+	auto min_file_size_entry = input.named_parameters.find("min_file_size");
+	if (min_file_size_entry != input.named_parameters.end()) {
+		if (min_file_size_entry->second.IsNull()) {
+			throw BinderException("The min_file_size option must be a non-null integer.");
+		}
+		min_file_size = UBigIntValue::Get(min_file_size_entry->second);
+	}
+
+	optional_idx max_file_size;
+	auto max_file_size_entry = input.named_parameters.find("max_file_size");
+	if (max_file_size_entry != input.named_parameters.end()) {
+		if (max_file_size_entry->second.IsNull()) {
+			throw BinderException("The max_file_size option must be a non-null integer.");
+		}
+		max_file_size = UBigIntValue::Get(max_file_size_entry->second);
+		if (max_file_size.GetIndex() == 0) {
+			throw BinderException("The max_file_size option must be greater than zero.");
+		}
+	}
+
+	// Validate that min_file_size < max_file_size if both are set
+	if (min_file_size.IsValid() && max_file_size.IsValid() && min_file_size.GetIndex() >= max_file_size.GetIndex()) {
+		throw BinderException("The min_file_size must be less than max_file_size.");
+	}
+
 	if (input.inputs.size() == 1) {
 		if (schema.empty() && table.empty()) {
 			// No default schema/table, we will perform rewrites on deletes in the whole database
@@ -555,7 +595,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					if (entry.type == CatalogType::TABLE_ENTRY) {
 						auto &cur_table = entry.Cast<DuckLakeTableEntry>();
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
 					}
 				});
 			}
@@ -568,7 +608,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 				if (entry.type == CatalogType::TABLE_ENTRY) {
 					auto &cur_table = entry.Cast<DuckLakeTableEntry>();
 					GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold,
-					                   max_files, compactions);
+					                   max_files, min_file_size, max_file_size, compactions);
 				}
 			});
 			return GenerateCompactionOperator(input, bind_index, compactions);
@@ -587,7 +627,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	auto table_entry = catalog.GetEntry(context, schema, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold, max_files,
-	                   compactions);
+	                   min_file_size, max_file_size, compactions);
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
@@ -604,6 +644,8 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 	for (auto &type : at_types) {
 		TableFunction function("ducklake_merge_adjacent_files", type, nullptr, nullptr, nullptr);
 		function.bind_operator = MergeAdjacentFilesBind;
+		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
+		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 			function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
