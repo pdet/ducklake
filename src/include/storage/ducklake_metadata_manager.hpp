@@ -172,7 +172,7 @@ public:
 	virtual string UpdateGlobalTableStats(const DuckLakeGlobalStatsInfo &stats);
 	virtual SnapshotChangeInfo GetSnapshotAndStatsAndChanges(DuckLakeSnapshot start_snapshot,
 	                                                         SnapshotAndStats &current_snapshot);
-	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot);
+	SnapshotDeletedFromFiles GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const;
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 	virtual idx_t GetNextColumnId(TableIndex table_id);

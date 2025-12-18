@@ -275,8 +275,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 		} else {
 			// path is provided - load it
 			DuckLakePath path;
-			path.path = row.template GetValue<string>(3);
-			path.path_is_relative = row.template GetValue<bool>(4);
+			path.path = row.GetValue<string>(3);
+			path.path_is_relative = row.GetValue<bool>(4);
 
 			schema.path = FromRelativePath(path);
 		}
@@ -350,8 +350,8 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			} else {
 				// path is provided - load it
 				DuckLakePath path;
-				path.path = row.template GetValue<string>(6);
-				path.path_is_relative = row.template GetValue<bool>(7);
+				path.path = row.GetValue<string>(6);
+				path.path_is_relative = row.GetValue<bool>(7);
 
 				table_info.path = FromRelativePath(path, schema.path);
 			}
@@ -454,68 +454,76 @@ ORDER BY part.table_id, partition_id, partition_key_index
 	return catalog;
 }
 
-vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result, idx_t from_column = 0) {
+template <class ROW>
+void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0) {
+	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
+
+	if (global_stats.empty() || global_stats.back().table_id != table_id) {
+		DuckLakeGlobalStatsInfo new_entry;
+		new_entry.table_id = table_id;
+		new_entry.initialized = true;
+		new_entry.record_count = row.template GetValue<uint64_t>(2 + from_column);
+		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
+		new_entry.table_size_bytes = row.template GetValue<uint64_t>(4 + from_column);
+		global_stats.push_back(std::move(new_entry));
+	}
+
+	auto &stats_entry = global_stats.back();
+
+	DuckLakeGlobalColumnStatsInfo column_stats;
+	column_stats.column_id = FieldIndex(row.template GetValue<uint64_t>(1 + from_column));
+
+	const idx_t COLUMN_STATS_START = 5 + from_column;
+
+	if (row.IsNull(COLUMN_STATS_START)) {
+		column_stats.has_contains_null = false;
+	} else {
+		column_stats.has_contains_null = true;
+		column_stats.contains_null = row.template GetValue<bool>(COLUMN_STATS_START);
+	}
+
+	if (row.IsNull(COLUMN_STATS_START + 1)) {
+		column_stats.has_contains_nan = false;
+	} else {
+		column_stats.has_contains_nan = true;
+		column_stats.contains_nan = row.template GetValue<bool>(COLUMN_STATS_START + 1);
+	}
+
+	if (row.IsNull(COLUMN_STATS_START + 2)) {
+		column_stats.has_min = false;
+	} else {
+		column_stats.has_min = true;
+		column_stats.min_val = row.template GetValue<string>(COLUMN_STATS_START + 2);
+	}
+
+	if (row.IsNull(COLUMN_STATS_START + 3)) {
+		column_stats.has_max = false;
+	} else {
+		column_stats.has_max = true;
+		column_stats.max_val = row.template GetValue<string>(COLUMN_STATS_START + 3);
+	}
+
+	if (row.IsNull(COLUMN_STATS_START + 4)) {
+		column_stats.has_extra_stats = false;
+	} else {
+		column_stats.has_extra_stats = true;
+		column_stats.extra_stats = row.template GetValue<string>(COLUMN_STATS_START + 4);
+	}
+
+	stats_entry.column_stats.push_back(std::move(column_stats));
+}
+
+vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 	if (result.HasError()) {
 		result.GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
 	}
+
 	vector<DuckLakeGlobalStatsInfo> global_stats;
-	bool first_row = true;
+
 	for (auto &row : result) {
-		if (from_column !=0 && first_row) {
-			first_row = false;
-			continue;
-		}
-		auto table_id = TableIndex(row.GetValue<uint64_t>(0 + from_column));
-		if (global_stats.empty() || global_stats.back().table_id != table_id) {
-			// new stats
-			DuckLakeGlobalStatsInfo new_entry;
-			// set up the table-level stats
-			new_entry.table_id = table_id;
-			new_entry.initialized = true;
-			new_entry.record_count = row.GetValue<uint64_t>(2 + from_column);
-			new_entry.next_row_id = row.GetValue<uint64_t>(3 + from_column);
-			new_entry.table_size_bytes = row.GetValue<uint64_t>(4 + from_column);
-			global_stats.push_back(std::move(new_entry));
-		}
-		auto &stats_entry = global_stats.back();
-
-		DuckLakeGlobalColumnStatsInfo column_stats;
-		column_stats.column_id = FieldIndex(row.GetValue<uint64_t>(1 + from_column));
-		const idx_t COLUMN_STATS_START = 5 + from_column;
-		if (row.IsNull(COLUMN_STATS_START)) {
-			column_stats.has_contains_null = false;
-		} else {
-			column_stats.has_contains_null = true;
-			column_stats.contains_null = row.GetValue<bool>(COLUMN_STATS_START);
-		}
-		if (row.IsNull(COLUMN_STATS_START + 1)) {
-			column_stats.has_contains_nan = false;
-		} else {
-			column_stats.has_contains_nan = true;
-			column_stats.contains_nan = row.GetValue<bool>(COLUMN_STATS_START + 1);
-		}
-		if (row.IsNull(COLUMN_STATS_START + 2)) {
-			column_stats.has_min = false;
-		} else {
-			column_stats.has_min = true;
-			column_stats.min_val = row.GetValue<string>(COLUMN_STATS_START + 2);
-		}
-		if (row.IsNull(COLUMN_STATS_START + 3)) {
-			column_stats.has_max = false;
-		} else {
-			column_stats.has_max = true;
-			column_stats.max_val = row.GetValue<string>(COLUMN_STATS_START + 3);
-		}
-
-		if (row.IsNull(COLUMN_STATS_START + 4)) {
-			column_stats.has_extra_stats = false;
-		} else {
-			column_stats.has_extra_stats = true;
-			column_stats.extra_stats = row.GetValue<string>(COLUMN_STATS_START + 4);
-		}
-
-		stats_entry.column_stats.push_back(std::move(column_stats));
+		TransformGlobalStatsRow(row, global_stats);
 	}
+
 	return global_stats;
 }
 
@@ -630,7 +638,7 @@ static idx_t GetMaxRowCount(DuckLakeSnapshot snapshot, const string &partial_fil
 	return max_row_count;
 }
 
-static void ParsePartialFileInfo(DuckLakeSnapshot snapshot, const string &partial_file_info_str,
+static void ParsePartialFileInfo(const DuckLakeSnapshot &snapshot, const string &partial_file_info_str,
                                  DuckLakeFileListEntry &file_entry) {
 	if (StringUtil::StartsWith(partial_file_info_str, "partial_max:")) {
 		auto max_partial_file_snapshot = StringUtil::ToUnsigned(partial_file_info_str.substr(12));
@@ -2312,20 +2320,25 @@ ORDER BY table_id NULLS FIRST;
 	}
 	// parse changes made by other transactions
 	SnapshotChangeInfo change_info;
+
+	bool first_row = true;
 	for (auto &row : *result) {
-		current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
-		current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
-		current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
-		current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
-		change_info.changes_made = row.GetValue<string>(4);
-		break;
+		if (first_row) {
+			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
+			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
+			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
+			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
+			change_info.changes_made = row.GetValue<string>(4);
+		} else {
+			TransformGlobalStatsRow(row, current_snapshot.stats, 5);
+		}
+		first_row = false;
 	}
-	current_snapshot.stats = TransformGlobalStats(*result, 5);
 	return change_info;
 }
 
 SnapshotDeletedFromFiles
-DuckLakeMetadataManager::GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot) {
+DuckLakeMetadataManager::GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSnapshot &start_snapshot) const {
 	// get all changes made to the system after the snapshot was started
 	auto result = transaction.Query(start_snapshot, R"(
 	SELECT data_file_id
