@@ -396,14 +396,22 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
+	bool should_write_row_id = false;
+	if (type == CompactionType::REWRITE_DELETES) {
+		// when there are delete files, we always need to write row-ids because deleted rows create gaps
+		should_write_row_id = true;
+	} else if (type == CompactionType::MERGE_ADJACENT_TABLES) {
+		// if files are adjacent, we don't need to write the row-id to the file
+		should_write_row_id = !files_are_adjacent;
+	}
+
 	DuckLakeCopyInput copy_input(context, table, data_path);
 	// merge_adjacent_files does not use partitioning information - instead we always merge within partitions
 	copy_input.partition_data = nullptr;
-	// if files are adjacent, we don't need to write the row-id to the file
-	if (files_are_adjacent) {
-		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
-	} else {
+	if (should_write_row_id) {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	} else {
+		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
@@ -417,7 +425,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
 	}
-	if (!files_are_adjacent) {
+	if (should_write_row_id) {
 		column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	}
 	column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
@@ -459,7 +467,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
-	if (files_are_adjacent) {
+	if (!should_write_row_id) {
 		target_row_id_start = source_files[0].file.row_id_start;
 	}
 
