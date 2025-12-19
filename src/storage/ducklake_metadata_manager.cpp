@@ -1485,44 +1485,15 @@ string DuckLakeMetadataManager::DropSchemas(const set<SchemaIndex> &ids) {
 	return FlushDrop("ducklake_schema", "schema_id", ids);
 }
 
-string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed) {
-	if (ids.empty()) {
-		return {};
-	}
-
-	string dropped_id_list;
-	for (auto &dropped_id : ids) {
-		if (!dropped_id_list.empty()) {
-			dropped_id_list += ", ";
-		}
-		dropped_id_list += to_string(dropped_id.index);
-	}
-	string batch_query;
-	// Always drop from ducklake_table
-	batch_query += StringUtil::Format(
-	    R"(UPDATE {METADATA_CATALOG}.ducklake_table SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-	    dropped_id_list);
-
+string DuckLakeMetadataManager::DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed) {
+	string batch_query = FlushDrop("ducklake_table", "table_id", ids);
 	if (renamed == false) {
-		// Drop from related tables only if not renamed
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_partition_info SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-		    dropped_id_list);
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_column SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-		    dropped_id_list);
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_column_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-		    dropped_id_list);
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-		    dropped_id_list);
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND table_id IN (%s);)",
-		    dropped_id_list);
-		batch_query += StringUtil::Format(
-		    R"(UPDATE {METADATA_CATALOG}.ducklake_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND object_id IN (%s);)",
-		    dropped_id_list);
+		batch_query +=FlushDrop("ducklake_partition_info", "table_id", ids);
+		batch_query +=FlushDrop("ducklake_column", "table_id", ids);
+		batch_query +=FlushDrop("ducklake_column_tag", "table_id", ids);
+		batch_query +=FlushDrop("ducklake_data_file", "table_id", ids);
+		batch_query +=FlushDrop("ducklake_delete_file", "table_id", ids);
+		batch_query +=FlushDrop("ducklake_tag", "object_id", ids);
 	}
 	return batch_query;
 }
