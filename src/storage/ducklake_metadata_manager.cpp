@@ -1348,7 +1348,6 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
-
 		if (files.empty() || files.back().file.id != new_entry.file.id) {
 			// new file - push it into the file list
 			files.push_back(std::move(new_entry));
