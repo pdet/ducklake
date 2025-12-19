@@ -1265,6 +1265,14 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 		deletion_threshold_clause = StringUtil::Format(
 		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
 	}
+	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
+	string file_size_filter_clause;
+	if (type == CompactionType::MERGE_ADJACENT_TABLES) {
+		if (min_file_size.IsValid()) {
+			file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes >= %llu", min_file_size.GetIndex());
+		}
+		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+	}
 	auto query = StringUtil::Format(R"(
 WITH snapshot_ranges AS (
   SELECT
@@ -1291,10 +1299,10 @@ LEFT JOIN (
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
-WHERE data.table_id=%d %s
+WHERE data.table_id=%d %s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
-	                                select_list, table_id.index, table_id.index, deletion_threshold_clause);
+	                                select_list, table_id.index, table_id.index, deletion_threshold_clause, file_size_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
@@ -1340,19 +1348,6 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
-
-		// Apply file size filtering for merge adjacent tables
-		if (type == CompactionType::MERGE_ADJACENT_TABLES) {
-			idx_t file_size = new_entry.file.data.file_size_bytes;
-			// Skip files below the minimum size threshold
-			if (min_file_size.IsValid() && file_size < min_file_size.GetIndex()) {
-				continue;
-			}
-			// Skip files at or above the maximum size threshold
-			if (file_size >= effective_max_file_size) {
-				continue;
-			}
-		}
 
 		if (files.empty() || files.back().file.id != new_entry.file.id) {
 			// new file - push it into the file list
