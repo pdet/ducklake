@@ -1246,7 +1246,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    CompactionType type,
                                                                                    double deletion_threshold,
                                                                                    DuckLakeSnapshot snapshot,
-                                                                                   DuckLakeFileSizeFilterOptions options) {
+                                                                                   DuckLakeFileSizeOptions options) {
 	auto table_id = table.GetTableId();
 	// Determine the effective max file size threshold for filtering
 	idx_t effective_max_file_size = options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;

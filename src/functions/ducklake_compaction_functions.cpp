@@ -216,7 +216,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table, vector<un
 		target_file_size = Value(target_file_size_str).DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 	}
 
-	DuckLakeFileSizeFilterOptions filter_options;
+	DuckLakeFileSizeOptions filter_options;
 	filter_options.min_file_size = options.min_file_size;
 	filter_options.max_file_size = options.max_file_size;
 	filter_options.target_file_size = target_file_size;

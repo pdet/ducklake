@@ -383,7 +383,7 @@ struct DuckLakeMergeAdjacentOptions {
 	optional_idx max_file_size;
 };
 
-struct DuckLakeFileSizeFilterOptions {
+struct DuckLakeFileSizeOptions {
 	optional_idx min_file_size;
 	optional_idx max_file_size;
 	idx_t target_file_size;
