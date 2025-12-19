@@ -1245,8 +1245,13 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompaction(DuckLakeTableEntry &table,
                                                                                    CompactionType type,
                                                                                    double deletion_threshold,
-                                                                                   DuckLakeSnapshot snapshot) {
+                                                                                   DuckLakeSnapshot snapshot,
+                                                                                   optional_idx min_file_size,
+                                                                                   optional_idx max_file_size,
+                                                                                   idx_t target_file_size) {
 	auto table_id = table.GetTableId();
+	// Determine the effective max file size threshold for filtering
+	idx_t effective_max_file_size = max_file_size.IsValid() ? max_file_size.GetIndex() : target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
@@ -1335,6 +1340,20 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
+
+		// Apply file size filtering for merge adjacent tables
+		if (type == CompactionType::MERGE_ADJACENT_TABLES) {
+			idx_t file_size = new_entry.file.data.file_size_bytes;
+			// Skip files below the minimum size threshold
+			if (min_file_size.IsValid() && file_size < min_file_size.GetIndex()) {
+				continue;
+			}
+			// Skip files at or above the maximum size threshold
+			if (file_size >= effective_max_file_size) {
+				continue;
+			}
+		}
+
 		if (files.empty() || files.back().file.id != new_entry.file.id) {
 			// new file - push it into the file list
 			files.push_back(std::move(new_entry));

@@ -215,7 +215,6 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
                                             vector<unique_ptr<LogicalOperator>> &compactions) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
-	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot);
 
 	idx_t target_file_size = DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE;
 	string target_file_size_str;
@@ -223,19 +222,15 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		target_file_size = Value(target_file_size_str).DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 	}
 
+	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, min_file_size,
+	                                                     max_file_size, target_file_size);
+
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
-	// determine the effective max file size threshold for filtering
-	idx_t effective_max_file_size = max_file_size.IsValid() ? max_file_size.GetIndex() : target_file_size;
 	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
 		auto &candidate = files[file_idx];
-		idx_t file_size = candidate.file.data.file_size_bytes;
-		// skip files below the minimum size threshold
-		if (min_file_size.IsValid() && file_size < min_file_size.GetIndex()) {
-			continue;
-		}
-		// skip files at or above the maximum size threshold
-		if (file_size >= effective_max_file_size) {
+		if (candidate.file.data.file_size_bytes >= target_file_size) {
+			// this file by itself exceeds the threshold - skip merging
 			continue;
 		}
 		if ((!candidate.delete_files.empty() && type == CompactionType::MERGE_ADJACENT_TABLES) ||
@@ -273,21 +268,21 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			// check if we can merge this file with subsequent files
 			idx_t current_file_size = 0;
 			idx_t compaction_idx;
-		for (compaction_idx = start_idx; compaction_idx < candidate_list.size(); compaction_idx++) {
-			if (current_file_size >= target_file_size) {
-				// we hit the target size already - stop
-				break;
+			for (compaction_idx = start_idx; compaction_idx < candidate_list.size(); compaction_idx++) {
+				if (current_file_size >= target_file_size) {
+					// we hit the target size already - stop
+					break;
+				}
+				auto candidate_idx = candidate_list[compaction_idx];
+				auto &candidate = files[candidate_idx];
+				idx_t file_size = candidate.file.data.file_size_bytes;
+				if (file_size >= target_file_size) {
+					// don't consider merging if the file is larger than the target size
+					break;
+				}
+				// this file can be compacted along with the neighbors
+				current_file_size += file_size;
 			}
-			auto candidate_idx = candidate_list[compaction_idx];
-			auto &candidate = files[candidate_idx];
-			idx_t file_size = candidate.file.data.file_size_bytes;
-			if (file_size >= effective_max_file_size) {
-				// don't consider merging if the file is larger than the max file size threshold
-				break;
-			}
-			// this file can be compacted along with the neighbors
-			current_file_size += file_size;
-		}
 
 			if (start_idx < compaction_idx) {
 				idx_t compaction_file_count = compaction_idx - start_idx;
