@@ -1249,7 +1249,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    DuckLakeFileSizeOptions options) {
 	auto table_id = table.GetTableId();
 	// Determine the effective max file size threshold for filtering
-	idx_t effective_max_file_size = options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
+	idx_t effective_max_file_size =
+	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
@@ -1267,7 +1268,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string file_size_filter_clause;
 	if (type == CompactionType::MERGE_ADJACENT_TABLES) {
 		if (options.min_file_size.IsValid()) {
-			file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
+			file_size_filter_clause +=
+			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
 	}
@@ -1300,7 +1302,8 @@ LEFT JOIN (
 WHERE data.table_id=%d %s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
-	                                select_list, table_id.index, table_id.index, deletion_threshold_clause, file_size_filter_clause);
+	                                select_list, table_id.index, table_id.index, deletion_threshold_clause,
+	                                file_size_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");

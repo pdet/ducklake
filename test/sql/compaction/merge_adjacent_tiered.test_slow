@@ -1,4 +1,4 @@
-# name: test/sql/compaction/merge_adjacent_tiered.test
+# name: test/sql/compaction/merge_adjacent_tiered.test_slow
 # description: test tiered/lucene-like compaction using min_file_size, max_file_size and target_file_size
 # group: [compaction]
 
