@@ -1539,8 +1539,8 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot
 	return transaction.Query(snapshot, query);
 }
 
-void DuckLakeMetadataManager::DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids) {
-	FlushDrop(commit_snapshot, "ducklake_macro", "macro_id", ids);
+string DuckLakeMetadataManager::DropMacros(const set<MacroIndex> &ids) {
+	return FlushDrop( "ducklake_macro", "macro_id", ids);
 }
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas) {
 	if (new_schemas.empty()) {

@@ -1461,11 +1461,11 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 	}
 
 	if (!dropped_scalar_macros.empty()) {
-		metadata_manager->DropMacros(commit_snapshot, dropped_scalar_macros);
+		batch_queries += metadata_manager->DropMacros(dropped_scalar_macros);
 	}
 
 	if (!dropped_table_macros.empty()) {
-		metadata_manager->DropMacros(commit_snapshot, dropped_table_macros);
+		batch_queries += metadata_manager->DropMacros(dropped_table_macros);
 	}
 	if (!dropped_schemas.empty()) {
 		set<SchemaIndex> dropped_schema_ids;

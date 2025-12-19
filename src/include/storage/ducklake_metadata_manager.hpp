@@ -135,7 +135,7 @@ public:
 	virtual string DropSchemas(const set<SchemaIndex> &ids);
 	virtual string DropTables(const set<TableIndex> &ids, bool renamed);
 	virtual string DropViews(const set<TableIndex> &ids);
-	virtual void DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids);
+	virtual string DropMacros(const set<MacroIndex> &ids);
 
 	virtual string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual string WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables,
@@ -160,10 +160,10 @@ public:
 	                                      string &inlined_tables, string &inlined_table_queries);
 	virtual string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	virtual string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
-	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                             	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
-      const vector<DuckLakeTableInfo> &new_tables,
+	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
+	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
+
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	virtual string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions);
