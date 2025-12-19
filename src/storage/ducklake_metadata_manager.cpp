@@ -1747,45 +1747,38 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 	return batch_query;
 }
 
-void DuckLakeMetadataManager::WriteNewMacros(DuckLakeSnapshot commit_snapshot,
+string DuckLakeMetadataManager::WriteNewMacros(
                                              const vector<DuckLakeMacroInfo> &new_macros) {
+	string batch_query;
 	for (auto &macro : new_macros) {
 		// Insert in the macro table
-		auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL)
+		batch_query = StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL);
 )",
 		                                                                    macro.schema_id.index, macro.macro_id.index,
-		                                                                    macro.macro_name));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
-		}
+		                                                                    macro.macro_name);
 		// Insert in the implementation table
 		for (idx_t impl_id = 0; impl_id < macro.implementations.size(); ++impl_id) {
 			auto &impl = macro.implementations[impl_id];
-			result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%s')
+			batch_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%s');
 )",
 			                                                               macro.macro_id.index, impl_id, impl.dialect,
-			                                                               impl.sql, impl.type));
-			if (result->HasError()) {
-				result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
-			}
+			                                                               impl.sql, impl.type);
+
 			for (idx_t param_id = 0; param_id < impl.parameters.size(); ++param_id) {
 				// Insert in the parameter table
 				auto &param = impl.parameters[param_id];
-				result = transaction.Query(
-				    commit_snapshot,
+				batch_query +=
 				    StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s', '%s')
+INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'%s','%s','%s', '%s');
 )",
 				                       macro.macro_id.index, impl_id, param_id, param.parameter_name,
-				                       param.parameter_type, param.default_value.ToString(), param.default_value_type));
-				if (result->HasError()) {
-					result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
-				}
+				                       param.parameter_type, param.default_value.ToString(), param.default_value_type);
 			}
 		}
 	}
+	return batch_query;
 }
 
 

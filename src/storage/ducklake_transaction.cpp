@@ -1500,7 +1500,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 
 	if (!new_macros.empty()) {
 		auto result = GetNewMacros(commit_state, transaction_changes);
-		metadata_manager->WriteNewMacros(commit_snapshot, result.new_macros);
+		batch_queries += metadata_manager->WriteNewMacros(result.new_macros);
 	}
 
 	// write new name maps
