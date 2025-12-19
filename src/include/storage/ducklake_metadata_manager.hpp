@@ -160,7 +160,8 @@ public:
 	                                      string &inlined_tables, string &inlined_table_queries);
 	virtual string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	virtual string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
-	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,const vector<DuckLakeTableInfo> &new_tables,
+	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
+	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 

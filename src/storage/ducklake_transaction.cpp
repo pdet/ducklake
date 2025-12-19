@@ -1437,7 +1437,6 @@ struct CompactionInformation {
 string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
                                           TransactionChangeInformation &transaction_changes,
                                           optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
-
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	if (ducklake_catalog.IsCommitInfoRequired() && !commit_info.is_commit_info_set) {

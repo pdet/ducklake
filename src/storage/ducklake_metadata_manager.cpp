@@ -1488,12 +1488,12 @@ string DuckLakeMetadataManager::DropSchemas(const set<SchemaIndex> &ids) {
 string DuckLakeMetadataManager::DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed) {
 	string batch_query = FlushDrop("ducklake_table", "table_id", ids);
 	if (renamed == false) {
-		batch_query +=FlushDrop("ducklake_partition_info", "table_id", ids);
-		batch_query +=FlushDrop("ducklake_column", "table_id", ids);
-		batch_query +=FlushDrop("ducklake_column_tag", "table_id", ids);
-		batch_query +=FlushDrop("ducklake_data_file", "table_id", ids);
-		batch_query +=FlushDrop("ducklake_delete_file", "table_id", ids);
-		batch_query +=FlushDrop("ducklake_tag", "object_id", ids);
+		batch_query += FlushDrop("ducklake_partition_info", "table_id", ids);
+		batch_query += FlushDrop("ducklake_column", "table_id", ids);
+		batch_query += FlushDrop("ducklake_column_tag", "table_id", ids);
+		batch_query += FlushDrop("ducklake_data_file", "table_id", ids);
+		batch_query += FlushDrop("ducklake_delete_file", "table_id", ids);
+		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
 	}
 	return batch_query;
 }
@@ -1511,7 +1511,7 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot
 }
 
 string DuckLakeMetadataManager::DropMacros(const set<MacroIndex> &ids) {
-	return FlushDrop( "ducklake_macro", "macro_id", ids);
+	return FlushDrop("ducklake_macro", "macro_id", ids);
 }
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas) {
 	if (new_schemas.empty()) {
@@ -1718,24 +1718,21 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::WriteNewMacros(
-                                             const vector<DuckLakeMacroInfo> &new_macros) {
+string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros) {
 	string batch_query;
 	for (auto &macro : new_macros) {
 		// Insert in the macro table
 		batch_query = StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_macro values(%llu,%llu,'%s',{SNAPSHOT_ID}, NULL);
 )",
-		                                                                    macro.schema_id.index, macro.macro_id.index,
-		                                                                    macro.macro_name);
+		                                 macro.schema_id.index, macro.macro_id.index, macro.macro_name);
 		// Insert in the implementation table
 		for (idx_t impl_id = 0; impl_id < macro.implementations.size(); ++impl_id) {
 			auto &impl = macro.implementations[impl_id];
 			batch_query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_macro_impl values(%llu,%llu,'%s','%s','%s');
 )",
-			                                                               macro.macro_id.index, impl_id, impl.dialect,
-			                                                               impl.sql, impl.type);
+			                                  macro.macro_id.index, impl_id, impl.dialect, impl.sql, impl.type);
 
 			for (idx_t param_id = 0; param_id < impl.parameters.size(); ++param_id) {
 				// Insert in the parameter table
@@ -1751,7 +1748,6 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,'
 	}
 	return batch_query;
 }
-
 
 string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns) {
 	if (dropped_columns.empty()) {
