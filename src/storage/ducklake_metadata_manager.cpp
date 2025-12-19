@@ -1246,12 +1246,10 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    CompactionType type,
                                                                                    double deletion_threshold,
                                                                                    DuckLakeSnapshot snapshot,
-                                                                                   optional_idx min_file_size,
-                                                                                   optional_idx max_file_size,
-                                                                                   idx_t target_file_size) {
+                                                                                   DuckLakeFileSizeFilterOptions options) {
 	auto table_id = table.GetTableId();
 	// Determine the effective max file size threshold for filtering
-	idx_t effective_max_file_size = max_file_size.IsValid() ? max_file_size.GetIndex() : target_file_size;
+	idx_t effective_max_file_size = options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
@@ -1268,8 +1266,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
 	string file_size_filter_clause;
 	if (type == CompactionType::MERGE_ADJACENT_TABLES) {
-		if (min_file_size.IsValid()) {
-			file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes >= %llu", min_file_size.GetIndex());
+		if (options.min_file_size.IsValid()) {
+			file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
 	}

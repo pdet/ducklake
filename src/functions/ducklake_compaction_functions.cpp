@@ -141,8 +141,7 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, uint64_t max_files, optional_idx min_file_size,
-	                  optional_idx max_file_size);
+	                  Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options);
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                  Binder &binder, TableIndex table_id, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
@@ -155,19 +154,15 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	double delete_threshold = 0.95;
-	optional_idx max_files;
-	optional_idx min_file_size;
-	optional_idx max_file_size;
+	DuckLakeMergeAdjacentOptions options;
 
 	CompactionType type;
 };
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-                                     Binder &binder, TableIndex table_id, uint64_t max_files,
-                                     optional_idx min_file_size_p, optional_idx max_file_size_p)
+                                     Binder &binder, TableIndex table_id, DuckLakeMergeAdjacentOptions options)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      max_files(max_files), min_file_size(min_file_size_p), max_file_size(max_file_size_p),
-      type(CompactionType::MERGE_ADJACENT_TABLES) {
+      options(options), type(CompactionType::MERGE_ADJACENT_TABLES) {
 }
 
 DuckLakeCompactor::DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
@@ -211,8 +206,7 @@ template <typename T>
 using compaction_map_t =
     unordered_map<DuckLakeCompactionGroup, T, DuckLakeCompactionGroupHash, DuckLakeCompactionGroupEquality>;
 
-void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
-                                            vector<unique_ptr<LogicalOperator>> &compactions) {
+void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 
@@ -222,8 +216,11 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		target_file_size = Value(target_file_size_str).DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 	}
 
-	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, min_file_size,
-	                                                     max_file_size, target_file_size);
+	DuckLakeFileSizeFilterOptions filter_options;
+	filter_options.min_file_size = options.min_file_size;
+	filter_options.max_file_size = options.max_file_size;
+	filter_options.target_file_size = target_file_size;
+	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
 
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
@@ -298,7 +295,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 				start_idx += compaction_file_count - 1;
 			}
 			compacted_files++;
-			if (compacted_files >= max_files.GetIndex()) {
+			if (compacted_files >= options.max_files) {
 				break;
 			}
 		}
@@ -507,8 +504,12 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
+		DuckLakeMergeAdjacentOptions options;
+		options.max_files = max_files;
+		options.min_file_size = min_file_size;
+		options.max_file_size = max_file_size;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            max_files, min_file_size, max_file_size);
+		                            options);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
