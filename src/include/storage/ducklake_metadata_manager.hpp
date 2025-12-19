@@ -135,6 +135,8 @@ public:
 	virtual string DropSchemas(const set<SchemaIndex> &ids);
 	virtual string DropTables(const set<TableIndex> &ids, bool renamed);
 	virtual string DropViews(const set<TableIndex> &ids);
+	virtual void DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids);
+
 	virtual string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas);
 	virtual string WriteNewTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &new_tables,
 	                              vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -159,7 +161,8 @@ public:
 	virtual string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	virtual string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
 	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                   const vector<DuckLakeTableInfo> &new_tables,
+	                             	void WriteNewMacros(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeMacroInfo> &new_macros);
+      const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	virtual string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
@@ -199,6 +202,8 @@ public:
 
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
+	virtual void MigrateV03(bool allow_failures = false);
+	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
 	string StorePath(string path);

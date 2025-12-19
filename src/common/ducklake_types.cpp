@@ -12,7 +12,7 @@ struct DefaultType {
 	LogicalTypeId id;
 };
 
-using ducklake_type_array = std::array<DefaultType, 30>;
+using ducklake_type_array = std::array<DefaultType, 31>;
 
 static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalTypeId::BOOLEAN},
                                                             {"int8", LogicalTypeId::TINYINT},
@@ -43,7 +43,8 @@ static constexpr const ducklake_type_array DUCKLAKE_TYPES {{{"boolean", LogicalT
                                                             {"uuid", LogicalTypeId::UUID},
                                                             {"struct", LogicalTypeId::STRUCT},
                                                             {"map", LogicalTypeId::MAP},
-                                                            {"list", LogicalTypeId::LIST}}};
+                                                            {"list", LogicalTypeId::LIST},
+                                                            {"unknown", LogicalTypeId::UNKNOWN}}};
 
 static LogicalType ParseBaseType(const string &str) {
 	for (auto &ducklake_type : DUCKLAKE_TYPES) {
