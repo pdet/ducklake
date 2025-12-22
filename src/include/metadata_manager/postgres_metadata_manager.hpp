@@ -18,12 +18,13 @@ public:
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
 
+	string GetColumnTypeInternal(const LogicalType &type) override;
+
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
 protected:
-	string GetColumnTypeInternal(const LogicalType &type) override;
 	string GetLatestSnapshotQuery() const override;
 
 private:

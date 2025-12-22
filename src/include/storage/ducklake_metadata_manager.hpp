@@ -101,6 +101,8 @@ public:
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 
+	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
 	//! Initialize a new DuckLake
@@ -210,7 +212,6 @@ protected:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	string GetColumnType(const DuckLakeColumnInfo &col);
-	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result);
 
 	//! Get path relative to catalog path

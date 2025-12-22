@@ -19,6 +19,9 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
 		return false;
 	default:
 		return true;
@@ -36,6 +39,8 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 		return "INTEGER";
 	case LogicalTypeId::UINTEGER:
 		return "BIGINT";
+	case LogicalTypeId::BLOB:
+		return "BYTEA";
 	default:
 		return column_type.ToString();
 	}
