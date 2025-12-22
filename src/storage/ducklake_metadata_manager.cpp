@@ -1502,6 +1502,10 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	}
 }
 
+string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
+	return column_type.ToString();
+}
+
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
@@ -1530,7 +1534,7 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
 			                              col.type);
 		}
-		return column_type.ToString();
+		return GetColumnTypeInternal(column_type);
 	}
 }
 
@@ -1772,7 +1776,7 @@ WHERE table_id = %d AND schema_version=(
 				values += ", {SNAPSHOT_ID}, NULL";
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 					values += ", ";
-					values += DuckLakeUtil::ValueToSQL(context, chunk.GetValue(c, r));
+					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
 				values += ")";
 				row_id++;
