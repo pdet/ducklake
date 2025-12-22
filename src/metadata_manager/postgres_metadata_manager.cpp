@@ -16,9 +16,28 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
 		return false;
 	default:
 		return true;
+	}
+}
+
+string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
+	switch (column_type.id()) {
+	case LogicalTypeId::DOUBLE:
+		return "DOUBLE PRECISION";
+	case LogicalTypeId::TINYINT:
+		return "SMALLINT";
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+		return "INTEGER";
+	case LogicalTypeId::UINTEGER:
+		return "BIGINT";
+	default:
+		return column_type.ToString();
 	}
 }
 

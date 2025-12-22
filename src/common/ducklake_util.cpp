@@ -2,6 +2,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -89,7 +90,7 @@ string DuckLakeUtil::StatsToString(const string &text) {
 	return DuckLakeUtil::SQLLiteralToString(text);
 }
 
-string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
+string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
 	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToSQLString();
@@ -97,8 +98,9 @@ string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
 	if (val.type().HasAlias()) {
 		// extension type: cast to string
 		auto str_val = val.CastAs(context, LogicalType::VARCHAR);
-		return DuckLakeUtil::ValueToSQL(context, str_val);
+		return DuckLakeUtil::ValueToSQL(metadata_manager, context, str_val);
 	}
+	string result;
 	switch (val.type().id()) {
 	case LogicalTypeId::VARCHAR: {
 		auto &str_val = StringValue::Get(val);
@@ -147,11 +149,15 @@ string DuckLakeUtil::ValueToSQL(ClientContext &context, const Value &val) {
 			ret += map_children[1].ToSQLString();
 		}
 		ret += "])";
-		return ret;
+		result = ret;
 	}
 	default:
-		return val.ToSQLString();
+		result = val.ToSQLString();
 	}
+	if (metadata_manager.TypeIsNativelySupported(val.type())) {
+		return result;
+	}
+	return StringUtil::Format("%s", SQLString(result));
 }
 
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {

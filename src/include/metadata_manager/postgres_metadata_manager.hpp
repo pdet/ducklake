@@ -23,6 +23,7 @@ public:
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 
 protected:
+	string GetColumnTypeInternal(const LogicalType &type) override;
 	string GetLatestSnapshotQuery() const override;
 
 private:
