@@ -1,0 +1,79 @@
+{
+  "description": "Run DuckLake tests with inlining set as default.",
+  "on_init": "ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db (data_inlining_row_limit 1000) ' AS dl; SET timezone = 'UTC';",
+  "on_new_connection": "USE dl;",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "icu",
+    "httpfs",
+    "json"
+  ],   "skip_tests": [
+   {
+      "reason": "Expected a file count.",
+      "paths": [
+        "test/sql/stats/filter_pushdown.test",
+        "test/sql/migration/migration.test",
+        "test/sql/partitioning/multi_key_partition.test",
+        "test/sql/partitioning/disable_hive_partitioning.test",
+        "test/sql/add_files/add_removed_files.test",
+        "test/sql/add_files/add_files_compaction.test",
+        "test/sql/add_files/add_files_hive.test",
+        "test/sql/virtualcolumns/ducklake_virtual_columns.test",
+        "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
+        "test/sql/rewrite_data_files/test_rewrite_db.test",
+        "test/sql/rewrite_data_files/last_snapshot_multiple_inserts.test",
+        "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
+        "test/sql/functions/ducklake_table_info.test"
+      ]
+    }, {
+      "reason": "Expected a file to be created.",
+      "paths": [
+        "test/sql/schema_evolution/field_ids.test",
+        "test/sql/attach/different_paths.test",
+        "test/sql/cleanup/cleanup_old_files.test",
+        "test/sql/cleanup/create_drop_cleanup.test",
+        "test/sql/remove_orphans/remove_orphaned_files.test",
+        "test/sql/compaction/merge_adjacent_global_option.test",
+        "test/sql/compaction/compaction_alter_table.test",
+        "test/sql/compaction/cleanup_old_files_global_option.test",
+        "test/sql/compaction/mix_large_small_insertions.test",
+        "test/sql/compaction/compaction_partitioned_non_adjacent.test",
+        "test/sql/compaction/merge_files_expired_snapshots.test",
+        "test/sql/compaction/compaction_delete_conflict.test",
+        "test/sql/compaction/compaction_cleanup_global.test",
+        "test/sql/compaction/merge_adjacent_partial_file_info.test",
+        "test/sql/compaction/compaction_encrypted.test",
+        "test/sql/compaction/compaction_hive_structure.test",
+        "test/sql/compaction/merge_adjacent_file_size_filter.test",
+        "test/sql/compaction/merge_rewrite_partial_file_info.test",
+        "test/sql/compaction/small_insert_compaction.test",
+        "test/sql/compaction/compaction_partitioned_table.test",
+        "test/sql/compaction/expire_snapshots.test",
+        "test/sql/compaction/merge_adjacent_max_files.test",
+        "test/sql/compaction/expire_snapshots_drop_table.test",
+        "test/sql/compaction/merge_adjacent_options.test",
+        "test/sql/secrets/ducklake_secrets.test",
+        "test/sql/general/database_size.test",
+        "test/sql/general/paths.test",
+        "test/sql/general/default_path.test",
+        "test/sql/merge/merge_partition_update.test",
+        "test/sql/encryption/encryption.test",
+        "test/sql/transaction/transaction_conflict_cleanup.test",
+        "test/sql/transaction/basic_transaction.test",
+        "test/sql/settings/per_table_settings.test",
+        "test/sql/list_files/ducklake_list_files.test",
+        "test/sql/update/update_rollback.test",
+        "test/sql/update/update_partitioning.test",
+        "test/sql/delete/delete_same_transaction.test",
+        "test/sql/compaction/multi_compaction.test"
+      ]
+    }, {
+      "reason": "Different Snapshot",
+      "paths": [
+        "test/sql/functions/ducklake_snapshots.test",
+        "test/sql/compaction/merge_files_expired_snapshots.test"
+      ]
+    }
+  ]
+}

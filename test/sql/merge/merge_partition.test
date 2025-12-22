@@ -34,7 +34,7 @@ MERGE INTO my_timeseries
     WHEN NOT MATCHED THEN INSERT;
 
 query II
-SELECT * FROM my_timeseries
+SELECT * FROM my_timeseries ORDER BY ALL
 ----
 2025-09-15 00:00:00	42.0
 2025-09-17 00:00:00	42.0
@@ -50,7 +50,7 @@ ON my_timeseries.ts = timeseries_updates.ts
 WHEN MATCHED THEN UPDATE;
 
 query II
-SELECT * FROM my_timeseries
+SELECT * FROM my_timeseries ORDER BY ALL
 ----
 2025-09-15 00:00:00	42.0
 2025-09-17 00:00:00	43.0
