@@ -7,7 +7,8 @@
     "parquet",
     "icu",
     "httpfs",
-    "json"
+    "json",
+    "ducklake"
   ],   "skip_tests": [
    {
       "reason": "Expected a file count.",

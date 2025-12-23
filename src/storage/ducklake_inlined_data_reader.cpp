@@ -32,7 +32,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		initialized_scan = true;
 	}
 	if (!expression_map.empty()) {
-		throw InternalException("FIXME: support expression_map");
+		throw NotImplementedException("FIXME: support expression_map");
 	}
 
 	if (!data) {
