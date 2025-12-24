@@ -1343,8 +1343,12 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompaction(DuckLakeTableEntry &table,
                                                                                    CompactionType type,
                                                                                    double deletion_threshold,
-                                                                                   DuckLakeSnapshot snapshot) {
+                                                                                   DuckLakeSnapshot snapshot,
+                                                                                   DuckLakeFileSizeOptions options) {
 	auto table_id = table.GetTableId();
+	// Determine the effective max file size threshold for filtering
+	idx_t effective_max_file_size =
+	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
@@ -1357,6 +1361,15 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	if (type == CompactionType::REWRITE_DELETES) {
 		deletion_threshold_clause = StringUtil::Format(
 		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
+	}
+	// Add file size filtering for MERGE_ADJACENT_TABLES compaction
+	string file_size_filter_clause;
+	if (type == CompactionType::MERGE_ADJACENT_TABLES) {
+		if (options.min_file_size.IsValid()) {
+			file_size_filter_clause +=
+			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
+		}
+		file_size_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
 	}
 	auto query = StringUtil::Format(R"(
 WITH snapshot_ranges AS (
@@ -1384,10 +1397,11 @@ LEFT JOIN (
    FROM {METADATA_CATALOG}.ducklake_file_partition_value
    GROUP BY data_file_id
 ) partition_info USING (data_file_id)
-WHERE data.table_id=%d %s
+WHERE data.table_id=%d %s%s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
-	                                select_list, table_id.index, table_id.index, deletion_threshold_clause);
+	                                select_list, table_id.index, table_id.index, deletion_threshold_clause,
+	                                file_size_filter_clause);
 	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
@@ -1593,6 +1607,10 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	}
 }
 
+string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
+	return column_type.ToString();
+}
+
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
@@ -1621,7 +1639,7 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
 			                              col.type);
 		}
-		return column_type.ToString();
+		return GetColumnTypeInternal(column_type);
 	}
 }
 
@@ -1898,7 +1916,7 @@ WHERE table_id = %d AND schema_version=(
 				values += ", {SNAPSHOT_ID}, NULL";
 				for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 					values += ", ";
-					values += DuckLakeUtil::ValueToSQL(context, chunk.GetValue(c, r));
+					values += DuckLakeUtil::ValueToSQL(*this, context, chunk.GetValue(c, r));
 				}
 				values += ")";
 				row_id++;
