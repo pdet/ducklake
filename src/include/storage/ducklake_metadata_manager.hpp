@@ -203,7 +203,7 @@ public:
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
-
+	virtual bool IsColumnCreatedWithTable(const string &table_name, const string &column_name);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

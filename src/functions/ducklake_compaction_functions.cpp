@@ -651,7 +651,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size,compactions);
+		                   max_files, min_file_size, max_file_size, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -682,7 +682,6 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                     idx_t bind_index, vector<string> &return_names) {
-
 	return_names.push_back("Success");
 	return BindCompaction(context, input, bind_index, CompactionType::REWRITE_DELETES);
 }
