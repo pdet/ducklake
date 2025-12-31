@@ -10,8 +10,13 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 
 test-env DATA_PATH __TEST_DIR__
 
+loop j 0 100
+
+# statement ok
+# set threads = ${j}+1
+
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/concurrent_insert_conflict', BUSY_TIMEOUT 10000)
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_${j}' AS ducklake (DATA_PATH '${DATA_PATH}/concurrent_insert_conflict', BUSY_TIMEOUT 10000)
 
 statement ok
 use ducklake;
@@ -53,3 +58,11 @@ query II
 SELECT COUNT(*), SUM(key) FROM ducklake.tbl
 ----
 960	498720
+
+statement ok
+use memory
+
+statement ok
+detach ducklake
+
+endloop
