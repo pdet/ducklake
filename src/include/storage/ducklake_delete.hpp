@@ -72,6 +72,8 @@ public:
 	string encryption_key;
 	//! Whether or not we allow duplicate deletes
 	bool allow_duplicates;
+	//! Lock for accessing sink_state
+	mutable mutex lock;
 
 public:
 	// // Source interface

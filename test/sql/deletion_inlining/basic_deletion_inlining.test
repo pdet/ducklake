@@ -1,5 +1,5 @@
 # name: test/sql/deletion_inlining/basic_deletion_inlining.test
-# description: test deletion inlining
+# description: test deletion inlining - deletions from inlined data update end_snapshot
 # group: [deletion_inlining]
 
 require ducklake
@@ -23,7 +23,7 @@ CREATE TABLE test(i INTEGER, j INTEGER);
 query IIIII
 SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inlined_data_1_1
 
-# This does not get inlined
+# This does not get inlined (>5 rows)
 statement ok
 insert into test values (1,0), (2,0), (3,0), (4,0), (5,0), (6,0), (7,1)
 
@@ -47,7 +47,7 @@ SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inline
 ----
 7	3	NULL	8	1
 
-# Deletion of inlined data is easy
+# Deletion of inlined data is easy - updates end_snapshot
 statement ok
 delete from test where i = 8
 
@@ -56,10 +56,77 @@ SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inline
 ----
 7	3	4	8	1
 
-# Now we delete from a file
-statement ok
-delete from test where i = 5
-
-query III
-FROM ducklake_meta.ducklake_inlined_delete_1_1;
+# Verify the row is no longer visible in queries
+query II
+SELECT * FROM test WHERE i = 8
 ----
+
+# Verify remaining data count (7 rows from file)
+query I
+SELECT COUNT(*) FROM test
+----
+7
+
+# Test multiple deletes from inlined data
+statement ok
+insert into test values (9,2)
+
+query II
+SELECT * FROM test WHERE i = 9
+----
+9	2
+
+statement ok
+delete from test where i = 9
+
+query II
+SELECT * FROM test WHERE i = 9
+----
+
+# Verify the end_snapshot is set for both deleted inlined rows
+query IIIII
+SELECT row_id,begin_snapshot,end_snapshot,i,j FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY row_id
+----
+7	3	4	8	1
+8	5	6	9	2
+
+# Verify final data count from the 7 file rows
+query I
+SELECT COUNT(*) FROM test
+----
+7
+
+# Test: insert and delete different rows in same transaction
+statement ok
+BEGIN
+
+statement ok
+insert into test values (10,3), (11,4)
+
+query I
+SELECT COUNT(*) FROM test WHERE i >= 10
+----
+2
+
+statement ok
+delete from test where i = 10
+
+query I
+SELECT COUNT(*) FROM test WHERE i >= 10
+----
+1
+
+statement ok
+COMMIT
+
+# After commit, only row 11 should exist (from the inlined data)
+query I
+SELECT COUNT(*) FROM test WHERE i >= 10
+----
+1
+
+# Verify row 11 is in the inlined data table
+query II
+SELECT i, j FROM ducklake_meta.ducklake_inlined_data_1_1 WHERE i = 11
+----
+11	4
