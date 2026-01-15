@@ -169,7 +169,7 @@ ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} defaul
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN {IF_NOT_EXISTS} table_id BIGINT;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
-CREATE TABLE {METADATA_CATALOG}.ducklake_inlined_deletion_tables(table_id BIGINT, table_name VARCHAR);
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_inlined_deletion_tables(table_id BIGINT, table_name VARCHAR);
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 
