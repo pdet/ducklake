@@ -16,6 +16,8 @@ namespace duckdb {
 struct DuckLakeDeleteData {
 	vector<idx_t> deleted_rows;
 	vector<idx_t> snapshot_ids;
+	//! For delete scans: mapping from row index to snapshot_id (when rows were deleted)
+	unordered_map<idx_t, idx_t> row_to_snapshot;
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
 	             optional_idx snapshot_filter = optional_idx()) const;

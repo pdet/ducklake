@@ -17,10 +17,13 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -430,7 +433,41 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 				return nullptr;
 			}
 		}
-		// get the row id start for this file
+		// Check if this is a delete scan with per-row snapshot_ids from embedded snapshots
+		if (reader_data.reader && reader_data.reader->deletion_filter) {
+			auto *delete_filter = dynamic_cast<DuckLakeDeleteFilter *>(reader_data.reader->deletion_filter.get());
+			if (delete_filter) {
+				auto &row_to_snapshot = delete_filter->delete_data->row_to_snapshot;
+				if (!row_to_snapshot.empty()) {
+					// Build a CASE expression to map file_row_number to snapshot_id
+					// row_to_snapshot maps file-local row indices to snapshot_ids
+					auto file_row_number = make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, local_idx.GetIndex());
+
+					// Build CASE expression: CASE WHEN file_row_number=k1 THEN v1 WHEN file_row_number=k2 THEN v2 ... END
+					auto case_expr = make_uniq<BoundCaseExpression>(LogicalType::BIGINT);
+
+					// Add WHEN clauses for each row_index -> snapshot_id mapping
+					for (auto &entry : row_to_snapshot) {
+						BoundCaseCheck check;
+						// when_expr: file_row_number == entry.first (file-local row index)
+						check.when_expr = make_uniq<BoundComparisonExpression>(
+						    ExpressionType::COMPARE_EQUAL,
+						    file_row_number->Copy(),
+						    make_uniq<BoundConstantExpression>(Value::BIGINT(entry.first)));
+						// then_expr: entry.second (the snapshot_id)
+						check.then_expr = make_uniq<BoundConstantExpression>(Value::BIGINT(entry.second));
+						case_expr->case_checks.push_back(std::move(check));
+					}
+					// Default else value (should not happen, but just in case)
+					case_expr->else_expr = make_uniq<BoundConstantExpression>(Value::BIGINT(0));
+
+					// Transform column_id to file_row_number so it gets projected
+					column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+					return case_expr;
+				}
+			}
+		}
+		// get the snapshot_id from file options (fallback)
 		if (!reader_data.file_to_be_opened.extended_info) {
 			throw InternalException("Extended info not found for reading snapshot id column");
 		}
