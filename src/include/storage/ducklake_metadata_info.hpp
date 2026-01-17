@@ -316,7 +316,12 @@ struct DuckLakeFileListEntry {
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx max_row_count;
+	//! For insertion queries: minimum row count to skip (rows inserted before start_snapshot)
+	optional_idx min_row_count;
+	//! Upper bound snapshot filter (filter rows where snapshot_id <= snapshot_filter)
 	optional_idx snapshot_filter;
+	//! Lower bound snapshot filter for insertion queries (filter rows where snapshot_id >= snapshot_filter_start)
+	optional_idx snapshot_filter_start;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 };

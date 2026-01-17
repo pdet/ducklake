@@ -129,13 +129,17 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				delete_filter->Initialize(*inlined_deletes);
 				reader.deletion_filter = std::move(delete_filter);
 			}
-		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid()) {
+		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid() ||
+		           file_entry.min_row_count.IsValid()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
 				delete_filter->Initialize(context, file_entry.delete_file);
 			}
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
+			}
+			if (file_entry.min_row_count.IsValid()) {
+				delete_filter->SetMinRowCount(file_entry.min_row_count.GetIndex());
 			}
 			if (delete_map) {
 				delete_map->AddDeleteData(reader.GetFileName(), delete_filter->delete_data);
@@ -153,18 +157,18 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
-	if (file_entry.snapshot_filter.IsValid()) {
+	if (file_entry.snapshot_filter.IsValid() || file_entry.snapshot_filter_start.IsValid()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
 		optional_idx snapshot_col;
-		auto snapshot_filter_constant = Value::UBIGINT(file_entry.snapshot_filter.GetIndex());
+		LogicalType snapshot_col_type;
 		for (idx_t col_idx = 0; col_idx < reader.columns.size(); col_idx++) {
 			auto &col = reader.columns[col_idx];
 			if (col.identifier.type() == LogicalTypeId::INTEGER &&
 			    IntegerValue::Get(col.identifier) == LAST_UPDATED_SEQUENCE_NUMBER_ID) {
 				snapshot_col = col_idx;
-				snapshot_filter_constant = snapshot_filter_constant.DefaultCastAs(col.type);
+				snapshot_col_type = col.type;
 				break;
 			}
 		}
@@ -189,9 +193,22 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.filters = make_uniq<TableFilterSet>();
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
-		auto snapshot_filter =
-		    make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(snapshot_filter_constant));
-		reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+		// Add upper bound filter: snapshot_id <= snapshot_filter
+		if (file_entry.snapshot_filter.IsValid()) {
+			auto snapshot_filter_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                                                 std::move(snapshot_filter_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter));
+		}
+		// Add lower bound filter: snapshot_id >= snapshot_filter_start
+		if (file_entry.snapshot_filter_start.IsValid()) {
+			auto snapshot_filter_start_constant =
+			    Value::UBIGINT(file_entry.snapshot_filter_start.GetIndex()).DefaultCastAs(snapshot_col_type);
+			auto snapshot_filter_start = make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                       std::move(snapshot_filter_start_constant));
+			reader.filters->PushFilter(snapshot_col_idx, std::move(snapshot_filter_start));
+		}
 	}
 	return result;
 }

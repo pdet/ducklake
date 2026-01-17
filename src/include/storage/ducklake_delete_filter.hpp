@@ -25,12 +25,14 @@ public:
 
 	shared_ptr<DuckLakeDeleteData> delete_data;
 	optional_idx max_row_count;
+	optional_idx min_row_count;
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) override;
 	void Initialize(ClientContext &context, const DuckLakeFileData &delete_file);
 	void Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes);
 	void Initialize(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan);
 	void SetMaxRowCount(idx_t max_row_count);
+	void SetMinRowCount(idx_t min_row_count);
 
 private:
 	static vector<idx_t> ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file);

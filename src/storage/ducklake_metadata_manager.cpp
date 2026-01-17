@@ -720,6 +720,48 @@ static void ParsePartialFileInfo(DuckLakeSnapshot snapshot, const string &partia
 	}
 }
 
+//! Parse partial file info for insertion queries - computes both min and max row counts
+static void ParsePartialFileInfoForInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
+                                              const string &partial_file_info_str, DuckLakeFileListEntry &file_entry) {
+	if (StringUtil::StartsWith(partial_file_info_str, "partial_max:")) {
+		// For partial_max format, use snapshot filtering for both bounds
+		auto max_partial_file_snapshot = StringUtil::ToUnsigned(partial_file_info_str.substr(12));
+		if (max_partial_file_snapshot < start_snapshot.snapshot_id) {
+			// No rows in this file are within the requested range
+			file_entry.max_row_count = 0;
+			file_entry.min_row_count = 0;
+			return;
+		}
+		// Set lower bound filter: snapshot_id >= start_snapshot
+		file_entry.snapshot_filter_start = start_snapshot.snapshot_id;
+		// Set upper bound filter: snapshot_id <= end_snapshot
+		if (max_partial_file_snapshot > end_snapshot.snapshot_id) {
+			file_entry.snapshot_filter = end_snapshot.snapshot_id;
+		}
+	} else {
+		// For split format, compute both min and max row counts
+		auto partial_file_info = ParsePartialFileInfo(partial_file_info_str, PartialFileInfoType::SPLITS, end_snapshot);
+		idx_t max_row_count = 0;
+		idx_t min_row_count = 0;
+		for (auto &info : partial_file_info) {
+			// max_row_count: rows visible at end_snapshot
+			if (info.snapshot_id <= end_snapshot.snapshot_id) {
+				max_row_count = MaxValue<idx_t>(max_row_count, info.max_row_count);
+			}
+			// min_row_count: rows inserted BEFORE start_snapshot (to be skipped)
+			if (info.snapshot_id < start_snapshot.snapshot_id) {
+				min_row_count = MaxValue<idx_t>(min_row_count, info.max_row_count);
+			}
+		}
+		if (max_row_count > 0) {
+			file_entry.max_row_count = max_row_count;
+		}
+		if (min_row_count > 0) {
+			file_entry.min_row_count = min_row_count;
+		}
+	}
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const TableFilter &filter, const LogicalType &type,
                                                               unordered_set<string> &referenced_stats) {
 	switch (filter.filter_type) {
@@ -1150,12 +1192,16 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	string select_list = GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
 	                     GetFileSelectList("del");
+	// Include files that either:
+	// 1. Have begin_snapshot within the requested range (non-merged files)
+	// 2. Have partial_file_info (merged files that might contain rows from the requested range)
 	auto query = StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
 ) del
-WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= {SNAPSHOT_ID};
+WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID}
+  AND (data.begin_snapshot >= %d OR data.partial_file_info IS NOT NULL);
 		)",
 	                                select_list, table_id.index, start_snapshot.snapshot_id);
 
@@ -1175,7 +1221,7 @@ WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= 
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
 			auto partial_file_info = row.GetValue<string>(col_idx);
-			ParsePartialFileInfo(end_snapshot, partial_file_info, file_entry);
+			ParsePartialFileInfoForInsertions(start_snapshot, end_snapshot, partial_file_info, file_entry);
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
@@ -1183,6 +1229,11 @@ WHERE data.table_id=%d AND data.begin_snapshot >= %d AND data.begin_snapshot <= 
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		// Skip files that don't contain any rows in the requested range
+		if (file_entry.min_row_count.IsValid() && file_entry.max_row_count.IsValid() &&
+		    file_entry.min_row_count.GetIndex() >= file_entry.max_row_count.GetIndex()) {
+			continue;
+		}
 		files.push_back(std::move(file_entry));
 	}
 	return files;

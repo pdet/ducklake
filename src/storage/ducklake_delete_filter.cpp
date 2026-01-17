@@ -45,6 +45,48 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 		}
 		count = MinValue<idx_t>(max_count - start_row_index, count);
 	}
+	// apply min row count (if it is set) - skip rows before min_row_count
+	if (min_row_count.IsValid()) {
+		auto min_count = min_row_count.GetIndex();
+		auto end_row_index = NumericCast<idx_t>(start_row_index) + count;
+		if (end_row_index <= min_count) {
+			// all rows are before min_row_count - skip
+			return 0;
+		}
+		if (NumericCast<idx_t>(start_row_index) < min_count) {
+			// some rows are before min_row_count - filter them out
+			result_sel.Initialize(STANDARD_VECTOR_SIZE);
+			idx_t result_count = 0;
+			for (idx_t i = 0; i < count; i++) {
+				if (NumericCast<idx_t>(start_row_index) + i >= min_count) {
+					result_sel.set_index(result_count++, i);
+				}
+			}
+			// apply delete data filter on remaining rows
+			if (delete_data->deleted_rows.empty()) {
+				return result_count;
+			}
+			// need to combine with delete filter - let delete_data handle it and then intersect
+			SelectionVector delete_sel;
+			idx_t delete_count = delete_data->Filter(start_row_index, count, delete_sel);
+			if (delete_count == count) {
+				// no deletes - just return min_row_count filtered result
+				return result_count;
+			}
+			// intersect the two selection vectors
+			SelectionVector combined_sel;
+			combined_sel.Initialize(STANDARD_VECTOR_SIZE);
+			idx_t combined_count = 0;
+			for (idx_t i = 0; i < delete_count; i++) {
+				auto orig_idx = delete_sel.get_index(i);
+				if (NumericCast<idx_t>(start_row_index) + orig_idx >= min_count) {
+					combined_sel.set_index(combined_count++, orig_idx);
+				}
+			}
+			result_sel.Initialize(combined_sel);
+			return combined_count;
+		}
+	}
 	return delete_data->Filter(start_row_index, count, result_sel);
 }
 
@@ -195,6 +237,10 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 
 void DuckLakeDeleteFilter::SetMaxRowCount(idx_t max_row_count_p) {
 	max_row_count = max_row_count_p;
+}
+
+void DuckLakeDeleteFilter::SetMinRowCount(idx_t min_row_count_p) {
+	min_row_count = min_row_count_p;
 }
 
 } // namespace duckdb
