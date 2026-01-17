@@ -104,6 +104,9 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			data = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot, table_name,
 			                                                 columns_to_read);
 			break;
+		case DuckLakeScanType::SCAN_FOR_FLUSH:
+			data = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, columns_to_read);
+			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
@@ -189,14 +192,20 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 		data->data->Scan(state, chunk);
 	}
 	idx_t scan_count = chunk.size();
+	if (scan_count == 0) {
+		return AsyncResult(SourceResultType::FINISHED);
+	}
 	if (filters || deletion_filter) {
 		SelectionVector sel;
-		idx_t approved_tuple_count = chunk.size();
+		idx_t approved_tuple_count = scan_count;
 		if (deletion_filter) {
 			approved_tuple_count = deletion_filter->Filter(file_row_number, approved_tuple_count, sel);
 		}
 		if (filters) {
 			for (auto &entry : filters->filters) {
+				if (entry.second->filter_type == TableFilterType::OPTIONAL_FILTER) {
+					continue;
+				}
 				auto column_id = entry.first;
 				auto &vec = chunk.data[column_id];
 
@@ -215,7 +224,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 		}
 	}
 	file_row_number += NumericCast<int64_t>(scan_count);
-	return chunk.size() ? AsyncResult(SourceResultType::HAVE_MORE_OUTPUT) : AsyncResult(SourceResultType::FINISHED);
+	return AsyncResult(SourceResultType::HAVE_MORE_OUTPUT);
 }
 
 void DuckLakeInlinedDataReader::AddVirtualColumn(column_t virtual_column_id) {

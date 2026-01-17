@@ -177,6 +177,7 @@ struct DuckLakeDeleteFileInfo {
 	idx_t file_size_bytes;
 	idx_t footer_size;
 	string encryption_key;
+	optional_idx begin_snapshot;
 };
 
 struct DuckLakePartitionFieldInfo {
@@ -407,6 +408,18 @@ struct DuckLakeCompactedFileInfo {
 	TableIndex table_index;
 	optional_idx delete_file_start_snapshot;
 	optional_idx delete_file_end_snapshot;
+};
+
+struct DuckLakeMergeAdjacentOptions {
+	uint64_t max_files;
+	optional_idx min_file_size;
+	optional_idx max_file_size;
+};
+
+struct DuckLakeFileSizeOptions {
+	optional_idx min_file_size;
+	optional_idx max_file_size;
+	idx_t target_file_size;
 };
 
 struct DuckLakeTableSizeInfo {

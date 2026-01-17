@@ -203,7 +203,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
 	result->inlined_data_tables = inlined_data_tables;
-	return result;
+	return std::move(result);
 }
 
 const DuckLakeFileListEntry &DuckLakeMultiFileList::GetFileEntry(idx_t file_idx) {
@@ -222,10 +222,10 @@ DuckLakeFileData GetFileData(const DuckLakeDataFile &file) {
 
 DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file) {
 	DuckLakeFileData result;
-	if (!file.delete_file) {
+	if (file.delete_files.empty()) {
 		return result;
 	}
-	auto &delete_file = *file.delete_file;
+	auto &delete_file = file.delete_files.back();
 	result.path = delete_file.file_name;
 	result.encryption_key = delete_file.encryption_key;
 	result.file_size_bytes = delete_file.file_size_bytes;
