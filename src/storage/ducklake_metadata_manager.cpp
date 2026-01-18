@@ -763,12 +763,21 @@ static void ParsePartialFileInfo(const DuckLakeSnapshot &snapshot, const string 
 
 //! Parse partial file info for insertion queries - computes both min and max row counts
 static void ParsePartialFileInfoForInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-                                              const string &partial_file_info_str, DuckLakeFileListEntry &file_entry) {
+                                              const string &partial_file_info_str, DuckLakeFileListEntry &file_entry,
+                                              idx_t file_begin_snapshot) {
 	if (StringUtil::StartsWith(partial_file_info_str, "partial_max:")) {
 		// For partial_max format, use snapshot filtering for both bounds
 		auto max_partial_file_snapshot = StringUtil::ToUnsigned(partial_file_info_str.substr(12));
 		if (max_partial_file_snapshot < start_snapshot.snapshot_id) {
 			// No rows in this file are within the requested range
+			file_entry.max_row_count = 0;
+			file_entry.min_row_count = 0;
+			return;
+		}
+		// If file_begin_snapshot < start_snapshot, the file was included only due to partial_file_info IS NOT NULL
+		// For partial_max format files, all data was continuously visible since begin_snapshot
+		// So if begin_snapshot < start_snapshot, all rows were already visible - no new insertions
+		if (file_begin_snapshot < start_snapshot.snapshot_id) {
 			file_entry.max_row_count = 0;
 			file_entry.min_row_count = 0;
 			return;
@@ -1262,7 +1271,8 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID}
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
 			auto partial_file_info = row.GetValue<string>(col_idx);
-			ParsePartialFileInfoForInsertions(start_snapshot, end_snapshot, partial_file_info, file_entry);
+			ParsePartialFileInfoForInsertions(start_snapshot, end_snapshot, partial_file_info, file_entry,
+			                                  file_entry.snapshot_id.GetIndex());
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
