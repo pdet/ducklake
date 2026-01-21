@@ -21,6 +21,7 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -460,5 +461,123 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
 	                                                   global_column_reference);
 }
+
+// void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data,
+//                                             BaseFileReader &reader, const MultiFileReaderData &reader_data,
+//                                             DataChunk &input_chunk, DataChunk &output_chunk,
+//                                             ExpressionExecutor &executor,
+//                                             optional_ptr<MultiFileReaderGlobalState> global_state) {
+// 	// Call base class first
+// 	MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
+// 	                               global_state);
+//
+// 	// Check if this is a delete scan with embedded snapshot IDs
+// 	if (read_info.scan_type != DuckLakeScanType::SCAN_DELETIONS) {
+// 		return;
+// 	}
+//
+// 	// Check if we have a delete filter with embedded snapshot IDs
+// 	auto &delete_filter_ptr = reader.deletion_filter;
+// 	if (!delete_filter_ptr) {
+// 		return;
+// 	}
+//
+// 	auto *ducklake_delete_filter = dynamic_cast<DuckLakeDeleteFilter *>(delete_filter_ptr.get());
+// 	if (!ducklake_delete_filter) {
+// 		return;
+// 	}
+//
+// 	auto &delete_data = ducklake_delete_filter->delete_data;
+// 	if (!delete_data || !delete_data->HasScanSnapshotIds()) {
+// 		// No embedded snapshot IDs - the constant snapshot_id is correct
+// 		return;
+// 	}
+//
+// 	// Find the snapshot_id and row_id columns in the output
+// 	// Virtual columns are not in bind_data.names - they're added separately
+// 	// We need to find them by checking the expressions in the executor
+// 	idx_t snapshot_id_col_idx = DConstants::INVALID_INDEX;
+// 	idx_t row_id_col_idx = DConstants::INVALID_INDEX;
+//
+// 	// First check bind_data.names for the column names
+// 	for (idx_t i = 0; i < bind_data.names.size(); i++) {
+// 		if (bind_data.names[i] == "_ducklake_internal_snapshot_id" || bind_data.names[i] == "snapshot_id") {
+// 			snapshot_id_col_idx = i;
+// 		} else if (bind_data.names[i] == "_ducklake_internal_row_id" || bind_data.names[i] == "rowid") {
+// 			row_id_col_idx = i;
+// 		}
+// 	}
+//
+// 	// If not found in names, check the virtual_columns map and expressions
+// 	if (snapshot_id_col_idx == DConstants::INVALID_INDEX || row_id_col_idx == DConstants::INVALID_INDEX) {
+// 		// The output columns correspond to the expressions in order
+// 		// Virtual columns with special identifiers map to expressions
+// 		// We can look at the expression types to identify them
+// 		for (idx_t i = 0; i < executor.expressions.size(); i++) {
+// 			auto &expr = executor.expressions[i];
+// 			if (expr->type == ExpressionType::VALUE_CONSTANT) {
+// 				// This could be the snapshot_id constant
+// 				auto &const_expr = expr->Cast<BoundConstantExpression>();
+// 				if (const_expr.return_type.id() == LogicalTypeId::BIGINT &&
+// 				    snapshot_id_col_idx == DConstants::INVALID_INDEX) {
+// 					// Assume first BIGINT constant is snapshot_id
+// 					// (This is fragile but works for the current use case)
+// 					// Check if this is after any row_id column
+// 					if (row_id_col_idx != DConstants::INVALID_INDEX && i > row_id_col_idx) {
+// 						snapshot_id_col_idx = i;
+// 					} else if (row_id_col_idx == DConstants::INVALID_INDEX && i == 1) {
+// 						// If row_id not found yet, snapshot_id is typically at index 1
+// 						snapshot_id_col_idx = i;
+// 					}
+// 				}
+// 			} else if (expr->type == ExpressionType::BOUND_FUNCTION) {
+// 				// row_id is typically row_number + offset, which is a function
+// 				auto &func_expr = expr->Cast<BoundFunctionExpression>();
+// 				if (func_expr.return_type.id() == LogicalTypeId::BIGINT &&
+// 				    row_id_col_idx == DConstants::INVALID_INDEX) {
+// 					row_id_col_idx = i;
+// 				}
+// 			}
+// 		}
+// 	}
+//
+// 	if (snapshot_id_col_idx == DConstants::INVALID_INDEX || row_id_col_idx == DConstants::INVALID_INDEX) {
+// 		// Still not found - return without modification
+// 		return;
+// 	}
+//
+// 	// Get row_id_start from extended_info
+// 	if (!reader_data.file_to_be_opened.extended_info) {
+// 		return;
+// 	}
+// 	auto &options = reader_data.file_to_be_opened.extended_info->options;
+// 	auto row_id_start_entry = options.find("row_id_start");
+// 	if (row_id_start_entry == options.end()) {
+// 		return;
+// 	}
+// 	auto row_id_start = row_id_start_entry->second.GetValue<idx_t>();
+//
+// 	// Overwrite snapshot_id column with correct per-row values
+// 	auto &snapshot_id_vec = output_chunk.data[snapshot_id_col_idx];
+// 	auto &row_id_vec = output_chunk.data[row_id_col_idx];
+//
+// 	// Flatten the snapshot_id vector - it may be a constant vector initially
+// 	snapshot_id_vec.Flatten(output_chunk.size());
+//
+// 	auto snapshot_id_data = FlatVector::GetData<int64_t>(snapshot_id_vec);
+// 	auto row_id_data = FlatVector::GetData<int64_t>(row_id_vec);
+//
+// 	for (idx_t i = 0; i < output_chunk.size(); i++) {
+// 		// Compute the original row number: row_number = row_id - row_id_start
+// 		auto row_id = row_id_data[i];
+// 		auto row_number = static_cast<idx_t>(row_id) - row_id_start;
+//
+// 		// Look up the snapshot_id for this row
+// 		auto snapshot_opt = delete_data->GetScanSnapshotId(row_number);
+// 		if (snapshot_opt.IsValid()) {
+// 			snapshot_id_data[i] = NumericCast<int64_t>(snapshot_opt.GetIndex());
+// 		}
+// 	}
+// }
 
 } // namespace duckdb

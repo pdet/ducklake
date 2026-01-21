@@ -1206,12 +1206,12 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 SELECT %s, current_delete.begin_snapshot FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+	WHERE table_id = %d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
 LEFT JOIN (
 	SELECT data_file_id, MAX_BY(COLUMNS(['path', 'path_is_relative', 'file_size_bytes', 'footer_size', 'encryption_key']), begin_snapshot) AS '\0'
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot < %d
+	WHERE table_id = %d AND begin_snapshot < current_delete.begin_snapshot
 	GROUP BY data_file_id
 ) AS previous_delete
 USING (data_file_id)
@@ -1237,7 +1237,7 @@ USING (data_file_id), (
 	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
 ) current_delete;
 		)",
-	                       select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
+	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index, table_id.index,
 	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1260,6 +1260,10 @@ USING (data_file_id), (
 		entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.previous_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
+		if (!row.IsNull(col_idx)) {
+			entry.delete_file_max_snapshot = row.GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
 		// store the snapshot range for filtering embedded snapshot IDs
 		entry.start_snapshot = start_snapshot.snapshot_id;
 		entry.end_snapshot = end_snapshot.snapshot_id;

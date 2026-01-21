@@ -16,11 +16,16 @@ namespace duckdb {
 struct DuckLakeDeleteData {
 	vector<idx_t> deleted_rows;
 	vector<idx_t> snapshot_ids;
+	//! For delete scans with embedded snapshots: stores snapshot_id for each row_id being scanned
+	//! scan_row_snapshot_ids[row_id] = snapshot_id, or 0 if not being scanned
+	vector<idx_t> scan_row_snapshot_ids;
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel,
 	             optional_idx snapshot_filter = optional_idx()) const;
 
 	bool HasEmbeddedSnapshots() const;
+	bool HasScanSnapshotIds() const;
+	optional_idx GetScanSnapshotId(idx_t row_id) const;
 };
 
 struct DeleteFileScanResult {
@@ -45,7 +50,9 @@ public:
 	void SetSnapshotFilter(idx_t snapshot_filter);
 
 private:
-	static DeleteFileScanResult ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file);
+	static DeleteFileScanResult ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
+	                                           optional_idx snapshot_min = optional_idx(),
+	                                           optional_idx snapshot_max = optional_idx());
 };
 
 } // namespace duckdb

@@ -69,6 +69,11 @@ public:
 	                           const LogicalType &type, MultiFileLocalIndex local_index,
 	                           optional_ptr<MultiFileColumnDefinition> &global_column_reference) override;
 
+	// void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
+	//                    const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
+	//                    ExpressionExecutor &executor,
+	//                    optional_ptr<MultiFileReaderGlobalState> global_state) override;
+
 	unique_ptr<MultiFileReader> Copy() const override;
 
 	static vector<MultiFileColumnDefinition> ColumnsFromFieldData(const DuckLakeFieldData &field_data,

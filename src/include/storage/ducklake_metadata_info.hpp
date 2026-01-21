@@ -333,6 +333,8 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! The max snapshot in the delete file (for partial delete files)
+	optional_idx delete_file_max_snapshot;
 };
 
 struct DuckLakeFileListExtendedEntry {

@@ -3,6 +3,8 @@
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
 
@@ -47,6 +49,21 @@ bool DuckLakeDeleteData::HasEmbeddedSnapshots() const {
 	return !snapshot_ids.empty();
 }
 
+bool DuckLakeDeleteData::HasScanSnapshotIds() const {
+	return !scan_row_snapshot_ids.empty();
+}
+
+optional_idx DuckLakeDeleteData::GetScanSnapshotId(idx_t row_id) const {
+	if (row_id >= scan_row_snapshot_ids.size()) {
+		return optional_idx();
+	}
+	auto snapshot_id = scan_row_snapshot_ids[row_id];
+	if (snapshot_id == 0) {
+		return optional_idx();
+	}
+	return snapshot_id;
+}
+
 idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
 	// apply max row count (if it is set)
 	if (max_row_count.IsValid()) {
@@ -60,7 +77,8 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 	return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter);
 }
 
-DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file) {
+DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
+                                                          optional_idx snapshot_min, optional_idx snapshot_max) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionLoader loader(instance, "ducklake");
 	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
@@ -124,7 +142,25 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 	for (idx_t i = 0; i < return_types.size(); i++) {
 		column_ids.push_back(i);
 	}
-	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
+
+	// Create filters for snapshot column if bounds are provided and the file has snapshot IDs
+	unique_ptr<TableFilterSet> filters;
+	if (has_snapshot_id && (snapshot_min.IsValid() || snapshot_max.IsValid())) {
+		filters = make_uniq<TableFilterSet>();
+		ColumnIndex snapshot_col_idx(2); // _ducklake_internal_snapshot_id is column 2
+		if (snapshot_min.IsValid()) {
+			auto filter_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_min.GetIndex()));
+			auto filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(filter_constant));
+			filters->PushFilter(snapshot_col_idx, std::move(filter));
+		}
+		if (snapshot_max.IsValid()) {
+			auto filter_constant = Value::BIGINT(NumericCast<int64_t>(snapshot_max.GetIndex()));
+			auto filter = make_uniq<ConstantFilter>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(filter_constant));
+			filters->PushFilter(snapshot_col_idx, std::move(filter));
+		}
+	}
+
+	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), filters.get());
 	auto global_state = parquet_scan.init_global(context, input);
 	auto local_state = parquet_scan.init_local(execution_context, input, global_state.get());
 
@@ -189,6 +225,10 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	// scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
 	auto rows_to_scan = make_unsafe_uniq_array<bool>(delete_scan.row_count);
 
+	// For embedded snapshots, we need to track the snapshot_id for each row being scanned
+	// Initialize to 0 (meaning not scanned)
+	auto &scan_snapshots = delete_data->scan_row_snapshot_ids;
+
 	// scan the current set of deletes
 	bool filter_by_snapshot = false;
 	if (!delete_scan.delete_file.path.empty()) {
@@ -197,6 +237,11 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 
 		// Check embedded snapshots, if they exist we must use them for filtering
 		filter_by_snapshot = !current_deletes.snapshot_ids.empty();
+
+		// If we have embedded snapshots, initialize the scan_snapshots vector
+		if (filter_by_snapshot) {
+			scan_snapshots.resize(delete_scan.row_count, 0);
+		}
 
 		// iterate over the current deletes - these are the rows we need to scan
 		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
@@ -214,6 +259,8 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				if (snap_id < delete_scan.start_snapshot.GetIndex() || snap_id > delete_scan.end_snapshot.GetIndex()) {
 					continue;
 				}
+				// Store the snapshot_id for this row
+				scan_snapshots[delete_idx] = snap_id;
 			}
 
 			rows_to_scan[delete_idx] = true;
