@@ -39,7 +39,7 @@ FROM ducklake_meta.ducklake_inlined_data_tables
 query II
 FROM ducklake_meta.ducklake_inlined_deletion_tables
 ----
-1	ducklake_inlined_delete_1_1
+1	ducklake_inlined_delete_1
 
 
 query IIIII
