@@ -71,20 +71,21 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 
 static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vector<DuckLakeDataFile> &written_files,
-                                         vector<idx_t> &file_start_row_ids) {
+                                         vector<idx_t> &file_start_row_ids, idx_t inlined_row_id_start) {
 	DeletesPerFile deletes_per_file;
 	for (auto &row : deleted_rows_result) {
 		auto end_snap = row.GetValue<int64_t>(0);
 		auto row_id = row.GetValue<int64_t>(1);
 
 		if (written_files.size() == 1) {
-			// this is easy, we just handover the deleted row ids since they must be from this file
-			PositionWithSnapshot pos_with_snap {row_id, end_snap};
+			// Convert global row_id to file position by subtracting the inlined data's row_id_start
+			int64_t pos_in_file = row_id - static_cast<int64_t>(inlined_row_id_start);
+			PositionWithSnapshot pos_with_snap {pos_in_file, end_snap};
 			deletes_per_file[written_files[0].file_name].insert(pos_with_snap);
 		} else {
 			// lets write the deletes to the right files, in case we have multiple files
 			for (idx_t file_idx = 0; file_idx < written_files.size(); file_idx++) {
-				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx]);
+				const int64_t file_start = static_cast<int64_t>(file_start_row_ids[file_idx] + inlined_row_id_start);
 				const int64_t file_end = static_cast<int64_t>(file_start + written_files[file_idx].row_count);
 				if (row_id >= file_start && row_id < file_end) {
 					int64_t pos_in_file = row_id - file_start;
@@ -113,6 +114,18 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			ORDER BY row_id;)",
 		                                                                          inlined_table.table_name));
 
+		// query the minimum row_id to know where the inlined data starts in the global row_id space
+		auto min_row_id_result = transaction.Query(snapshot, StringUtil::Format(R"(
+			SELECT MIN(row_id)
+			FROM {METADATA_CATALOG}.%s;)",
+		                                                                        inlined_table.table_name));
+		idx_t inlined_row_id_start = 0;
+		for (auto &row : *min_row_id_result) {
+			if (!row.IsNull(0)) {
+				inlined_row_id_start = row.GetValue<idx_t>(0);
+			}
+		}
+
 		// lets figure out where each file ends, so we know where to place ze deletes
 		vector<idx_t> file_start_row_ids;
 		idx_t current_pos = 0;
@@ -122,7 +135,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		}
 
 		auto deletes_per_file =
-		    GroupDeletesByFile(*deleted_rows_result, global_state.written_files, file_start_row_ids);
+		    GroupDeletesByFile(*deleted_rows_result, global_state.written_files, file_start_row_ids, inlined_row_id_start);
 
 		if (!deletes_per_file.empty()) {
 			auto &fs = FileSystem::GetFileSystem(context);
