@@ -199,8 +199,19 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 			}
 			rows_to_scan[delete_idx] = true;
 		}
+	} else if (!delete_scan.inlined_file_deletions.deleted_rows.empty()) {
+		// we have inlined file deletions - these are the rows we need to scan
+		memset(rows_to_scan.get(), 0, sizeof(bool) * delete_scan.row_count);
+		for (auto delete_idx : delete_scan.inlined_file_deletions.deleted_rows) {
+			if (delete_idx >= delete_scan.row_count) {
+				throw InvalidInputException(
+				    "Invalid delete data - inlined delete index is out of range for data file %s",
+				    delete_scan.file.path);
+			}
+			rows_to_scan[delete_idx] = true;
+		}
 	} else {
-		// we have no delete file - this means the entire file was deleted
+		// we have no delete file and no inlined deletions, this means the entire file was deleted
 		// set all rows as being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
 	}
