@@ -310,6 +310,11 @@ enum class DuckLakeDataType {
 	TRANSACTION_LOCAL_INLINED_DATA,
 };
 
+struct DuckLakeInlinedFileDeletions {
+	vector<idx_t> deleted_rows;
+	vector<idx_t> snapshot_ids;
+};
+
 struct DuckLakeFileListEntry {
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
@@ -322,6 +327,10 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! The data file id (for matching with inlined file deletions)
+	DataFileIndex data_file_id;
+	//! Inlined file deletions (positions stored in catalog instead of delete file)
+	DuckLakeInlinedFileDeletions inlined_file_deletions;
 };
 
 struct DuckLakeDeleteScanEntry {
@@ -332,6 +341,8 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx snapshot_id;
+	//! Inlined file deletions (for scanning deletions within a snapshot range)
+	DuckLakeInlinedFileDeletions inlined_file_deletions;
 };
 
 struct DuckLakeFileListExtendedEntry {
@@ -344,6 +355,8 @@ struct DuckLakeFileListExtendedEntry {
 	idx_t row_count;
 	idx_t delete_count = 0;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! Inlined file deletions (positions stored in catalog instead of delete file)
+	DuckLakeInlinedFileDeletions inlined_file_deletions;
 };
 
 struct DuckLakeCompactionBaseFileData {

@@ -38,11 +38,18 @@ struct CompactionInformation;
 struct DuckLakePath;
 struct DuckLakeCommitState;
 
+struct InlinedFileDeletion {
+	DataFileIndex file_id;
+	set<idx_t> positions;
+};
+
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
 	unordered_map<string, vector<DuckLakeDeleteFile>> new_delete_files;
 	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
+	//! Inlined deletions from file data (file_id -> positions deleted)
+	unordered_map<idx_t, InlinedFileDeletion> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
 	bool IsEmpty() const;
 };
@@ -110,9 +117,12 @@ public:
 
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
+	void AddInlinedFileDeletion(TableIndex table_id, DataFileIndex file_id, set<idx_t> positions);
+	idx_t GetInlinedFileDeletionCount(TableIndex table_id, DataFileIndex file_id);
 	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name);
 	vector<DuckLakeDeletedInlinedDataInfo> GetNewInlinedDeletes(DuckLakeCommitState &commit_state);
+	vector<DuckLakeInlinedDeletionInfo> GetNewInlinedFileDeletions(DuckLakeCommitState &commit_state);
 
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);

@@ -291,6 +291,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 			file_entry.file = file.file;
 			file_entry.row_id_start = file.row_id_start;
 			file_entry.delete_file = file.delete_file;
+			file_entry.inlined_file_deletions = file.inlined_file_deletions;
+			file_entry.data_file_id = file.file_id;
 			files.emplace_back(std::move(file_entry));
 		}
 		read_file_list = true;
