@@ -1066,7 +1066,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list = GetFileSelectList("data") +
+	string select_list = "data.data_file_id, " + GetFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetFileSelectList("del");
 
@@ -1102,10 +1102,16 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
 	}
+
+	// Read inlined file deletions
+	auto inlined_file_deletions = ReadInlinedFileDeletions(table, snapshot);
+
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
 		DuckLakeFileListEntry file_entry;
 		idx_t col_idx = 0;
+		// Read data_file_id
+		file_entry.data_file_id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
@@ -1122,6 +1128,13 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+
+		// Check for inlined file deletions for this file
+		auto inlined_entry = inlined_file_deletions.find(file_entry.data_file_id.index);
+		if (inlined_entry != inlined_file_deletions.end()) {
+			file_entry.inlined_file_deletions = std::move(inlined_entry->second);
+		}
+
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1260,6 +1273,14 @@ USING (data_file_id), (
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		files.push_back(std::move(entry));
 	}
+
+	// Read inlined file deletions within the snapshot range
+	auto inlined_deletions =
+	    ReadInlinedFileDeletionsForRange(table, start_snapshot, end_snapshot);
+	for (auto &inlined_entry : inlined_deletions) {
+		files.push_back(std::move(inlined_entry));
+	}
+
 	return files;
 }
 
@@ -1302,6 +1323,10 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get extended data file list from DuckLake: ");
 	}
+
+	// Read inlined file deletions
+	auto inlined_file_deletions = ReadInlinedFileDeletions(table, snapshot);
+
 	vector<DuckLakeFileListExtendedEntry> files;
 	for (auto &row : *result) {
 		DuckLakeFileListExtendedEntry file_entry;
@@ -1317,6 +1342,13 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+
+		// Check for inlined file deletions for this file
+		auto inlined_entry = inlined_file_deletions.find(file_entry.file_id.index);
+		if (inlined_entry != inlined_file_deletions.end()) {
+			file_entry.inlined_file_deletions = std::move(inlined_entry->second);
+		}
+
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1684,8 +1716,7 @@ static InlinedTables GetInlinedInsertTableName(const DuckLakeTableInfo &table, c
 	InlinedTables inlined_table_names;
 	inlined_table_names.data_table_name =
 	    StringUtil::Format("ducklake_inlined_data_%d_%d", table.id.index, snapshot.schema_version);
-	inlined_table_names.deleted_table_name =
-	    StringUtil::Format("ducklake_inlined_delete_%d_%d", table.id.index, snapshot.schema_version);
+	inlined_table_names.deleted_table_name = StringUtil::Format("ducklake_inlined_delete_%d", table.id.index);
 	return inlined_table_names;
 }
 
@@ -1957,6 +1988,172 @@ WHERE row_id=deleted_row_id;
 		                                    row_id_list, entry.table_name);
 	}
 	return batch_queries;
+}
+
+string DuckLakeMetadataManager::WriteNewInlinedFileDeletions(const vector<DuckLakeInlinedDeletionInfo> &new_deletions) {
+	string batch_queries;
+	if (new_deletions.empty()) {
+		return batch_queries;
+	}
+	// Get the inlined delete table name for each table
+	for (auto &entry : new_deletions) {
+		// Get the inlined table names for this table
+		auto snapshot = GetSnapshot();
+		auto inlined_tables_result = transaction.Query(*snapshot, StringUtil::Format(R"(
+SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables
+WHERE table_id = %d
+ORDER BY rowid DESC LIMIT 1;)",
+		                                                                             entry.table_id.index));
+		if (inlined_tables_result->HasError()) {
+			inlined_tables_result->GetErrorObject().Throw("Failed to get inlined deletion table name: ");
+		}
+		string inlined_table_name;
+		for (auto &row : *inlined_tables_result) {
+			inlined_table_name = row.GetValue<string>(0);
+			break;
+		}
+		if (inlined_table_name.empty()) {
+			// No inlined deletion table exists yet - create one
+			inlined_table_name = StringUtil::Format("ducklake_inlined_delete_%d", entry.table_id.index);
+			// Create the table and register it
+			batch_queries += StringUtil::Format(
+			    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
+			    SQLIdentifier(inlined_table_name));
+			batch_queries += StringUtil::Format(
+			    "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES (%d, %s);", entry.table_id.index,
+			    SQLString(inlined_table_name));
+		}
+
+		// Insert deletions for each file
+		for (auto &file_entry : entry.file_row_id_map) {
+			auto file_id = file_entry.first;
+			auto &positions = file_entry.second;
+			if (positions.empty()) {
+				continue;
+			}
+			// Build the VALUES list
+			string values;
+			for (auto &pos : positions) {
+				if (!values.empty()) {
+					values += ", ";
+				}
+				values += StringUtil::Format("(%d, %d, {SNAPSHOT_ID})", file_id, pos);
+			}
+			batch_queries += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;",
+			                                    SQLIdentifier(inlined_table_name), values);
+		}
+	}
+	return batch_queries;
+}
+
+unordered_map<idx_t, DuckLakeInlinedFileDeletions> DuckLakeMetadataManager::ReadInlinedFileDeletions(
+    DuckLakeTableEntry &table, DuckLakeSnapshot snapshot) {
+	unordered_map<idx_t, DuckLakeInlinedFileDeletions> result;
+
+	auto table_id = table.GetTableId();
+	auto inlined_table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
+
+	auto deletions_result = transaction.Query(snapshot, StringUtil::Format(R"(
+SELECT file_id, row_id, begin_snapshot
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= begin_snapshot
+ORDER BY file_id, row_id;)",
+	                                                                       SQLIdentifier(inlined_table_name)));
+	if (deletions_result->HasError()) {
+		return result;
+	}
+
+	for (auto &row : *deletions_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		auto begin_snapshot = row.GetValue<idx_t>(2);
+
+		auto &file_deletions = result[file_id];
+		file_deletions.deleted_rows.push_back(row_id);
+		file_deletions.snapshot_ids.push_back(begin_snapshot);
+	}
+
+	return result;
+}
+
+vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(
+    DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot) {
+	vector<DuckLakeDeleteScanEntry> result;
+
+	auto table_id = table.GetTableId();
+	auto inlined_table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
+
+	// Read deletions from the inlined deletion table that are within the snapshot range
+	// Group by file_id to create one entry per file
+	unordered_map<idx_t, DuckLakeInlinedFileDeletions> inlined_deletions_by_file;
+	unordered_map<idx_t, idx_t> snapshot_by_file; // track snapshot_id per file
+
+	auto deletions_result = transaction.Query(end_snapshot, StringUtil::Format(R"(
+SELECT file_id, row_id, begin_snapshot
+FROM {METADATA_CATALOG}.%s
+WHERE begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+ORDER BY file_id, row_id;)",
+	                                                                           SQLIdentifier(inlined_table_name),
+	                                                                           start_snapshot.snapshot_id));
+	if (deletions_result->HasError()) {
+		return result;
+	}
+
+	for (auto &row : *deletions_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<idx_t>(1);
+		auto begin_snapshot = row.GetValue<idx_t>(2);
+
+		auto &file_deletions = inlined_deletions_by_file[file_id];
+		file_deletions.deleted_rows.push_back(row_id);
+		file_deletions.snapshot_ids.push_back(begin_snapshot);
+
+		// Track the snapshot for this file (use the first/minimum)
+		if (snapshot_by_file.find(file_id) == snapshot_by_file.end()) {
+			snapshot_by_file[file_id] = begin_snapshot;
+		}
+	}
+
+	if (inlined_deletions_by_file.empty()) {
+		return result;
+	}
+
+	// Get data file information for each file with inlined deletions
+	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.record_count, data.mapping_id";
+	for (auto &entry : inlined_deletions_by_file) {
+		auto file_id = entry.first;
+		auto &inlined_deletions = entry.second;
+
+		auto data_file_result = transaction.Query(end_snapshot, StringUtil::Format(R"(
+SELECT %s
+FROM {METADATA_CATALOG}.ducklake_data_file data
+WHERE data.data_file_id = %d;)",
+		                                                                           select_list, file_id));
+		if (data_file_result->HasError()) {
+			continue;
+		}
+
+		for (auto &row : *data_file_result) {
+			DuckLakeDeleteScanEntry delete_entry;
+			idx_t col_idx = 0;
+			delete_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
+			if (!row.IsNull(col_idx)) {
+				delete_entry.row_id_start = row.GetValue<idx_t>(col_idx);
+			}
+			col_idx++;
+			delete_entry.row_count = row.GetValue<idx_t>(col_idx++);
+			if (!row.IsNull(col_idx)) {
+				delete_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
+			}
+			col_idx++;
+			// No delete_file or previous_delete_file for inlined deletions
+			delete_entry.snapshot_id = snapshot_by_file[file_id];
+			delete_entry.inlined_file_deletions = std::move(inlined_deletions);
+			result.push_back(std::move(delete_entry));
+		}
+	}
+
+	return result;
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result) {

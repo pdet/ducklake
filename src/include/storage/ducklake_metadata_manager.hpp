@@ -163,6 +163,9 @@ public:
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
 	virtual string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes);
+	virtual string WriteNewInlinedFileDeletions(const vector<DuckLakeInlinedDeletionInfo> &new_deletions);
+	virtual unordered_map<idx_t, DuckLakeInlinedFileDeletions> ReadInlinedFileDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot);
+	virtual vector<DuckLakeDeleteScanEntry> ReadInlinedFileDeletionsForRange(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot);
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual InlinedTables GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                             string &inlined_data_tables, string &inlined_deletion_tables,
