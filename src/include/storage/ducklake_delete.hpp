@@ -149,6 +149,10 @@ public:
 private:
 	void FlushDelete(DuckLakeTransaction &transaction, ClientContext &context, DuckLakeDeleteGlobalState &global_state,
 	                 const string &filename, ColumnDataCollection &deleted_rows) const;
+	//! Try to inline the deletion instead of writing a delete file
+	//! Returns true if the deletion was inlined, false if a delete file needs to be written
+	bool TryInlineDeletion(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
+	                       set<idx_t> &sorted_deletes) const;
 };
 
 } // namespace duckdb

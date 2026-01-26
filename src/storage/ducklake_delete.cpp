@@ -355,6 +355,14 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	delete_file.data_file_id = data_file_info.file_id;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
+	bool has_existing_delete_file = !data_file_info.delete_file.path.empty();
+
+	// Try to inline the deletion instead of writing a delete file
+	if (!has_existing_delete_file && TryInlineDeletion(transaction, delete_file, sorted_deletes)) {
+		return;
+	}
+
+	// We need to write a delete file - merge existing deletes
 	if (existing_delete_data) {
 		// deletes already exist for this file - add to set of deletes to write
 		auto &existing_deletes = existing_delete_data->deleted_rows;
@@ -363,8 +371,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		// clear the deletes
 		delete_map->ClearDeletes(filename);
 
-		// set the delete file as overwriting existing deletes
-		delete_file.overwrites_existing_delete = true;
+		// set the delete file as overwriting existing deletes (only if there was a physical delete file)
+		delete_file.overwrites_existing_delete = has_existing_delete_file;
 	}
 	if (sorted_deletes.size() == data_file_info.row_count) {
 		// ALL rows in this file are deleted - we don't need to write the deletes out to a file
@@ -394,6 +402,33 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
 
 	global_state.written_files.emplace(filename, std::move(written_file));
+}
+
+bool DuckLakeDelete::TryInlineDeletion(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
+                                       set<idx_t> &sorted_deletes) const {
+
+	if (!delete_file.data_file_id.IsValid()) {
+		// If the file is not on disk, we can't inline the deletes
+		return false;
+	}
+	auto &ducklake_schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	idx_t data_inlining_row_limit = catalog.DataInliningRowLimit(ducklake_schema.GetSchemaId(), table.GetTableId());
+	if (data_inlining_row_limit == 0) {
+		// Check if we should inline the deletes
+		return false;
+	}
+	// Check transaction-local deletion count against threshold
+	idx_t transaction_inlined_count =
+	    transaction.GetInlinedFileDeletionCount(table.GetTableId(), delete_file.data_file_id);
+	idx_t new_delete_count = sorted_deletes.size();
+	idx_t total_count = transaction_inlined_count + new_delete_count;
+	if (total_count > data_inlining_row_limit) {
+		return false;
+	}
+	// Inline the deletion - only add the NEW deletes (existing are already in catalog)
+	transaction.AddInlinedFileDeletion(table.GetTableId(), delete_file.data_file_id, std::move(sorted_deletes));
+	return true;
 }
 
 SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
