@@ -326,6 +326,8 @@ struct DuckLakeInlinedFileDeletionsForFlush {
 	DuckLakeInlinedFileDeletions inlined_deletions;
 	//! Whether this overwrites an existing delete file
 	bool overwrites_existing = false;
+	//! The begin_snapshot inherited from the existing delete file (if any)
+	optional_idx inherited_begin_snapshot;
 };
 
 struct DuckLakeFileListEntry {

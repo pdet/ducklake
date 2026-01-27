@@ -230,6 +230,10 @@ SourceResultType DuckLakeFlushInlinedFileDeletions::GetDataInternal(ExecutionCon
 		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(client_context, file_input);
 		delete_file.data_file_id = file_entry.file_id;
 		delete_file.overwrites_existing_delete = file_entry.overwrites_existing;
+		// If we're overwriting an existing delete file, inherit its begin_snapshot
+		if (file_entry.inherited_begin_snapshot.IsValid()) {
+			delete_file.begin_snapshot = file_entry.inherited_begin_snapshot;
+		}
 		delete_files.push_back(std::move(delete_file));
 	}
 
@@ -513,9 +517,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			}
 
 			// Also check for and flush inlined file deletions
-			auto &inlined_delete_table_name = table.GetInlinedDeletionTable();
+			// NOTE: We query the metadata directly instead of using table.GetInlinedDeletionTable()
+			// because the cached table entry may not reflect recently created inlined deletion tables
+			auto &metadata_manager = transaction.GetMetadataManager();
+			auto inlined_delete_table_name = metadata_manager.GetInlinedDeletionTableName(table.GetTableId());
 			if (!inlined_delete_table_name.empty()) {
-				auto &metadata_manager = transaction.GetMetadataManager();
 				auto inlined_file_deletions =
 				    metadata_manager.ReadInlinedFileDeletionsForFlush(table.GetTableId(), inlined_delete_table_name);
 				if (!inlined_file_deletions.empty()) {

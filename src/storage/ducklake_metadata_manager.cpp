@@ -2289,9 +2289,11 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForFlush(TableIndex table_id, c
 	auto snapshot = GetSnapshot();
 
 	// First, get the list of files with inlined deletions and their delete file info (if any)
+	// partial_max is NOT NULL only for delete files that have embedded snapshot IDs
+	// We also fetch del.begin_snapshot to inherit when merging with existing delete files
 	auto files_result = transaction.Query(*snapshot, StringUtil::Format(R"(
 SELECT DISTINCT d.file_id, df.path, df.path_is_relative,
-       del.path as delete_path, del.path_is_relative as delete_path_is_relative, del.encryption_key
+       del.path as delete_path, del.path_is_relative as delete_path_is_relative, del.encryption_key, del.partial_max, del.begin_snapshot
 FROM {METADATA_CATALOG}.%s d
 JOIN {METADATA_CATALOG}.ducklake_data_file df ON d.file_id = df.data_file_id
 LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file del ON d.file_id = del.data_file_id AND del.end_snapshot IS NULL;)",
@@ -2299,7 +2301,6 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file del ON d.file_id = del.data_fi
 	if (files_result->HasError()) {
 		return result;
 	}
-
 	// Process each file
 	for (auto &row : *files_result) {
 		auto file_id = row.GetValue<idx_t>(0);
@@ -2333,6 +2334,30 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file del ON d.file_id = del.data_fi
 				                                       SQLString(encryption_key));
 			}
 
+			// partial_max is NOT NULL only for delete files that have embedded snapshot IDs
+			bool has_snapshot_column = !row.IsNull(6);
+
+			// Get the existing delete file's begin_snapshot to inherit
+			idx_t existing_begin_snapshot = 0;
+			if (!row.IsNull(7)) {
+				existing_begin_snapshot = row.GetValue<idx_t>(7);
+				file_deletions.inherited_begin_snapshot = existing_begin_snapshot;
+			}
+
+			// Build the SELECT for the delete file based on whether it has the snapshot column
+			string delete_file_select;
+			if (has_snapshot_column) {
+				delete_file_select = StringUtil::Format(
+				    "SELECT pos::BIGINT as row_id, COALESCE(_ducklake_internal_snapshot_id, 0)::BIGINT as begin_snapshot "
+				    "FROM parquet_scan(%s %s)",
+				    SQLString(full_delete_path), encryption_option);
+			} else {
+				// Use the existing file's begin_snapshot for all rows from the old delete file
+				delete_file_select = StringUtil::Format(
+				    "SELECT pos::BIGINT as row_id, %lu::BIGINT as begin_snapshot FROM parquet_scan(%s %s)",
+				    existing_begin_snapshot, SQLString(full_delete_path), encryption_option);
+			}
+
 			// Merge inlined deletions with existing delete file via SQL UNION
 			auto merged_result = transaction.Query(*snapshot, StringUtil::Format(R"(
 SELECT row_id, begin_snapshot FROM (
@@ -2340,13 +2365,11 @@ SELECT row_id, begin_snapshot FROM (
     FROM {METADATA_CATALOG}.%s
     WHERE file_id = %d
     UNION ALL
-    SELECT pos::BIGINT as row_id, COALESCE(_ducklake_internal_snapshot_id, 0)::BIGINT as begin_snapshot
-    FROM parquet_scan(%s %s)
+    %s
 ) sub
 ORDER BY row_id;)",
 			                                                                     SQLIdentifier(inlined_table_name),
-			                                                                     file_id, SQLString(full_delete_path),
-			                                                                     encryption_option));
+			                                                                     file_id, delete_file_select));
 
 			if (!merged_result->HasError()) {
 				for (auto &del_row : *merged_result) {
@@ -2379,6 +2402,23 @@ ORDER BY row_id;)",
 	}
 
 	return result;
+}
+
+//FIXME: How are doing this in inline insertion?
+string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id) {
+	auto snapshot = GetSnapshot();
+	auto result = transaction.Query(*snapshot, StringUtil::Format(R"(
+SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables
+WHERE table_id = %d
+LIMIT 1;)",
+	                                                              table_id.index));
+	if (result->HasError()) {
+		return string();
+	}
+	for (auto &row : *result) {
+		return row.GetValue<string>(0);
+	}
+	return string();
 }
 
 void DuckLakeMetadataManager::DeleteInlinedFileDeletions(const string &inlined_table_name) {
@@ -2760,8 +2800,15 @@ string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_
 }
 
 string DuckLakeMetadataManager::DropDeleteFiles(const set<DataFileIndex> &dropped_files) {
-	return FlushDrop("ducklake_delete_file", "data_file_id", dropped_files);
+	if (dropped_files.empty()) {
+		return {};
+	}
+	auto removed_id_list = GenerateIDList(dropped_files);
+	return StringUtil::Format(
+	    R"(DELETE FROM {METADATA_CATALOG}.ducklake_delete_file WHERE end_snapshot IS NULL AND data_file_id IN (%s);)",
+	    removed_id_list);
 }
+
 
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
                                                     const vector<DuckLakeTableInfo> &new_tables,

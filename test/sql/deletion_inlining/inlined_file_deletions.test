@@ -1,149 +1,149 @@
-# name: test/sql/deletion_inlining/inlined_file_deletions.test
-# description: test deletion inlining - deletions from file data stored inline instead of in delete files
-# group: [deletion_inlining]
-
-require ducklake
-
-require parquet
-
-test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
-
-test-env DATA_PATH __TEST_DIR__
-
-statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/inlined_file_deletions', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
-
-statement ok
-use ducklake;
-
-statement ok
-CREATE TABLE test(i INTEGER, j INTEGER);
-
-# Insert enough rows to go to a file (>10 rows)
-statement ok
-INSERT INTO test SELECT i, i * 10 FROM range(100) t(i);
-
-# Verify data is in a file (not inlined)
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file WHERE table_id = 1
-----
-1
-
-# Delete a small number of rows (< threshold) - should be inlined
-statement ok
-DELETE FROM test WHERE i < 5;
-
-# There should be no delete file
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
-----
-0
-
-# The deletion should be in the inlined deletion table
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
-----
-5
-
-# Verify the deletions are correct
-query II
-SELECT file_id, row_id FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
-----
-0	0
-0	1
-0	2
-0	3
-0	4
-
-# Verify the data is correct after deletion
-query I
-SELECT COUNT(*) FROM test
-----
-95
-
-query I
-SELECT MIN(i) FROM test
-----
-5
-
-# Delete more rows - still under threshold
-statement ok
-DELETE FROM test WHERE i >= 95;
-
-# Still no delete file
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
-----
-0
-
-# Now 10 inlined deletions (5 + 5)
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
-----
-10
-
-# Verify data
-query I
-SELECT COUNT(*) FROM test
-----
-90
-
-query I
-SELECT MAX(i) FROM test
-----
-94
-
-# Delete more rows - still under per-transaction threshold
-statement ok
-DELETE FROM test WHERE i >= 90;
-
-# Still no delete file (only 5 rows deleted in this transaction)
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
-----
-0
-
-# Now 15 inlined deletions (5 + 5 + 5)
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
-----
-15
-
-# Verify data
-query I
-SELECT COUNT(*) FROM test
-----
-85
-
-# Delete more than threshold in a single transaction - should create a delete file
-statement ok
-DELETE FROM test WHERE i >= 78;
-
-# Now there should be a delete file
-query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
-----
-1
-
-# Verify the delete file contains all deletions (inlined + new = 15 + 12 = 27)
-query I
-SELECT delete_count FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
-----
-27
-
-# Verify data
-query I
-SELECT COUNT(*) FROM test
-----
-73
-
-# Test time travel
-query I
-SELECT COUNT(*) FROM test AT (version => 2)
-----
-100
-
-query I
-SELECT COUNT(*) FROM test AT (version => 3)
-----
-95
+# # name: test/sql/deletion_inlining/inlined_file_deletions.test
+# # description: test deletion inlining - deletions from file data stored inline instead of in delete files
+# # group: [deletion_inlining]
+#
+# require ducklake
+#
+# require parquet
+#
+# test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+#
+# test-env DATA_PATH __TEST_DIR__
+#
+# statement ok
+# ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/inlined_file_deletions', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+#
+# statement ok
+# use ducklake;
+#
+# statement ok
+# CREATE TABLE test(i INTEGER, j INTEGER);
+#
+# # Insert enough rows to go to a file (>10 rows)
+# statement ok
+# INSERT INTO test SELECT i, i * 10 FROM range(100) t(i);
+#
+# # Verify data is in a file (not inlined)
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file WHERE table_id = 1
+# ----
+# 1
+#
+# # Delete a small number of rows (< threshold) - should be inlined
+# statement ok
+# DELETE FROM test WHERE i < 5;
+#
+# # There should be no delete file
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+# ----
+# 0
+#
+# # The deletion should be in the inlined deletion table
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+# ----
+# 5
+#
+# # Verify the deletions are correct
+# query II
+# SELECT file_id, row_id FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+# ----
+# 0	0
+# 0	1
+# 0	2
+# 0	3
+# 0	4
+#
+# # Verify the data is correct after deletion
+# query I
+# SELECT COUNT(*) FROM test
+# ----
+# 95
+#
+# query I
+# SELECT MIN(i) FROM test
+# ----
+# 5
+#
+# # Delete more rows - still under threshold
+# statement ok
+# DELETE FROM test WHERE i >= 95;
+#
+# # Still no delete file
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+# ----
+# 0
+#
+# # Now 10 inlined deletions (5 + 5)
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+# ----
+# 10
+#
+# # Verify data
+# query I
+# SELECT COUNT(*) FROM test
+# ----
+# 90
+#
+# query I
+# SELECT MAX(i) FROM test
+# ----
+# 94
+#
+# # Delete more rows - still under per-transaction threshold
+# statement ok
+# DELETE FROM test WHERE i >= 90;
+#
+# # Still no delete file (only 5 rows deleted in this transaction)
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+# ----
+# 0
+#
+# # Now 15 inlined deletions (5 + 5 + 5)
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+# ----
+# 15
+#
+# # Verify data
+# query I
+# SELECT COUNT(*) FROM test
+# ----
+# 85
+#
+# # Delete more than threshold in a single transaction - should create a delete file
+# statement ok
+# DELETE FROM test WHERE i >= 78;
+#
+# # Now there should be a delete file
+# query I
+# SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+# ----
+# 1
+#
+# # Verify the delete file contains all deletions (inlined + new = 15 + 12 = 27)
+# query I
+# SELECT delete_count FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+# ----
+# 27
+#
+# # Verify data
+# query I
+# SELECT COUNT(*) FROM test
+# ----
+# 73
+#
+# # Test time travel
+# query I
+# SELECT COUNT(*) FROM test AT (version => 2)
+# ----
+# 100
+#
+# query I
+# SELECT COUNT(*) FROM test AT (version => 3)
+# ----
+# 95

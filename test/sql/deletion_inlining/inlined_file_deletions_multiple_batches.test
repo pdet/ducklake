@@ -99,15 +99,23 @@ SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
+# After second flush, the old delete file is replaced by a new merged file
+# The new file contains all 5 deletions (3 from first flush + 2 from second)
+# and inherits the begin_snapshot from the old file
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
 ----
-2
+1
 
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1 and end_snapshot is NULL
 ----
 1
+
+query I
+SELECT delete_count FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1 AND end_snapshot IS NULL
+----
+5
 
 query I
 SELECT COUNT(*) FROM t1
