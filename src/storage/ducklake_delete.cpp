@@ -92,6 +92,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	write_chunk.data[0].Reference(filename_val);
 
 	optional_idx begin_snapshot;
+	optional_idx max_snapshot;
 	idx_t row_count = 0;
 	auto pos_data = FlatVector::GetData<int64_t>(write_chunk.data[1]);
 	int64_t *snapshot_data = nullptr;
@@ -105,6 +106,9 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 			auto &pos_with_snap = reinterpret_cast<const PositionWithSnapshot &>(entry);
 			if (!begin_snapshot.IsValid() || pos_with_snap.snapshot_id < begin_snapshot.GetIndex()) {
 				begin_snapshot = pos_with_snap.snapshot_id;
+			}
+			if (!max_snapshot.IsValid() || pos_with_snap.snapshot_id > max_snapshot.GetIndex()) {
+				max_snapshot = pos_with_snap.snapshot_id;
 			}
 			pos_data[row_count] = NumericCast<int64_t>(pos_with_snap.position);
 			snapshot_data[row_count] = NumericCast<int64_t>(pos_with_snap.snapshot_id);
@@ -140,6 +144,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	delete_file.source = input.source;
 	if (with_snapshots) {
 		delete_file.begin_snapshot = begin_snapshot;
+		delete_file.partial_max = max_snapshot;
 	}
 	return delete_file;
 }

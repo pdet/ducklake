@@ -71,7 +71,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BI
 CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
-CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
@@ -175,6 +175,7 @@ WHERE df.data_file_id = m.data_file_id;
 DROP TABLE IF EXISTS __ducklake_partial_max_migration;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
 CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_inlined_deletion_tables(table_id BIGINT, table_name VARCHAR);
+ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} partial_max BIGINT;
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 
@@ -1212,7 +1213,8 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
                                                                            DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
 	string select_list = GetFileSelectList("data") + ", data.row_id_start, data.record_count, data.mapping_id, " +
-	                     GetFileSelectList("current_delete") + ", " + GetFileSelectList("previous_delete");
+	                     GetFileSelectList("current_delete") + ", " + GetFileSelectList("previous_delete") +
+	                     ", current_delete.partial_max";
 	// deletes come in two flavors:
 	// * deletes stored in the ducklake_delete_file table (partial deletes)
 	// * data files being deleted entirely through setting end_snapshot (full file deletes)
@@ -1220,12 +1222,17 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 	// for both deletes, we need to obtain any PREVIOUS deletes as well
 	// we need these since we are only interested in rows deleted between start_snapshot and end_snapshot
 	// so we need to exclude any rows that were already deleted prior to this moment
+	// Delete files either match the exact snapshot range, or they have partial_max set (meaning they have
+	// embedded snapshot IDs) and might contain deletions within the range
 	auto query =
 	    StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot FROM (
-	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, partial_max
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND (
+		(begin_snapshot >= %d) OR
+		(partial_max IS NOT NULL AND partial_max >= %d)
+	)
 ) AS current_delete
 LEFT JOIN (
 	SELECT data_file_id, MAX_BY(COLUMNS(['path', 'path_is_relative', 'file_size_bytes', 'footer_size', 'encryption_key']), begin_snapshot) AS '\0'
@@ -1253,11 +1260,12 @@ LEFT JOIN (
 	GROUP BY data_file_id
 ) AS previous_delete
 USING (data_file_id), (
-	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key
+	SELECT NULL path, NULL path_is_relative, NULL file_size_bytes, NULL footer_size, NULL encryption_key, NULL partial_max
 ) current_delete;
 		)",
-	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index, table_id.index,
-	                       select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
+	                       select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id,
+	                       table_id.index, table_id.index, select_list, table_id.index, start_snapshot.snapshot_id,
+	                       table_id.index);
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table insertion file list from DuckLake: ");
@@ -1278,6 +1286,8 @@ USING (data_file_id), (
 		col_idx++;
 		entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		entry.previous_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		// Skip partial_max column
+		col_idx++;
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
 		files.push_back(std::move(entry));
 	}
@@ -2078,11 +2088,12 @@ unordered_map<idx_t, DuckLakeInlinedFileDeletions> DuckLakeMetadataManager::Read
 	auto table_id = table.GetTableId();
 	auto inlined_table_name = StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 
-	// First, get inlined deletions along with any existing delete file info (including encryption key)
+	// First, get inlined deletions along with any existing delete file info (including encryption key and partial_max)
 	// Note: We apply time travel filtering to the delete file join to handle cases where
 	// delete files were created after the target snapshot (e.g., from a later flush)
+	// partial_max is NOT NULL only for delete files that have embedded snapshot IDs
 	auto files_with_delete_files_result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT DISTINCT d.file_id, del.path, del.path_is_relative, del.encryption_key
+SELECT DISTINCT d.file_id, del.path, del.path_is_relative, del.encryption_key, del.partial_max
 FROM {METADATA_CATALOG}.%s d
 JOIN {METADATA_CATALOG}.ducklake_delete_file del
     ON d.file_id = del.data_file_id
@@ -2091,10 +2102,11 @@ JOIN {METADATA_CATALOG}.ducklake_delete_file del
 WHERE {SNAPSHOT_ID} >= d.begin_snapshot;)",
 	                                                                                      SQLIdentifier(inlined_table_name)));
 
-	// Build a map of file_id -> (delete file path, encryption_key)
+	// Build a map of file_id -> (delete file path, encryption_key, has_snapshot_column)
 	struct DeleteFileInfo {
 		string path;
 		string encryption_key;
+		bool has_snapshot_column = false;
 	};
 	unordered_map<idx_t, DeleteFileInfo> delete_file_infos;
 	if (!files_with_delete_files_result->HasError()) {
@@ -2111,6 +2123,8 @@ WHERE {SNAPSHOT_ID} >= d.begin_snapshot;)",
 			if (!row.IsNull(3)) {
 				info.encryption_key = row.GetValue<string>(3);
 			}
+			// partial_max is NOT NULL only for delete files with embedded snapshot IDs
+			info.has_snapshot_column = !row.IsNull(4);
 			delete_file_infos[file_id] = std::move(info);
 		}
 	}
@@ -2128,20 +2142,30 @@ WHERE {SNAPSHOT_ID} >= d.begin_snapshot;)",
 		}
 
 		// UNION query: inlined deletions + delete file deletions, merged and sorted
+		string delete_file_select;
+		if (delete_file_info.has_snapshot_column) {
+			// We have the _ducklake_internal_snapshot_id so we use that
+			delete_file_select = StringUtil::Format(
+			    "SELECT pos::BIGINT as row_id, COALESCE(_ducklake_internal_snapshot_id, 0)::BIGINT as begin_snapshot "
+			    "FROM parquet_scan(%s %s)",
+			    SQLString(delete_file_info.path), encryption_option);
+		} else {
+			delete_file_select = StringUtil::Format(
+			    "SELECT pos::BIGINT as row_id, 0::BIGINT as begin_snapshot FROM parquet_scan(%s %s)",
+			    SQLString(delete_file_info.path), encryption_option);
+		}
+
 		auto merged_result = transaction.Query(snapshot, StringUtil::Format(R"(
-SELECT row_id, begin_snapshot FROM (
+SELECT row_id, begin_snapshot as begin_snapshot FROM (
     SELECT row_id, begin_snapshot
     FROM {METADATA_CATALOG}.%s
     WHERE file_id = %d AND {SNAPSHOT_ID} >= begin_snapshot
     UNION ALL
-    SELECT pos::BIGINT as row_id, COALESCE(_ducklake_internal_snapshot_id, 0)::BIGINT as begin_snapshot
-    FROM parquet_scan(%s %s)
+    %s
 ) sub
 ORDER BY row_id;)",
-		                                                                    SQLIdentifier(inlined_table_name),
-		                                                                    file_id,
-		                                                                    SQLString(delete_file_info.path),
-		                                                                    encryption_option));
+		                                                                    SQLIdentifier(inlined_table_name), file_id,
+		                                                                    delete_file_select));
 
 		if (!merged_result->HasError()) {
 			auto &file_deletions = result[file_id];
@@ -2153,8 +2177,6 @@ ORDER BY row_id;)",
 	}
 
 	// For files WITHOUT delete files, just query inlined deletions directly
-	// Note: We apply time travel filtering to the delete file join to handle cases where
-	// delete files were created after the target snapshot (e.g., from a later flush)
 	auto inlined_only_result = transaction.Query(snapshot, StringUtil::Format(R"(
 SELECT d.file_id, d.row_id, d.begin_snapshot
 FROM {METADATA_CATALOG}.%s d
@@ -2761,10 +2783,11 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
+		string partial_max_str = file.partial_max.IsValid() ? std::to_string(file.partial_max.GetIndex()) : "NULL";
 		delete_file_insert_query += StringUtil::Format(
-		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s)", delete_file_index, table_id,
+		    "(%d, %d, %s, NULL,  %d, %s, %s, 'parquet', %d, %d, %d, %s, %s)", delete_file_index, table_id,
 		    begin_snapshot_str, data_file_index, SQLString(path.path), path.path_is_relative ? "true" : "false",
-		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key);
+		    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key, partial_max_str);
 	}
 
 	// insert the data files

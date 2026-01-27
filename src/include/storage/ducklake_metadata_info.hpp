@@ -178,6 +178,8 @@ struct DuckLakeDeleteFileInfo {
 	idx_t footer_size;
 	string encryption_key;
 	optional_idx begin_snapshot;
+	//! Maximum snapshot ID in this delete file (we only set it for files with embedded snapshot IDs)
+	optional_idx partial_max;
 };
 
 struct DuckLakePartitionFieldInfo {

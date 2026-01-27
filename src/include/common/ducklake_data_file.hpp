@@ -34,6 +34,8 @@ struct DuckLakeDeleteFile {
 	string encryption_key;
 	bool overwrites_existing_delete = false;
 	optional_idx begin_snapshot;
+	//! Maximum snapshot ID in this delete file (we only set it for files with embedded snapshot IDs)
+	optional_idx partial_max;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
 };
 
