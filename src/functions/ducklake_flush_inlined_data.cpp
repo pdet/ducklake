@@ -17,6 +17,7 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 
 namespace duckdb {
 
@@ -33,33 +34,45 @@ static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_f
 }
 
 //===--------------------------------------------------------------------===//
-// Flush Data Operator
+// Base Flush Operator
 //===--------------------------------------------------------------------===//
-DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
-                                     DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-                                     string encryption_key_p, optional_idx partition_id, PhysicalOperator &child)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
-      inlined_table(std::move(inlined_table_p)), encryption_key(std::move(encryption_key_p)),
-      partition_id(partition_id) {
+DuckLakeFlushOperator::DuckLakeFlushOperator(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
+                                             DuckLakeTableEntry &table_p, string encryption_key_p)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table_p),
+      encryption_key(std::move(encryption_key_p)) {
+}
+
+//===--------------------------------------------------------------------===//
+// Flush Inlined Insertions Operator
+//===--------------------------------------------------------------------===//
+DuckLakeFlushInlinedInsertions::DuckLakeFlushInlinedInsertions(PhysicalPlan &physical_plan,
+                                                               const vector<LogicalType> &types,
+                                                               DuckLakeTableEntry &table,
+                                                               DuckLakeInlinedTableInfo inlined_table_p,
+                                                               string encryption_key_p, optional_idx partition_id_p,
+                                                               PhysicalOperator &child)
+    : DuckLakeFlushOperator(physical_plan, types, table, std::move(encryption_key_p)),
+      inlined_table(std::move(inlined_table_p)), partition_id(partition_id_p) {
 	children.push_back(child);
 }
 
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-                                                    OperatorSourceInput &input) const {
+SourceResultType DuckLakeFlushInlinedInsertions::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                                 OperatorSourceInput &input) const {
 	return SourceResultType::FINISHED;
 }
 
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext &context) const {
+unique_ptr<GlobalSinkState> DuckLakeFlushInlinedInsertions::GetGlobalSinkState(ClientContext &context) const {
 	return make_uniq<DuckLakeInsertGlobalState>(table);
 }
 
-SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
+SinkResultType DuckLakeFlushInlinedInsertions::Sink(ExecutionContext &context, DataChunk &chunk,
+                                                    OperatorSinkInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	DuckLakeInsert::AddWrittenFiles(global_state, chunk, encryption_key, partition_id, true);
 	return SinkResultType::NEED_MORE_INPUT;
@@ -99,8 +112,8 @@ static DeletesPerFile GroupDeletesByFile(QueryResult &deleted_rows_result, vecto
 	return deletes_per_file;
 }
 
-SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
-                                             OperatorSinkFinalizeInput &input) const {
+SinkFinalizeType DuckLakeFlushInlinedInsertions::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
+                                                         OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeInsertGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	auto snapshot = transaction.GetSnapshot();
@@ -165,17 +178,118 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 //===--------------------------------------------------------------------===//
 // Helpers
 //===--------------------------------------------------------------------===//
-string DuckLakeFlushData::GetName() const {
-	return "DUCKLAKE_FLUSH_DATA";
+string DuckLakeFlushInlinedInsertions::GetName() const {
+	return "DUCKLAKE_FLUSH_INLINED_INSERTIONS";
 }
 
 //===--------------------------------------------------------------------===//
-// Logical Operator
+// DuckLakeFlushInlinedFileDeletions
 //===--------------------------------------------------------------------===//
-class DuckLakeLogicalFlush : public LogicalExtensionOperator {
+DuckLakeFlushInlinedFileDeletions::DuckLakeFlushInlinedFileDeletions(PhysicalPlan &physical_plan,
+                                                                     const vector<LogicalType> &types,
+                                                                     DuckLakeTableEntry &table_p,
+                                                                     string inlined_table_name_p,
+                                                                     string encryption_key_p)
+    : DuckLakeFlushOperator(physical_plan, types, table_p, std::move(encryption_key_p)),
+      inlined_table_name(std::move(inlined_table_name_p)) {
+}
+
+SourceResultType DuckLakeFlushInlinedFileDeletions::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                                    OperatorSourceInput &input) const {
+	auto &client_context = context.client;
+	auto &transaction = DuckLakeTransaction::Get(client_context, table.catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
+
+	// Read all inlined file deletions for this table
+	auto inlined_deletions = metadata_manager.ReadInlinedFileDeletionsForFlush(table.GetTableId(), inlined_table_name);
+	if (inlined_deletions.empty()) {
+		return SourceResultType::FINISHED;
+	}
+
+	auto &fs = FileSystem::GetFileSystem(client_context);
+	vector<DuckLakeDeleteFile> delete_files;
+
+	// Write delete files for each data file with inlined deletions
+	for (auto &file_entry : inlined_deletions) {
+		// Convert to set of PositionWithSnapshot
+		set<PositionWithSnapshot> positions;
+		for (idx_t i = 0; i < file_entry.inlined_deletions.deleted_rows.size(); i++) {
+			PositionWithSnapshot pos_with_snap {static_cast<int64_t>(file_entry.inlined_deletions.deleted_rows[i]),
+			                                    static_cast<int64_t>(file_entry.inlined_deletions.snapshot_ids[i])};
+			positions.insert(pos_with_snap);
+		}
+
+		WriteDeleteFileWithSnapshotsInput file_input {client_context,
+		                                              transaction,
+		                                              fs,
+		                                              table.DataPath(),
+		                                              encryption_key,
+		                                              file_entry.file_path,
+		                                              positions,
+		                                              DeleteFileSource::FLUSH};
+		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(client_context, file_input);
+		delete_file.data_file_id = file_entry.file_id;
+		delete_file.overwrites_existing_delete = file_entry.overwrites_existing;
+		delete_files.push_back(std::move(delete_file));
+	}
+
+	// Add delete files to transaction
+	transaction.AddDeletes(table.GetTableId(), std::move(delete_files));
+
+	// Clear the inlined file deletions
+	transaction.DeleteInlinedFileDeletions(inlined_table_name);
+
+	return SourceResultType::FINISHED;
+}
+
+string DuckLakeFlushInlinedFileDeletions::GetName() const {
+	return "DUCKLAKE_FLUSH_INLINED_FILE_DELETIONS";
+}
+
+//===--------------------------------------------------------------------===//
+// Logical Operator for Flushing Inlined File Deletions
+//===--------------------------------------------------------------------===//
+class DuckLakeLogicalFlushInlinedFileDeletions : public LogicalExtensionOperator {
 public:
-	DuckLakeLogicalFlush(idx_t table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-	                     string encryption_key_p, optional_idx partition_id_p)
+	DuckLakeLogicalFlushInlinedFileDeletions(idx_t table_index_p, DuckLakeTableEntry &table_p,
+	                                         string inlined_table_name_p, string encryption_key_p)
+	    : table_index(table_index_p), table(table_p), inlined_table_name(std::move(inlined_table_name_p)),
+	      encryption_key(std::move(encryption_key_p)) {
+	}
+
+	idx_t table_index;
+	DuckLakeTableEntry &table;
+	string inlined_table_name;
+	string encryption_key;
+
+public:
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
+		return planner.Make<DuckLakeFlushInlinedFileDeletions>(types, table, std::move(inlined_table_name),
+		                                                       std::move(encryption_key));
+	}
+
+	string GetExtensionName() const override {
+		return "ducklake";
+	}
+	vector<ColumnBinding> GetColumnBindings() override {
+		vector<ColumnBinding> result;
+		result.emplace_back(table_index, 0);
+		return result;
+	}
+
+	void ResolveTypes() override {
+		types = {LogicalType::BOOLEAN};
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Logical Operator for Flushing Inlined Insertions
+//===--------------------------------------------------------------------===//
+class DuckLakeLogicalFlushInlinedInsertions : public LogicalExtensionOperator {
+public:
+	DuckLakeLogicalFlushInlinedInsertions(idx_t table_index, DuckLakeTableEntry &table,
+	                                      DuckLakeInlinedTableInfo inlined_table_p, string encryption_key_p,
+	                                      optional_idx partition_id_p)
 	    : table_index(table_index), table(table), inlined_table(std::move(inlined_table_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p) {
 	}
@@ -189,8 +303,8 @@ public:
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
-		return planner.Make<DuckLakeFlushData>(types, table, std::move(inlined_table), std::move(encryption_key),
-		                                       partition_id, child);
+		return planner.Make<DuckLakeFlushInlinedInsertions>(types, table, std::move(inlined_table),
+		                                                    std::move(encryption_key), partition_id, child);
 	}
 
 	string GetExtensionName() const override {
@@ -319,8 +433,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the
-	auto compaction = make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
-	                                                  std::move(copy_input.encryption_key), partition_id);
+	auto compaction = make_uniq<DuckLakeLogicalFlushInlinedInsertions>(binder.GenerateTableIndex(), table, inlined_table,
+	                                                                   std::move(copy_input.encryption_key), partition_id);
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }
@@ -397,6 +511,22 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());
 			}
+
+			// Also check for and flush inlined file deletions
+			auto &inlined_delete_table_name = table.GetInlinedDeletionTable();
+			if (!inlined_delete_table_name.empty()) {
+				auto &metadata_manager = transaction.GetMetadataManager();
+				auto inlined_file_deletions =
+				    metadata_manager.ReadInlinedFileDeletionsForFlush(table.GetTableId(), inlined_delete_table_name);
+				if (!inlined_file_deletions.empty()) {
+					// Get encryption key if needed
+					string encryption_key = ducklake_catalog.GenerateEncryptionKey(context);
+					auto flush_op = make_uniq<DuckLakeLogicalFlushInlinedFileDeletions>(
+					    input.binder->GenerateTableIndex(), table, inlined_delete_table_name,
+					    std::move(encryption_key));
+					flushes.push_back(std::move(flush_op));
+				}
+			}
 		}
 	}
 	return_names.push_back("Success");
@@ -409,7 +539,12 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 	if (flushes.size() == 1) {
-		flushes[0]->Cast<DuckLakeLogicalFlush>().table_index = bind_index;
+		// Get the table_index from whichever type of flush we have
+		if (auto *data_flush = dynamic_cast<DuckLakeLogicalFlushInlinedInsertions *>(flushes[0].get())) {
+			data_flush->table_index = bind_index;
+		} else if (auto *deletion_flush = dynamic_cast<DuckLakeLogicalFlushInlinedFileDeletions *>(flushes[0].get())) {
+			deletion_flush->table_index = bind_index;
+		}
 		return std::move(flushes[0]);
 	}
 	auto union_op = input.binder->UnionOperators(std::move(flushes));

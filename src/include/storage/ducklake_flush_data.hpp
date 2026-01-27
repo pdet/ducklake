@@ -18,25 +18,34 @@
 namespace duckdb {
 class DuckLakeTableEntry;
 
-class DuckLakeFlushData : public PhysicalOperator {
+//! Base class for DuckLake flush operators
+class DuckLakeFlushOperator : public PhysicalOperator {
 public:
-	DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
-	                  DuckLakeInlinedTableInfo inlined_table, string encryption_key, optional_idx partition_id,
-	                  PhysicalOperator &child);
+	DuckLakeFlushOperator(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
+	                      string encryption_key);
 
 	DuckLakeTableEntry &table;
-	DuckLakeInlinedTableInfo inlined_table;
 	string encryption_key;
-	optional_idx partition_id;
-
-public:
-	// // Source interface
-	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-	                                 OperatorSourceInput &input) const override;
 
 	bool IsSource() const override {
 		return true;
 	}
+};
+
+//! Operator for flushing inlined insertions (small inserts stored in catalog) to parquet files
+class DuckLakeFlushInlinedInsertions : public DuckLakeFlushOperator {
+public:
+	DuckLakeFlushInlinedInsertions(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
+	                               DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table,
+	                               string encryption_key, optional_idx partition_id, PhysicalOperator &child);
+
+	DuckLakeInlinedTableInfo inlined_table;
+	optional_idx partition_id;
+
+public:
+	// Source interface
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 public:
 	// Sink interface
@@ -52,6 +61,22 @@ public:
 	bool ParallelSink() const override {
 		return false;
 	}
+
+	string GetName() const override;
+};
+
+//! Operator for flushing inlined file deletions (positions deleted from parquet files stored in catalog)
+class DuckLakeFlushInlinedFileDeletions : public DuckLakeFlushOperator {
+public:
+	DuckLakeFlushInlinedFileDeletions(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
+	                                  DuckLakeTableEntry &table, string inlined_table_name, string encryption_key);
+
+	string inlined_table_name;
+
+public:
+	// Source interface
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
 
 	string GetName() const override;
 };

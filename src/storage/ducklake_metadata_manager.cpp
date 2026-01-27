@@ -380,7 +380,6 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		SELECT table_name
 		FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables inlined_deletion_tables
 		WHERE inlined_deletion_tables.table_id = tbl.table_id
-		LIMIT 1
 	) AS inlined_deletion_table,
 	path, path_is_relative,
 	col.column_id, column_name, column_type, initial_default, default_value, nulls_allowed, parent_column,
@@ -1773,7 +1772,16 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 	string batch_query;
 	// Batch both INSERT queries into a single multi-statement query to reduce round-trips
 	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_data_tables + ";";
-	batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES " + inlined_deletion_tables + ";";
+	// Only insert into inlined_deletion_tables if the entry doesn't already exist
+	// (deletion table is shared across schema versions, unlike data tables)
+	batch_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables
+SELECT * FROM (VALUES %s) AS v(table_id, table_name)
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables existing
+    WHERE existing.table_id = v.table_id
+);)",
+	                                  inlined_deletion_tables);
 	batch_query += inlined_table_queries;
 	return batch_query;
 }
@@ -1939,7 +1947,15 @@ WHERE table_id = %d AND table_name LIKE '%%data%%' AND schema_version=(
 			                                            inlined_deletion_tables, inlined_table_queries)
 			                         .data_table_name;
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_data_tables + ";";
-			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables VALUES " + inlined_deletion_tables + ";";
+			// Only insert into inlined_deletion_tables if the entry doesn't already exist
+			batch_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_inlined_deletion_tables
+SELECT * FROM (VALUES %s) AS v(table_id, table_name)
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_inlined_deletion_tables existing
+    WHERE existing.table_id = v.table_id
+);)",
+			                                  inlined_deletion_tables);
 			batch_query += inlined_table_queries;
 		}
 
@@ -2250,54 +2266,94 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForFlush(TableIndex table_id, c
 	vector<DuckLakeInlinedFileDeletionsForFlush> result;
 	auto snapshot = GetSnapshot();
 
-	auto deletions_result = transaction.Query(*snapshot, StringUtil::Format(R"(
-SELECT d.file_id, d.row_id, d.begin_snapshot, df.path, df.path_is_relative,
-       del.path as delete_path, del.path_is_relative as delete_path_is_relative
+	// First, get the list of files with inlined deletions and their delete file info (if any)
+	auto files_result = transaction.Query(*snapshot, StringUtil::Format(R"(
+SELECT DISTINCT d.file_id, df.path, df.path_is_relative,
+       del.path as delete_path, del.path_is_relative as delete_path_is_relative, del.encryption_key
 FROM {METADATA_CATALOG}.%s d
 JOIN {METADATA_CATALOG}.ducklake_data_file df ON d.file_id = df.data_file_id
-LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file del ON d.file_id = del.data_file_id AND del.end_snapshot IS NULL
-ORDER BY d.file_id, d.row_id;)",
-	                                                                        SQLIdentifier(inlined_table_name)));
-	if (deletions_result->HasError()) {
+LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file del ON d.file_id = del.data_file_id AND del.end_snapshot IS NULL;)",
+	                                                                    SQLIdentifier(inlined_table_name)));
+	if (files_result->HasError()) {
 		return result;
 	}
 
-	// Group deletions by file_id
-	unordered_map<idx_t, DuckLakeInlinedFileDeletionsForFlush> deletions_by_file;
-	for (auto &row : *deletions_result) {
+	// Process each file
+	for (auto &row : *files_result) {
 		auto file_id = row.GetValue<idx_t>(0);
-		auto row_id = row.GetValue<idx_t>(1);
-		auto begin_snapshot = row.GetValue<idx_t>(2);
-		auto path = row.GetValue<string>(3);
-		auto path_is_relative = row.GetValue<bool>(4);
+		auto path = row.GetValue<string>(1);
+		auto path_is_relative = row.GetValue<bool>(2);
 
-		auto &file_deletions = deletions_by_file[file_id];
-		if (file_deletions.file_path.empty()) {
-			file_deletions.file_id = DataFileIndex(file_id);
-			if (path_is_relative) {
-				file_deletions.file_path = FromRelativePath(table_id, DuckLakePath{path, true});
+		DuckLakeInlinedFileDeletionsForFlush file_deletions;
+		file_deletions.file_id = DataFileIndex(file_id);
+		if (path_is_relative) {
+			file_deletions.file_path = FromRelativePath(table_id, DuckLakePath{path, true});
+		} else {
+			file_deletions.file_path = path;
+		}
+
+		// Check if there's an existing delete file, if so we need to merge them
+		if (!row.IsNull(3)) {
+			auto delete_path = row.GetValue<string>(3);
+			auto delete_path_is_relative = row.GetValue<bool>(4);
+			string full_delete_path;
+			if (delete_path_is_relative) {
+				full_delete_path = FromRelativePath(table_id, DuckLakePath{delete_path, true});
 			} else {
-				file_deletions.file_path = path;
+				full_delete_path = delete_path;
 			}
-			// Check for existing delete file
+
+			// Build encryption config if needed
+			string encryption_option;
 			if (!row.IsNull(5)) {
-				auto delete_path = row.GetValue<string>(5);
-				auto delete_path_is_relative = row.GetValue<bool>(6);
-				if (delete_path_is_relative) {
-					file_deletions.existing_delete_file_path = FromRelativePath(table_id, DuckLakePath{delete_path, true});
-				} else {
-					file_deletions.existing_delete_file_path = delete_path;
+				auto encryption_key = row.GetValue<string>(5);
+				encryption_option = StringUtil::Format(", encryption_config = {footer_key_value: decode(%s, 'base64')}",
+				                                       SQLString(encryption_key));
+			}
+
+			// Merge inlined deletions with existing delete file via SQL UNION
+			auto merged_result = transaction.Query(*snapshot, StringUtil::Format(R"(
+SELECT row_id, begin_snapshot FROM (
+    SELECT row_id, begin_snapshot
+    FROM {METADATA_CATALOG}.%s
+    WHERE file_id = %d
+    UNION ALL
+    SELECT pos::BIGINT as row_id, COALESCE(_ducklake_internal_snapshot_id, 0)::BIGINT as begin_snapshot
+    FROM parquet_scan(%s %s)
+) sub
+ORDER BY row_id;)",
+			                                                                     SQLIdentifier(inlined_table_name),
+			                                                                     file_id, SQLString(full_delete_path),
+			                                                                     encryption_option));
+
+			if (!merged_result->HasError()) {
+				for (auto &del_row : *merged_result) {
+					file_deletions.inlined_deletions.deleted_rows.push_back(del_row.GetValue<idx_t>(0));
+					file_deletions.inlined_deletions.snapshot_ids.push_back(del_row.GetValue<idx_t>(1));
 				}
-				file_deletions.overwrites_existing = true;
+			}
+			file_deletions.overwrites_existing = true;
+		} else {
+			// No existing delete file , no need to merge with preexisting data
+			auto inlined_result = transaction.Query(*snapshot, StringUtil::Format(R"(
+SELECT row_id, begin_snapshot
+FROM {METADATA_CATALOG}.%s
+WHERE file_id = %d
+ORDER BY row_id;)",
+			                                                                      SQLIdentifier(inlined_table_name),
+			                                                                      file_id));
+
+			if (!inlined_result->HasError()) {
+				for (auto &del_row : *inlined_result) {
+					file_deletions.inlined_deletions.deleted_rows.push_back(del_row.GetValue<idx_t>(0));
+					file_deletions.inlined_deletions.snapshot_ids.push_back(del_row.GetValue<idx_t>(1));
+				}
 			}
 		}
-		file_deletions.deleted_rows.push_back(row_id);
-		file_deletions.snapshot_ids.push_back(begin_snapshot);
-	}
 
-	// Convert map to vector
-	for (auto &entry : deletions_by_file) {
-		result.push_back(std::move(entry.second));
+		if (!file_deletions.inlined_deletions.deleted_rows.empty()) {
+			result.push_back(std::move(file_deletions));
+		}
 	}
 
 	return result;
