@@ -1,0 +1,113 @@
+# name: test/sql/deletion_inlining/test_deletion_inlining_complex.test
+# description: test ducklake deletion inlining with all possible insertions and deletions
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/test_deletion_from_inlined_multiple_snapshots',DATA_INLINING_ROW_LIMIT 30,  METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t AS SELECT range a FROM range(100);
+
+# This creates a deletion file
+statement ok
+DELETE FROM T where a > 10 and a < 50
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file;
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file;
+----
+1
+
+# These two will get inlined
+statement ok
+insert into T values (101),  (102), (103), (104), (105);
+
+statement ok
+insert into T values (106),  (107), (108), (109), (110);
+
+#These deletes are also inlined
+statement ok
+DELETE FROM T where a = 102 or a = 108
+
+# This delete goes over inlined and non inlined data
+statement ok
+DELETE FROM T where a > 90 and a < 103
+
+query I
+SELECT COUNT(*) FROM T  where a > 90 and a < 103
+----
+0
+
+# Count visible delete files (end_snapshot IS NULL means the file is still active)
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL;
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL;
+----
+1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+# Let's check data is correc
+
+# We should have 2 visible delete files (1 for original data file + 1 for flushed inlined data)
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL;
+----
+2
+
+# Verify data is correct at each snapshot:
+# Snapshot 1: 100 rows (initial data 0-99)
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 1);
+----
+100
+
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 2);
+----
+61
+
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 3);
+----
+66
+
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 4);
+----
+71
+
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 5);
+----
+69
+
+query I
+SELECT COUNT(*) FROM T AT (VERSION => 6);
+----
+59
+
+query I
+SELECT COUNT(*) FROM T;
+----
+59
