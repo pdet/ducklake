@@ -71,7 +71,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	vector<DuckLakeInlinedTableInfo> inlined_tables;
 	auto table_entry = make_uniq<DuckLakeTableEntry>(ParentCatalog(), *this, base_info, table_id, std::move(table_uuid),
 	                                                 std::move(table_data_path), std::move(field_data), column_id,
-	                                                 std::move(inlined_tables), LocalChangeType::CREATED);
+	                                                 std::move(inlined_tables), "",
+	                                                 LocalChangeType::CREATED);
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;

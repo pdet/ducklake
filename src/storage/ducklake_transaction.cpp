@@ -1832,6 +1832,11 @@ void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inli
 	metadata_manager.DeleteInlinedData(inlined_table);
 }
 
+void DuckLakeTransaction::DeleteInlinedFileDeletions(const string &inlined_table_name) {
+	auto &metadata_manager = GetMetadataManager();
+	metadata_manager.DeleteInlinedFileDeletions(inlined_table_name);
+}
+
 unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	auto &connection = GetConnection();
 	auto catalog_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataDatabaseName());

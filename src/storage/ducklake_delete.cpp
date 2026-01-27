@@ -358,7 +358,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	bool has_existing_delete_file = !data_file_info.delete_file.path.empty();
 
 	// Try to inline the deletion instead of writing a delete file
-	if (!has_existing_delete_file && TryInlineDeletion(transaction, delete_file, sorted_deletes)) {
+	if (TryInlineDeletion(transaction, delete_file, sorted_deletes)) {
 		return;
 	}
 

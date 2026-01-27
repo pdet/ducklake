@@ -91,6 +91,7 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	string inlined_deletion_table;
 };
 
 //! Stores the information on macro parameters
@@ -313,6 +314,16 @@ enum class DuckLakeDataType {
 struct DuckLakeInlinedFileDeletions {
 	vector<idx_t> deleted_rows;
 	vector<idx_t> snapshot_ids;
+};
+
+//! Inlined file deletions with file path, so we can flush inlined deletions to delete files
+struct DuckLakeInlinedFileDeletionsForFlush {
+	DataFileIndex file_id;
+	string file_path;
+	//! The deletions to flush
+	DuckLakeInlinedFileDeletions inlined_deletions;
+	//! Whether this overwrites an existing delete file
+	bool overwrites_existing = false;
 };
 
 struct DuckLakeFileListEntry {

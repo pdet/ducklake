@@ -1,0 +1,115 @@
+# name: test/sql/deletion_inlining/inlined_file_deletions_multiple_batches.test
+# description: test inlined file deletions (data in parquet files, deletions stored in metadata) with multiple flush cycles
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/inlined_file_deletions_batches', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+use ducklake
+
+statement ok
+CREATE TABLE t1 (a INTEGER)
+
+statement ok
+INSERT INTO t1 SELECT * FROM range(100)
+
+statement ok
+DELETE FROM t1 WHERE a = 5
+
+statement ok
+DELETE FROM t1 WHERE a = 10
+
+statement ok
+DELETE FROM t1 WHERE a = 15
+
+# No delete file created yet
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+3
+
+query I
+SELECT COUNT(*) FROM t1
+----
+97
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# Now we have a delete file with 3 deletions
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+1
+
+query I
+SELECT delete_count FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1 AND end_snapshot IS NULL
+----
+3
+
+# Inlined file deletions have been cleared
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+0
+
+query I
+SELECT COUNT(*) FROM t1
+----
+97
+
+# More small deletions - should still be inlined
+statement ok
+DELETE FROM t1 WHERE a = 20
+
+statement ok
+DELETE FROM t1 WHERE a = 25
+
+# 2 new inlined deletions
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+2
+
+query I
+SELECT COUNT(*) FROM t1
+----
+95
+
+# Still 1 delete file (from first flush)
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+1
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+2
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1 and end_snapshot is NULL
+----
+1
+
+query I
+SELECT COUNT(*) FROM t1
+----
+95

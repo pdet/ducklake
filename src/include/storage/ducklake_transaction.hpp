@@ -133,6 +133,7 @@ public:
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
+	void DeleteInlinedFileDeletions(const string &inlined_table_name);
 
 	bool SchemaChangesMade();
 	bool ChangesMade();

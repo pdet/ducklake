@@ -146,11 +146,13 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid() ||
 		           !file_entry.inlined_file_deletions.deleted_rows.empty()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
-			if (!file_entry.delete_file.path.empty()) {
-				delete_filter->Initialize(context, file_entry.delete_file);
-			} else if (!file_entry.inlined_file_deletions.deleted_rows.empty()) {
+			if (!file_entry.inlined_file_deletions.deleted_rows.empty()) {
+				// Use inlined deletions
 				delete_filter->delete_data->deleted_rows = file_entry.inlined_file_deletions.deleted_rows;
 				delete_filter->delete_data->snapshot_ids = file_entry.inlined_file_deletions.snapshot_ids;
+			} else if (!file_entry.delete_file.path.empty()) {
+				// No inlined deletions, just use delete file directly
+				delete_filter->Initialize(context, file_entry.delete_file);
 			}
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());
