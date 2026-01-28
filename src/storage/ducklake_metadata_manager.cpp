@@ -2804,9 +2804,34 @@ string DuckLakeMetadataManager::DropDeleteFiles(const set<DataFileIndex> &droppe
 		return {};
 	}
 	auto removed_id_list = GenerateIDList(dropped_files);
-	return StringUtil::Format(
+	// Schedule the delete file to cleanup
+	string result = StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
+SELECT del.delete_file_id,
+       CASE
+           WHEN NOT del.path_is_relative THEN del.path
+           WHEN NOT tbl.path_is_relative THEN tbl.path || del.path
+           WHEN NOT sch.path_is_relative THEN sch.path || tbl.path || del.path
+           ELSE sch.path || tbl.path || del.path
+       END AS full_path,
+       CASE
+           WHEN NOT del.path_is_relative THEN false
+           WHEN NOT tbl.path_is_relative THEN false
+           WHEN NOT sch.path_is_relative THEN false
+           ELSE true
+       END AS is_relative,
+       NOW()
+FROM {METADATA_CATALOG}.ducklake_delete_file del
+JOIN {METADATA_CATALOG}.ducklake_table tbl ON del.table_id = tbl.table_id
+JOIN {METADATA_CATALOG}.ducklake_schema sch ON tbl.schema_id = sch.schema_id
+WHERE del.end_snapshot IS NULL AND del.data_file_id IN (%s)
+  AND tbl.end_snapshot IS NULL AND sch.end_snapshot IS NULL;)",
+	    removed_id_list);
+	// Remove them from the metadata
+	result += StringUtil::Format(
 	    R"(DELETE FROM {METADATA_CATALOG}.ducklake_delete_file WHERE end_snapshot IS NULL AND data_file_id IN (%s);)",
 	    removed_id_list);
+	return result;
 }
 
 

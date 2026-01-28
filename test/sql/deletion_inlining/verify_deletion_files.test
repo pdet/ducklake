@@ -97,6 +97,14 @@ query III
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
 
+query I
+select data_file_id from ducklake_meta.ducklake_files_scheduled_for_deletion
+----
+1
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', dry_run => false, cleanup_all => true);
+
 # Verify deletion files start and end snapshot
 # Old delete file should have end_snapshot set (superseded)
 # New consolidated delete file should have end_snapshot NULL and partial_max set
@@ -104,6 +112,15 @@ query IIIII
 SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
 ----
 1	2	NULL	27	4
+
+query I
+select data_file_id from ducklake_meta.ducklake_files_scheduled_for_deletion
+----
+
+query I
+SELECT count(*) FROM GLOB('${DATA_PATH}/test_deletion_from_inlined_multiple_snapshots/**/*-delete.parquet')
+----
+1
 
 # Verify new deletion file schema - should have _ducklake_internal_snapshot_id column
 # since it was created from flushing inlined deletions
