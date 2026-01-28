@@ -17,6 +17,8 @@
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_delete_filter.hpp"
+#include "common/parquet_file_scanner.hpp"
 
 #include "functions/ducklake_compaction_functions.hpp"
 
@@ -335,6 +337,109 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 }
 
 //===--------------------------------------------------------------------===//
+// Flush Inlined File Deletions
+//===--------------------------------------------------------------------===//
+static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
+                                      DuckLakeTableEntry &table) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto table_id = table.GetTableId();
+
+	// Get all files with inlined deletions for this table
+	auto files_with_deletions = metadata_manager.GetFilesWithInlinedDeletions(table_id);
+	if (files_with_deletions.empty()) {
+		return;
+	}
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	vector<DuckLakeDeleteFile> new_delete_files;
+	vector<DuckLakeOverwrittenDeleteFile> overwritten_files;
+
+	for (auto &file_info : files_with_deletions) {
+		// Build the merged set of positions with snapshots
+		set<PositionWithSnapshot> merged_positions;
+
+		// Add inlined deletions
+		for (idx_t i = 0; i < file_info.inlined_deleted_rows.size(); i++) {
+			PositionWithSnapshot pos_snap;
+			pos_snap.position = NumericCast<int64_t>(file_info.inlined_deleted_rows[i]);
+			pos_snap.snapshot_id = NumericCast<int64_t>(file_info.inlined_snapshot_ids[i]);
+			merged_positions.insert(pos_snap);
+		}
+
+		// If there's an existing delete file, read and merge its content
+		if (file_info.existing_delete_file_id.IsValid() && !file_info.existing_delete_file_path.empty()) {
+			DuckLakeFileData delete_file_data;
+			delete_file_data.path = file_info.existing_delete_file_path;
+			delete_file_data.encryption_key = file_info.encryption_key;
+
+			auto delete_scan_result = DuckLakeDeleteFilter::ScanDeleteFile(context, delete_file_data);
+
+			// Merge existing delete file content
+			for (idx_t i = 0; i < delete_scan_result.deleted_rows.size(); i++) {
+				PositionWithSnapshot pos_snap;
+				pos_snap.position = delete_scan_result.deleted_rows[i];
+				// Use the snapshot from the file if available, otherwise use the delete file's begin_snapshot
+				if (delete_scan_result.has_embedded_snapshots && i < delete_scan_result.snapshot_ids.size()) {
+					pos_snap.snapshot_id = NumericCast<int64_t>(delete_scan_result.snapshot_ids[i]);
+				} else {
+					pos_snap.snapshot_id = NumericCast<int64_t>(file_info.existing_delete_begin_snapshot);
+				}
+				merged_positions.insert(pos_snap);
+			}
+
+			// Mark old delete file for deletion
+			DuckLakeOverwrittenDeleteFile overwritten;
+			overwritten.delete_file_id = file_info.existing_delete_file_id;
+			overwritten.path = file_info.existing_delete_file_path;
+			overwritten_files.push_back(std::move(overwritten));
+		}
+
+		// Calculate max snapshot from all positions for partial_max
+		optional_idx max_snapshot;
+		for (auto &pos : merged_positions) {
+			if (!max_snapshot.IsValid() || NumericCast<idx_t>(pos.snapshot_id) > max_snapshot.GetIndex()) {
+				max_snapshot = NumericCast<idx_t>(pos.snapshot_id);
+			}
+		}
+
+		// Write the new delete file with snapshot IDs
+		WriteDeleteFileWithSnapshotsInput write_input {context,
+		                                               transaction,
+		                                               fs,
+		                                               table.DataPath(),
+		                                               file_info.encryption_key,
+		                                               file_info.data_file_path,
+		                                               std::move(merged_positions),
+		                                               DeleteFileSource::FLUSH};
+		auto written_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, write_input);
+		written_file.data_file_id = file_info.data_file_id;
+		written_file.data_file_path = file_info.data_file_path;
+		written_file.max_snapshot = max_snapshot;
+		new_delete_files.push_back(std::move(written_file));
+
+		// Clear inlined deletions for this file from metadata
+		metadata_manager.DeleteInlinedFileDeletions(table_id, file_info.data_file_id);
+	}
+
+	// Set up the overwritten file info for each delete file
+	for (auto &delete_file : new_delete_files) {
+		// Find the matching overwritten file based on data_file_id
+		for (auto &file_info : files_with_deletions) {
+			if (file_info.data_file_id == delete_file.data_file_id &&
+			    file_info.existing_delete_file_id.IsValid()) {
+				delete_file.overwrites_existing_delete = true;
+				delete_file.overwritten_delete_file.delete_file_id = file_info.existing_delete_file_id;
+				delete_file.overwritten_delete_file.path = file_info.existing_delete_file_path;
+				break;
+			}
+		}
+	}
+
+	// Add the new delete files to the transaction
+	transaction.AddDeletes(table_id, std::move(new_delete_files));
+}
+
+//===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
@@ -406,6 +511,9 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());
 			}
+
+			// Also flush inlined file deletions for this table
+			FlushInlinedFileDeletions(context, ducklake_catalog, transaction, table);
 		}
 	}
 	return_names.push_back("Success");

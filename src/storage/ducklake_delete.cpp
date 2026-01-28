@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
@@ -435,11 +436,27 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		transaction.AddNewInlinedDeletes(table.GetTableId(), data_file_info.file.path, std::move(sorted_deletes));
 		return;
 	}
+
 	DuckLakeDeleteFile delete_file;
 	delete_file.data_file_path = filename;
 	delete_file.data_file_id = data_file_info.file_id;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
+
+	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
+	auto &ducklake_schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	auto inlining_limit = catalog.DataInliningRowLimit(ducklake_schema.GetSchemaId(), table.GetTableId());
+
+	// Check if there are transaction-local deletes (not from a committed delete file)
+	// If existing_delete_data is from a committed delete file, data_file_info.delete_file_id will be valid
+	bool has_transaction_local_deletes = existing_delete_data && !data_file_info.delete_file_id.IsValid();
+
+	if (inlining_limit > 0 && sorted_deletes.size() <= inlining_limit && data_file_info.file_id.IsValid() &&
+	    !has_transaction_local_deletes) {
+		// Inline small deletes in metadata database instead of writing a delete file
+		transaction.AddInlinedFileDeletion(table.GetTableId(), data_file_info.file_id, std::move(sorted_deletes));
+		return;
+	}
 	if (existing_delete_data) {
 		// deletes already exist for this file
 		auto &existing_deletes = existing_delete_data->deleted_rows;
