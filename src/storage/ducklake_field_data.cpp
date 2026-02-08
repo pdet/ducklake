@@ -289,17 +289,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RenameField(const vector<string> &c
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::RenameColumn(const DuckLakeFieldData &field_data,
                                                               FieldIndex rename_index, const string &new_name) {
-	auto result = make_shared_ptr<DuckLakeFieldData>();
-	for (auto &existing_id : field_data.field_ids) {
-		unique_ptr<DuckLakeFieldId> field_id;
-		if (existing_id->GetFieldIndex() == rename_index) {
-			field_id = DuckLakeFieldId::Rename(*existing_id, new_name);
-		} else {
-			field_id = existing_id->Copy();
-		}
-		result->Add(std::move(field_id));
-	}
-	return result;
+	return TransformField(field_data, rename_index,
+	                      [&](const DuckLakeFieldId &id) { return DuckLakeFieldId::Rename(id, new_name); });
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::AddColumn(const DuckLakeFieldData &field_data,
@@ -315,35 +306,20 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::AddColumn(const DuckLakeFieldDa
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::DropColumn(const DuckLakeFieldData &field_data,
                                                             FieldIndex drop_index) {
-	auto result = make_shared_ptr<DuckLakeFieldData>();
-	for (auto &existing_id : field_data.field_ids) {
-		if (existing_id->GetFieldIndex() == drop_index) {
-			continue;
-		}
-		result->Add(existing_id->Copy());
-	}
-	return result;
+	return TransformField(field_data, drop_index,
+	                      [](const DuckLakeFieldId &) -> unique_ptr<DuckLakeFieldId> { return nullptr; });
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
                                                             const ColumnDefinition &new_col, bool add_column) {
-	auto result = make_shared_ptr<DuckLakeFieldData>();
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
 	if (new_default && new_default->type != ExpressionType::VALUE_CONSTANT && add_column) {
 		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
 		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
 	}
-	for (auto &existing_id : field_data.field_ids) {
-		unique_ptr<DuckLakeFieldId> field_id;
-		if (existing_id->GetFieldIndex() == field_index) {
-			field_id = DuckLakeFieldId::SetDefault(*existing_id, new_default);
-		} else {
-			field_id = existing_id->Copy();
-		}
-		result->Add(std::move(field_id));
-	}
-	return result;
+	return TransformField(field_data, field_index,
+	                      [&](const DuckLakeFieldId &id) { return DuckLakeFieldId::SetDefault(id, new_default); });
 }
 
 const DuckLakeFieldId &DuckLakeFieldData::GetByRootIndex(PhysicalIndex id) const {

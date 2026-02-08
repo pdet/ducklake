@@ -125,6 +125,24 @@ public:
 	                                                const ColumnDefinition &new_col, bool add_column);
 
 private:
+	//! Iterate field_ids, transform the entry matching target_index and copy all other entries.
+	template <class FUNC>
+	static shared_ptr<DuckLakeFieldData> TransformField(const DuckLakeFieldData &field_data, FieldIndex target_index,
+	                                                    FUNC transform) {
+		auto result = make_shared_ptr<DuckLakeFieldData>();
+		for (auto &existing_id : field_data.field_ids) {
+			if (existing_id->GetFieldIndex() == target_index) {
+				auto transformed = transform(*existing_id);
+				if (transformed) {
+					result->Add(std::move(transformed));
+				}
+			} else {
+				result->Add(existing_id->Copy());
+			}
+		}
+		return result;
+	}
+
 	vector<unique_ptr<DuckLakeFieldId>> field_ids;
 	map<FieldIndex, const_reference<DuckLakeFieldId>> field_references;
 };
