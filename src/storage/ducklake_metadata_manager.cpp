@@ -982,82 +982,12 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(const ConstantFilte
 
 string DuckLakeMetadataManager::GenerateFilterPushdown(const TableFilter &filter,
                                                        unordered_set<string> &referenced_stats) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &constant_filter = filter.Cast<ConstantFilter>();
-		auto &type = constant_filter.constant.type();
-		switch (type.id()) {
-		case LogicalTypeId::BLOB:
-			return string();
-		case LogicalTypeId::FLOAT:
-		case LogicalTypeId::DOUBLE:
-			return GenerateConstantFilterDouble(constant_filter, type, referenced_stats);
-		default:
-			return GenerateConstantFilter(constant_filter, type, referenced_stats);
-		}
+	// extract the type from the filter constant (if available) and delegate
+	LogicalType type;
+	if (filter.filter_type == TableFilterType::CONSTANT_COMPARISON) {
+		type = filter.Cast<ConstantFilter>().constant.type();
 	}
-	case TableFilterType::IS_NULL:
-		// IS NULL can only be true if the file has any NULL values
-		referenced_stats.insert("null_count");
-		return "null_count > 0";
-	case TableFilterType::IS_NOT_NULL:
-		// IS NOT NULL can only be true if the file has any valid values
-		referenced_stats.insert("value_count");
-		return "value_count > 0";
-	case TableFilterType::CONJUNCTION_OR: {
-		auto &conjunction_or_filter = filter.Cast<ConjunctionOrFilter>();
-		string result;
-		for (auto &child_filter : conjunction_or_filter.child_filters) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				return string();
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::CONJUNCTION_AND: {
-		auto &conjunction_and_filter = filter.Cast<ConjunctionAndFilter>();
-		string result;
-		for (auto &child_filter : conjunction_and_filter.child_filters) {
-			string child_str = GenerateFilterPushdown(*child_filter, referenced_stats);
-			if (child_str.empty()) {
-				continue; // skip this child, we can still use other children
-			}
-			if (!result.empty()) {
-				result += " AND ";
-			}
-			result += "(" + child_str + ")";
-		}
-		return result;
-	}
-	case TableFilterType::OPTIONAL_FILTER: {
-		auto &optional_filter = filter.Cast<OptionalFilter>();
-		return GenerateFilterPushdown(*optional_filter.child_filter, referenced_stats);
-	}
-	case TableFilterType::IN_FILTER: {
-		auto &in_filter = filter.Cast<InFilter>();
-		string result;
-		for (auto &value : in_filter.values) {
-			if (!result.empty()) {
-				result += " OR ";
-			}
-			auto temporary_constant_filter = ConstantFilter(ExpressionType::COMPARE_EQUAL, value);
-			auto next_filter = GenerateFilterPushdown(temporary_constant_filter, referenced_stats);
-			if (next_filter.empty()) {
-				return string();
-			}
-			result += "(" + next_filter + ")";
-		}
-		return result;
-	}
-	default:
-		// unsupported filter
-		return string();
-	}
+	return GenerateFilterFromTableFilter(filter, type, referenced_stats);
 }
 
 FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
