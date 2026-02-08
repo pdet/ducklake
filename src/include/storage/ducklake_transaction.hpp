@@ -73,6 +73,8 @@ public:
 	}
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
 	unique_ptr<QueryResult> Query(string query);
+	unique_ptr<QueryResult> QueryOrThrow(string query, const string &error_message);
+	unique_ptr<QueryResult> QueryOrThrow(DuckLakeSnapshot snapshot, string query, const string &error_message);
 	Connection &GetConnection();
 
 	DuckLakeSnapshot GetSnapshot();

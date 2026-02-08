@@ -1908,6 +1908,23 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, st
 	return Query(std::move(query));
 }
 
+unique_ptr<QueryResult> DuckLakeTransaction::QueryOrThrow(string query, const string &error_message) {
+	auto result = Query(std::move(query));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(error_message);
+	}
+	return result;
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::QueryOrThrow(DuckLakeSnapshot snapshot, string query,
+                                                          const string &error_message) {
+	auto result = Query(snapshot, std::move(query));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw(error_message);
+	}
+	return result;
+}
+
 string DuckLakeTransaction::GetDefaultSchemaName() {
 	auto &metadata_context = *connection->context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
