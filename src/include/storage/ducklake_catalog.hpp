@@ -11,6 +11,7 @@
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
+#include "common/ducklake_snapshot.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -148,17 +149,25 @@ public:
 		return ++last_uncommitted_catalog_version;
 	}
 
-	void SetCommittedSnapshotId(idx_t value) {
+	void SetCommittedSnapshot(const DuckLakeSnapshot &snapshot) {
 		lock_guard<mutex> guard(commit_lock);
-		last_committed_snapshot = value;
+		last_committed_snapshot = make_uniq<DuckLakeSnapshot>(snapshot);
 	}
 
 	Value GetLastCommittedSnapshotId() const {
 		lock_guard<mutex> guard(commit_lock);
-		if (last_committed_snapshot.IsValid()) {
-			return Value::UBIGINT(last_committed_snapshot.GetIndex());
+		if (last_committed_snapshot) {
+			return Value::UBIGINT(last_committed_snapshot->snapshot_id);
 		}
 		return Value();
+	}
+
+	unique_ptr<DuckLakeSnapshot> GetLastCommittedSnapshot() const {
+		lock_guard<mutex> guard(commit_lock);
+		if (last_committed_snapshot) {
+			return make_uniq<DuckLakeSnapshot>(*last_committed_snapshot);
+		}
+		return nullptr;
 	}
 
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
@@ -200,9 +209,25 @@ private:
 	string metadata_type;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
-	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
+
+	//! The last committed snapshot, set at FlushChanges on a successful commit
+
 	mutable mutex commit_lock;
-	optional_idx last_committed_snapshot;
+	unique_ptr<DuckLakeSnapshot> last_committed_snapshot;
+
+	mutable mutex inlined_cache_lock;
+	//! Cache for existing inlined tables
+	unordered_set<idx_t> catalog_delete_inlined_table_cache;
+
+public:
+	bool HasDeleteInlinedTable(idx_t table_id) const {
+		lock_guard<mutex> guard(inlined_cache_lock);
+		return catalog_delete_inlined_table_cache.find(table_id) != catalog_delete_inlined_table_cache.end();
+	}
+	void SetDeleteInlinedTable(idx_t table_id) {
+		lock_guard<mutex> guard(inlined_cache_lock);
+		catalog_delete_inlined_table_cache.insert(table_id);
+	}
 };
 
 } // namespace duckdb

@@ -1855,8 +1855,8 @@ void DuckLakeTransaction::FlushChanges() {
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
-			// rollback if there is an active transaction
-			auto has_active_transaction = connection->context->transaction.HasActiveTransaction();
+			// rollback if there is an active transaction (connection may be null if we used cached snapshot)
+			bool has_active_transaction = connection && connection->context->transaction.HasActiveTransaction();
 			if (has_active_transaction) {
 				connection->Rollback();
 			}
@@ -1892,7 +1892,15 @@ void DuckLakeTransaction::FlushChanges() {
 		}
 	}
 	// If we got here, this snapshot was successful
-	ducklake_catalog.SetCommittedSnapshotId(commit_snapshot.snapshot_id);
+	ducklake_catalog.SetCommittedSnapshot(commit_snapshot);
+
+	// Update caches for inlined tables after successful commit
+	for (auto &entry : table_data_changes) {
+		auto &table_changes = entry.second;
+		if (table_changes.new_inlined_file_deletes) {
+			ducklake_catalog.SetDeleteInlinedTable(entry.first.index);
+		}
+	}
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
@@ -1963,8 +1971,14 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 	}
 	lock_guard<mutex> guard(snapshot_lock);
 	if (!snapshot) {
-		// no snapshot loaded yet for this transaction - load it
-		snapshot = metadata_manager->GetSnapshot();
+		// check if the catalog has a cached snapshot from a previous commit
+		auto cached = ducklake_catalog.GetLastCommittedSnapshot();
+		if (cached) {
+			snapshot = std::move(cached);
+		} else {
+			// no cached snapshot - query the metadata catalog
+			snapshot = metadata_manager->GetSnapshot();
+		}
 	}
 	return *snapshot;
 }
