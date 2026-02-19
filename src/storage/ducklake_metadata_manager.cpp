@@ -1310,6 +1310,11 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		// also check per-transaction cache
 		has_inlined_delete_table = delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end();
 	}
+	if (!has_inlined_delete_table) {
+		// check if the table actually exists in the metadata catalog
+		auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
+		has_inlined_delete_table = !inlined_table_name.empty();
+	}
 
 	// Build a correlated LIST() subquery for inlined file deletions if the table exists
 	string inlined_del_select;
