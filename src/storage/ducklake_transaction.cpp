@@ -645,6 +645,8 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
 		ConflictCheck(table_id, other_changes.tables_merge_adjacent, "delete from table", "compacted it");
 		ConflictCheck(table_id, other_changes.tables_rewrite_delete, "delete from table", "compacted it");
+		// Cross-check: regular file deletes conflict with inlined deletes on the same table
+		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
 	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
@@ -676,6 +678,7 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "delete from table", "deleted from it");
 		ConflictCheck(table_id, other_changes.tables_flushed_inlined, "delete from table", "flushed the inlined data");
+		ConflictCheck(table_id, other_changes.tables_deleted_from, "delete from table", "deleted from it");
 	}
 	for (auto &table_id : changes.tables_flushed_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "flush inline data", "dropped it");
@@ -1850,7 +1853,6 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
-
 			// finished writing
 			break;
 		} catch (std::exception &ex) {
@@ -1889,6 +1891,7 @@ void DuckLakeTransaction::FlushChanges() {
 			// retry the transaction (with a new snapshot id)
 			connection->BeginTransaction();
 			snapshot.reset();
+			metadata_manager->ClearInlinedTableCaches();
 		}
 	}
 	// If we got here, this snapshot was successful
@@ -2376,7 +2379,7 @@ DuckLakeTransaction::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state)
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		info.file_deletions.file_deletes = std::move(table_changes.new_inlined_file_deletes->file_deletes);
+		info.file_deletions.file_deletes = table_changes.new_inlined_file_deletes->file_deletes;
 		result.push_back(std::move(info));
 	}
 	return result;
