@@ -1,0 +1,47 @@
+# name: test/sql/autoloading/autoload_metadata_path.test
+# description: Tests for autoloading storage extensions required by the metadata path
+# group: [autoloading]
+
+require-env LOCAL_EXTENSION_REPO
+
+require ducklake
+
+require parquet
+
+statement ok
+set extension_directory='__TEST_DIR__/autoloading_metadata'
+
+statement ok
+set autoload_known_extensions=false
+
+statement ok
+set autoinstall_known_extensions=false
+
+statement error
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS db (DATA_PATH './add_columns_named_array_element');
+----
+postgres_scanner
+
+
+statement ok
+set autoload_known_extensions=true
+
+statement ok
+set autoinstall_known_extensions=true
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS db (DATA_PATH './add_columns_named_array_element', OVERRIDE_DATA_PATH TRUE);
+
+statement ok
+CREATE TABLE db.test_tbl (i INTEGER);
+
+statement ok
+INSERT INTO db.test_tbl VALUES (42);
+
+query I
+SELECT * FROM db.test_tbl
+----
+42
+
+statement ok
+DETACH db
