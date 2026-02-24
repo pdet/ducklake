@@ -1018,7 +1018,10 @@ void DuckLakeTransaction::GetNewTableInfo(DuckLakeCommitState &commit_state, Duc
 			DuckLakeNewColumn new_col;
 			new_col.table_id = commit_state.GetTableId(table);
 			new_col.column_info = table.GetAddColumnInfo();
-			result.new_columns.push_back(std::move(new_col));
+			// We don't add the column if that's already handled later on
+			if (columns_handled_by_later_ops.find(new_col.column_info.id) == columns_handled_by_later_ops.end()) {
+				result.new_columns.push_back(std::move(new_col));
+			}
 
 			transaction_changes.altered_tables.insert(table.GetTableId());
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);

@@ -1,0 +1,97 @@
+# name: test/sql/alter/add_column_modify_same_transaction.test
+# description: Test ADD COLUMN followed by RENAME or SET DEFAULT in the same transaction
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_add_column_modify_same_txn', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+# Create table with some columns
+statement ok
+CREATE TABLE ducklake.t (unique_id INTEGER, sort_key_1 VARCHAR, sort_key_2 VARCHAR);
+
+# Insert data (will be inlined)
+statement ok
+INSERT INTO ducklake.t (unique_id, sort_key_1, sort_key_2)
+VALUES
+    (0, 'a', 'val0'),
+    (1, 'c', 'val1'),
+    (2, 'b', 'val2'),
+    (3, 'a', 'val3'),
+    (4, 'c', 'val4');
+
+# Test ADD COLUMN + RENAME in same transaction
+# statement ok
+# BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN sort_key_2_new VARCHAR;
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN sort_key_2_new TO sort_key_3;
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't');
+
+# statement ok
+# COMMIT
+
+query IIII
+FROM ducklake.t
+SELECT *
+----
+0	a	val0	NULL
+1	c	val1	NULL
+2	b	val2	NULL
+3	a	val3	NULL
+4	c	val4	NULL
+
+# Verify no duplicate column entries in metadata - only sort_key_3 should exist, not sort_key_2_new
+query II
+SELECT column_name, column_type FROM ducklake_meta.ducklake_column
+----
+
+# Test ADD COLUMN + SET DEFAULT in same transaction
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN new_col_default INTEGER;
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN new_col_default SET DEFAULT 42;
+
+statement ok
+COMMIT
+
+query IIIII
+FROM ducklake.t
+SELECT *
+----
+0	a	val0	NULL	NULL
+1	c	val1	NULL	NULL
+2	b	val2	NULL	NULL
+3	a	val3	NULL	NULL
+4	c	val4	NULL	NULL
+
+# Verify new_col_default exists exactly once with correct metadata
+query ITT
+SELECT COUNT(*), column_type, default_value FROM ducklake_meta.ducklake_column WHERE column_name = 'new_col_default' AND end_snapshot IS NULL GROUP BY column_type, default_value
+----
+1	int32	42
+
+# Verify the default works for new inserts
+statement ok
+INSERT INTO ducklake.t (unique_id, sort_key_1, sort_key_2) VALUES (5, 'd', 'val5');
+
+query IIIII
+SELECT * FROM ducklake.t WHERE unique_id = 5
+----
+5	d	val5	NULL	42
