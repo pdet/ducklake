@@ -1,0 +1,53 @@
+# name: test/sql/view/ducklake_view_to_sql.test
+# description: test ducklake view ToSQL() correctness
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_view_to_sql_files')
+
+# simple view in default schema
+statement ok
+CREATE VIEW ducklake.v1 AS SELECT 42
+
+query I
+SELECT sql FROM duckdb_views() WHERE database_name='ducklake' AND view_name='v1'
+----
+CREATE VIEW v1 AS SELECT 42;
+
+# view with column aliases
+statement ok
+CREATE VIEW ducklake.aliased(a, b) AS SELECT 42 AS x, 84 AS y
+
+query I
+SELECT sql FROM duckdb_views() WHERE database_name='ducklake' AND view_name='aliased'
+----
+CREATE VIEW aliased (a, b) AS SELECT 42 AS x, 84 AS y;
+
+# view in non-default schema
+statement ok
+CREATE SCHEMA ducklake.s1
+
+statement ok
+CREATE VIEW ducklake.s1.v1 AS SELECT 'hello' AS greeting
+
+query I
+SELECT sql FROM duckdb_views() WHERE database_name='ducklake' AND schema_name='s1'
+----
+CREATE VIEW s1.v1 AS SELECT 'hello' AS greeting;
+
+# multiple views - verify all return correct SQL
+query II
+SELECT view_name, sql FROM duckdb_views() WHERE database_name='ducklake' ORDER BY view_name
+----
+aliased	CREATE VIEW aliased (a, b) AS SELECT 42 AS x, 84 AS y;
+v1	CREATE VIEW v1 AS SELECT 42;
+v1	CREATE VIEW s1.v1 AS SELECT 'hello' AS greeting;
+

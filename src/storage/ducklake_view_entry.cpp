@@ -3,6 +3,8 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 
 namespace duckdb {
 
@@ -57,7 +59,25 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 }
 
 string DuckLakeViewEntry::ToSQL() const {
-	return GetInfo()->ToString();
+	string result = "CREATE VIEW ";
+	if (schema.name != DEFAULT_SCHEMA) {
+		result += KeywordHelper::WriteOptionallyQuoted(schema.name) + ".";
+	}
+	result += KeywordHelper::WriteOptionallyQuoted(name);
+	if (!aliases.empty()) {
+		result += " (";
+		for (idx_t i = 0; i < aliases.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += KeywordHelper::WriteOptionallyQuoted(aliases[i]);
+		}
+		result += ")";
+	}
+	result += " AS ";
+	result += query_sql;
+	result += ";";
+	return result;
 }
 
 unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
