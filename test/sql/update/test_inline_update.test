@@ -1,0 +1,46 @@
+# name: test/sql/update/test_inline_update.test
+# description: Test ducklake inlined updates
+# group: [update]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_update_files', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta');
+
+statement ok
+create table t (a integer)
+
+statement ok
+insert into t values (0),(1),(0),(2),(0),(3),(4),(0),(1),(0),(2),(0),(3),(4)
+
+statement ok
+update t set a = 10 where a = 0
+
+# Verify the inlined deletes (6 rows with a=0 deleted from file 0 at snapshot 3)
+query III
+SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	0	3
+0	2	3
+0	4	3
+0	7	3
+0	9	3
+0	11	3
+
+# Verify the inlined insertions (6 new rows with a=10, preserving original row_ids)
+query IIII
+SELECT row_id, begin_snapshot, end_snapshot, a FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY row_id
+----
+0	3	NULL	10
+2	3	NULL	10
+4	3	NULL	10
+7	3	NULL	10
+9	3	NULL	10
+11	3	NULL	10
+
