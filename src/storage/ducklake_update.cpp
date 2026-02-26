@@ -10,6 +10,9 @@
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
+#include "common/ducklake_util.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -18,6 +21,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
 
 namespace duckdb {
 
@@ -38,10 +42,11 @@ struct FileRowIdHash {
 
 DuckLakeUpdate::DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns_p,
                                PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-                               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions)
+                               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions,
+                               idx_t inline_row_limit)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
       columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op),
-      expressions(std::move(expressions)) {
+      expressions(std::move(expressions)), inline_row_limit(inline_row_limit) {
 	children.push_back(child);
 	row_id_index = columns.size();
 }
@@ -59,6 +64,14 @@ public:
 	//! Duplicate row detection (first-write-wins)
 	mutex seen_rows_lock;
 	unordered_set<FileRowId, FileRowIdHash> seen_rows;
+
+	//! Inlining support
+	atomic<idx_t> total_inlined_rows {0};
+	//! If we reached inline threshold for this update, i.e., we will flush the rest
+	bool reached_inline_threshold = false;
+	mutex inline_lock;
+	unique_ptr<ColumnDataCollection> global_inlined_data;
+	vector<int64_t> global_inlined_row_ids;
 };
 
 class DuckLakeUpdateLocalState : public LocalSinkState {
@@ -71,6 +84,9 @@ public:
 	DataChunk insert_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
+	//! Per-thread inlining buffers
+	unique_ptr<ColumnDataCollection> local_inlined_data;
+	vector<int64_t> local_inlined_row_ids;
 };
 
 unique_ptr<GlobalSinkState> DuckLakeUpdate::GetGlobalSinkState(ClientContext &context) const {
@@ -185,18 +201,53 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		    update_expression_chunk.data[physical_column_count + part_idx]);
 	}
 
-	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
-	copy_op.Sink(context, insert_chunk, copy_input);
-
 	// push the rowids into the delete
 	auto &delete_chunk = lstate.delete_chunk;
 	delete_chunk.SetCardinality(chunk.size());
 	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
 		delete_chunk.data[i].Reference(chunk.data[delete_idx_start + i]);
 	}
-
 	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, input.interrupt_state};
 	delete_op.Sink(context, delete_chunk, delete_input);
+
+	// check if we should inline the insert side
+	// if (inline_row_limit > 0 && !gstate.reached_inline_threshold) {
+	// 	auto new_total = gstate.total_inlined_rows.fetch_add(chunk.size()) + chunk.size();
+	// 	if (new_total <= inline_row_limit) {
+	// 		if (!lstate.local_inlined_data) {
+	// 			vector<LogicalType> user_types;
+	// 			for (idx_t i = 0; i < physical_column_count; i++) {
+	// 				user_types.push_back(update_expression_chunk.data[i].GetType());
+	// 			}
+	// 			lstate.local_inlined_data = make_uniq<ColumnDataCollection>(context.client, user_types);
+	// 		}
+	// 		DataChunk user_chunk;
+	// 		user_chunk.SetCardinality(chunk.size());
+	// 		for (idx_t i = 0; i < physical_column_count; i++) {
+	// 			user_chunk.data.emplace_back(update_expression_chunk.data[i]);
+	// 		}
+	// 		lstate.local_inlined_data->Append(user_chunk);
+	//
+	// 		// extract row_ids
+	// 		auto &row_id_vec = chunk.data[row_id_index];
+	// 		UnifiedVectorFormat row_id_format;
+	// 		row_id_vec.ToUnifiedFormat(chunk.size(), row_id_format);
+	// 		auto row_ids = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
+	// 		for (idx_t i = 0; i < chunk.size(); i++) {
+	// 			auto idx = row_id_format.sel->get_index(i);
+	// 			lstate.local_inlined_row_ids.push_back(row_ids[idx]);
+	// 		}
+	//
+	// 		lstate.updated_count += chunk.size();
+	// 		return SinkResultType::NEED_MORE_INPUT;
+	// 	} else {
+	// 		gstate.reached_inline_threshold = true;
+	// 	}
+	// }
+
+	// We are not inlining, so we have to produce the file
+	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+	copy_op.Sink(context, insert_chunk, copy_input);
 
 	lstate.updated_count += chunk.size();
 	return SinkResultType::NEED_MORE_INPUT;
@@ -348,9 +399,15 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
-	// FIXME: we should take the inlining limit into account here and write new updates to the inline data tables if
-	// possible updates are executed as a delete + insert - generate the two nodes (delete and insert) plan the copy for
-	// the insert
+	// auto &ducklake_schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	// auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
+	// auto &metadata_manager = duck_transaction.GetMetadataManager();
+	// idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), table.GetTableId());
+	// if (data_inlining_row_limit > 0 &&
+	//     (DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns()) ||
+	//      !metadata_manager.SupportsInliningTypes(child_plan.types))) {
+	// 	data_inlining_row_limit = 0;
+	// }
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 	auto &copy_op = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
@@ -362,7 +419,11 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto &delete_op = DuckLakeDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes),
 	                                             copy_input.encryption_key, false);
 	// plan the actual insert
-	auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, copy_input.encryption_key);
+	// PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+ //                                              optional_ptr<PhysicalOperator> plan)
+	LogicalInsert logical_insert (table, table.oid);
+	auto &insert_op =  PlanInsert(context, planner, logical_insert, child_plan);
+	// auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, copy_input.encryption_key);
 
 	vector<unique_ptr<Expression>> expressions;
 	unordered_map<idx_t, idx_t> expression_map;
@@ -401,7 +462,8 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 
-	return planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions);
+	return planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions,
+	                                   10);
 }
 
 void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

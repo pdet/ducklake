@@ -41,7 +41,10 @@ class DuckLakeFieldId;
 
 struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
+	//! Inlined data for Insertions/Appends (i.e., use sequential row ids)
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
+	//! Inlined data for Updates (i.e., has explicit preserved row ids)
+	unique_ptr<DuckLakeInlinedData> new_update_inlined_data;
 	unordered_map<string, vector<DuckLakeDeleteFile>> new_delete_files;
 	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
 	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
@@ -111,6 +114,7 @@ public:
 	NewNameMapInfo GetNewNameMaps(DuckLakeCommitState &commit_state);
 
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
+	void AppendUpdateInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
 	void AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,

@@ -32,6 +32,9 @@ bool LocalTableDataChanges::IsEmpty() const {
 	if (new_inlined_data) {
 		return false;
 	}
+	if (new_update_inlined_data) {
+		return false;
+	}
 	if (!new_delete_files.empty()) {
 		return false;
 	}
@@ -1367,7 +1370,8 @@ NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCo
 			throw InternalException("Cannot commit transaction local files - these should have been cleaned up before");
 		}
 		auto &table_changes = entry.second;
-		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data) {
+		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data &&
+		    !table_changes.new_update_inlined_data) {
 			// no new data - skip this entry
 			continue;
 		}
@@ -2128,6 +2132,35 @@ void DuckLakeTransaction::AppendInlinedData(TableIndex table_id, unique_ptr<Duck
 	} else {
 		// does not exist yet - set it
 		table_changes.new_inlined_data = std::move(new_data);
+	}
+}
+
+void DuckLakeTransaction::AppendUpdateInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data) {
+	lock_guard<mutex> guard(table_data_changes_lock);
+	auto &table_changes = table_data_changes[table_id];
+	if (table_changes.new_update_inlined_data) {
+		// already exists - append data and row_ids
+		auto &existing_data = *table_changes.new_update_inlined_data;
+		ColumnDataAppendState append_state;
+		existing_data.data->InitializeAppend(append_state);
+		for (auto &chunk : new_data->data->Chunks()) {
+			existing_data.data->Append(chunk);
+		}
+		// concatenate explicit row_ids
+		existing_data.explicit_row_ids.insert(existing_data.explicit_row_ids.end(),
+		                                      new_data->explicit_row_ids.begin(),
+		                                      new_data->explicit_row_ids.end());
+		// merge column stats
+		for (auto &entry : new_data->column_stats) {
+			auto stats_entry = existing_data.column_stats.find(entry.first);
+			if (stats_entry == existing_data.column_stats.end()) {
+				throw InternalException("Missing stats when merging update inlined data");
+			}
+			stats_entry->second.MergeStats(entry.second);
+		}
+	} else {
+		// does not exist yet - set it
+		table_changes.new_update_inlined_data = std::move(new_data);
 	}
 }
 
