@@ -8,8 +8,11 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "storage/ducklake_delete.hpp"
+#include "storage/ducklake_inline_data.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -18,6 +21,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -38,10 +42,11 @@ struct FileRowIdHash {
 
 DuckLakeUpdate::DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns_p,
                                PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-                               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions)
+                               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions,
+                               idx_t inline_row_limit)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
       columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op),
-      expressions(std::move(expressions)) {
+      expressions(std::move(expressions)), inline_row_limit(inline_row_limit) {
 	children.push_back(child);
 	row_id_index = columns.size();
 }
@@ -59,6 +64,13 @@ public:
 	//! Duplicate row detection (first-write-wins)
 	mutex seen_rows_lock;
 	unordered_set<FileRowId, FileRowIdHash> seen_rows;
+
+	//! Inlining support
+	atomic<idx_t> total_inlined_rows {0};
+	bool inline_overflow = false;
+	mutex inline_lock;
+	unique_ptr<ColumnDataCollection> global_inlined_data;
+	vector<int64_t> global_inlined_row_ids;
 };
 
 class DuckLakeUpdateLocalState : public LocalSinkState {
@@ -71,6 +83,12 @@ public:
 	DataChunk insert_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
+
+	//! Inlining support
+	unique_ptr<ColumnDataCollection> local_inlined_data;
+	vector<int64_t> local_inlined_row_ids;
+	bool local_overflow = false;
+	DataChunk user_columns_chunk;
 };
 
 unique_ptr<GlobalSinkState> DuckLakeUpdate::GetGlobalSinkState(ClientContext &context) const {
@@ -111,6 +129,16 @@ unique_ptr<LocalSinkState> DuckLakeUpdate::GetLocalSinkState(ExecutionContext &c
 	result->insert_chunk.Initialize(context.client, insert_types);
 
 	result->delete_chunk.Initialize(context.client, delete_types);
+
+	// initialize user_columns_chunk for inlining (physical columns only)
+	if (inline_row_limit > 0) {
+		vector<LogicalType> user_types;
+		for (idx_t i = 0; i < physical_column_count; i++) {
+			user_types.push_back(expression_types[i]);
+		}
+		result->user_columns_chunk.Initialize(context.client, user_types);
+	}
+
 	return std::move(result);
 }
 
@@ -185,10 +213,45 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		    update_expression_chunk.data[physical_column_count + part_idx]);
 	}
 
-	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
-	copy_op.Sink(context, insert_chunk, copy_input);
+	bool inlined = false;
+	if (inline_row_limit > 0 && !lstate.local_overflow) {
+		idx_t new_total = gstate.total_inlined_rows.fetch_add(chunk.size()) + chunk.size();
+		if (new_total > inline_row_limit) {
+			// exceeded limit - set overflow and flush any buffered data
+			gstate.inline_overflow = true;
+			lstate.local_overflow = true;
+			if (lstate.local_inlined_data) {
+				// flush previously buffered data to copy_op
+				FlushLocalInlinedDataToCopy(context, lstate, input);
+			}
+		} else {
+			// buffer user columns + row_ids for inlining
+			if (!lstate.local_inlined_data) {
+				lstate.local_inlined_data = make_uniq<ColumnDataCollection>(context.client, lstate.user_columns_chunk.GetTypes());
+			}
+			lstate.user_columns_chunk.SetCardinality(chunk.size());
+			for (idx_t i = 0; i < physical_column_count; i++) {
+				lstate.user_columns_chunk.data[i].Reference(insert_chunk.data[i]);
+			}
+			lstate.local_inlined_data->Append(lstate.user_columns_chunk);
+			// extract row_ids
+			UnifiedVectorFormat row_id_format;
+			chunk.data[row_id_index].ToUnifiedFormat(chunk.size(), row_id_format);
+			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
+			for (idx_t r = 0; r < chunk.size(); r++) {
+				auto idx = row_id_format.sel->get_index(r);
+				lstate.local_inlined_row_ids.push_back(row_id_data[idx]);
+			}
+			inlined = true;
+		}
+	}
 
-	// push the rowids into the delete
+	if (!inlined) {
+		OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+		copy_op.Sink(context, insert_chunk, copy_input);
+	}
+
+	// push the rowids into the delete (always, regardless of inlining)
 	auto &delete_chunk = lstate.delete_chunk;
 	delete_chunk.SetCardinality(chunk.size());
 	for (idx_t i = 0; i < DELETION_INFO_SIZE; i++) {
@@ -203,11 +266,61 @@ SinkResultType DuckLakeUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 }
 
 //===--------------------------------------------------------------------===//
+// Inlining helpers
+//===--------------------------------------------------------------------===//
+void DuckLakeUpdate::FlushLocalInlinedDataToCopy(ExecutionContext &context, DuckLakeUpdateLocalState &lstate,
+                                                  OperatorSinkInput &input) const {
+	if (!lstate.local_inlined_data) {
+		return;
+	}
+	auto physical_column_count = columns.size();
+	ColumnDataScanState scan_state;
+	lstate.local_inlined_data->InitializeScan(scan_state);
+	DataChunk scan_chunk;
+	scan_chunk.Initialize(context.client, lstate.local_inlined_data->Types());
+
+	DataChunk flush_chunk;
+	flush_chunk.Initialize(context.client, lstate.insert_chunk.GetTypes());
+
+	idx_t row_id_offset = 0;
+	while (true) {
+		lstate.local_inlined_data->Scan(scan_state, scan_chunk);
+		if (scan_chunk.size() == 0) {
+			break;
+		}
+		flush_chunk.SetCardinality(scan_chunk.size());
+		// copy physical columns
+		for (idx_t i = 0; i < physical_column_count; i++) {
+			flush_chunk.data[i].Reference(scan_chunk.data[i]);
+		}
+		// use actual row_ids from the buffered local_inlined_row_ids
+		auto row_id_out = FlatVector::GetData<int64_t>(flush_chunk.data[physical_column_count]);
+		for (idx_t r = 0; r < scan_chunk.size(); r++) {
+			row_id_out[r] = lstate.local_inlined_row_ids[row_id_offset + r];
+		}
+		row_id_offset += scan_chunk.size();
+
+		OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
+		copy_op.Sink(context, flush_chunk, copy_input);
+	}
+	lstate.local_inlined_data.reset();
+	lstate.local_inlined_row_ids.clear();
+}
+
+//===--------------------------------------------------------------------===//
 // Combine
 //===--------------------------------------------------------------------===//
 SinkCombineResultType DuckLakeUpdate::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeUpdateGlobalState>();
 	auto &local_state = input.local_state.Cast<DuckLakeUpdateLocalState>();
+
+	// if another thread caused overflow but this thread still has buffered data, flush it BEFORE copy_op.Combine
+	if (global_state.inline_overflow && !local_state.local_overflow && local_state.local_inlined_data) {
+		local_state.local_overflow = true;
+		OperatorSinkInput sink_input {*copy_op.sink_state, *local_state.copy_local_state, input.interrupt_state};
+		FlushLocalInlinedDataToCopy(context, local_state, sink_input);
+	}
+
 	OperatorSinkCombineInput copy_combine_input {*copy_op.sink_state, *local_state.copy_local_state,
 	                                             input.interrupt_state};
 	auto result = copy_op.Combine(context, copy_combine_input);
@@ -220,6 +333,24 @@ SinkCombineResultType DuckLakeUpdate::Combine(ExecutionContext &context, Operato
 	if (result != SinkCombineResultType::FINISHED) {
 		throw InternalException("DuckLakeUpdate::Combine does not support async child operators");
 	}
+
+	// merge per-thread inlined data into global (if not overflow)
+	if (!global_state.inline_overflow && local_state.local_inlined_data) {
+		lock_guard<mutex> guard(global_state.inline_lock);
+		if (!global_state.global_inlined_data) {
+			global_state.global_inlined_data = std::move(local_state.local_inlined_data);
+		} else {
+			ColumnDataAppendState append_state;
+			global_state.global_inlined_data->InitializeAppend(append_state);
+			for (auto &chunk : local_state.local_inlined_data->Chunks()) {
+				global_state.global_inlined_data->Append(append_state, chunk);
+			}
+		}
+		global_state.global_inlined_row_ids.insert(global_state.global_inlined_row_ids.end(),
+		                                           local_state.local_inlined_row_ids.begin(),
+		                                           local_state.local_inlined_row_ids.end());
+	}
+
 	global_state.total_updated_count += local_state.updated_count;
 	return SinkCombineResultType::FINISHED;
 }
@@ -229,6 +360,9 @@ SinkCombineResultType DuckLakeUpdate::Combine(ExecutionContext &context, Operato
 //===--------------------------------------------------------------------===//
 SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
+	auto &gstate = input.global_state.Cast<DuckLakeUpdateGlobalState>();
+
+	// always finalize copy_op and delete_op
 	OperatorSinkFinalizeInput copy_finalize_input {*copy_op.sink_state, input.interrupt_state};
 	auto result = copy_op.Finalize(pipeline, event, context, copy_finalize_input);
 	if (result != SinkFinalizeType::READY) {
@@ -240,7 +374,18 @@ SinkFinalizeType DuckLakeUpdate::Finalize(Pipeline &pipeline, Event &event, Clie
 		throw InternalException("DuckLakeUpdate::Finalize does not support async child operators");
 	}
 
-	// scan the copy operator and sink into the insert operator
+	if (!gstate.inline_overflow && gstate.global_inlined_data) {
+		// data was inlined - compute stats and push to transaction
+		auto inlined_result = DuckLakeInlineData::ComputeInlinedStats(*gstate.global_inlined_data, table);
+		inlined_result->data = std::move(gstate.global_inlined_data);
+		inlined_result->explicit_row_ids = std::move(gstate.global_inlined_row_ids);
+
+		auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
+		transaction.AppendInlinedData(table.GetTableId(), std::move(inlined_result));
+		return SinkFinalizeType::READY;
+	}
+
+	// normal path: scan the copy operator and sink into the insert operator
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
 	auto global_source = copy_op.GetGlobalSourceState(context);
@@ -348,9 +493,6 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
-	// FIXME: we should take the inlining limit into account here and write new updates to the inline data tables if
-	// possible updates are executed as a delete + insert - generate the two nodes (delete and insert) plan the copy for
-	// the insert
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 	auto &copy_op = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
@@ -373,8 +515,8 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	for (idx_t i = 0; i < op.columns.size(); i++) {
 		expressions.push_back(op.expressions[expression_map[i]]->Copy());
 	}
+	bool all_identity = true;
 	if (copy_input.partition_data) {
-		bool all_identity = true;
 		for (auto &field : copy_input.partition_data->fields) {
 			if (field.transform.type != DuckLakeTransformType::IDENTITY) {
 				all_identity = false;
@@ -401,7 +543,33 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 		}
 	}
 
-	return planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions);
+	// check if we can inline the update insertions
+	idx_t update_inline_row_limit = 0;
+	auto &ducklake_schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), table.GetTableId());
+	// check all conditions for inlining:
+	// 1) inlining must be enabled
+	// 2) no column name conflicts with system columns
+	// 3) all column types must support inlining
+	// 4) no non-identity partition transforms (we can't reconstruct partition columns on overflow)
+	// 5) auto-commit: within explicit transactions, the reader would show wrong row_ids
+	//    for update-inlined data (TRANSACTION_LOCAL_ID_START + ordinal instead of original row_ids)
+	bool has_non_identity_partitions = copy_input.partition_data && !all_identity;
+	vector<LogicalType> user_column_types;
+	for (idx_t i = 0; i < op.columns.size(); i++) {
+		user_column_types.push_back(table.GetColumn(LogicalIndex(op.columns[i].index)).GetType());
+	}
+	bool is_auto_commit = context.transaction.IsAutoCommit();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(table.GetColumns()) &&
+	    metadata_manager.SupportsInliningTypes(user_column_types) && !has_non_identity_partitions &&
+	    is_auto_commit) {
+		update_inline_row_limit = data_inlining_row_limit;
+	}
+
+	return planner.Make<DuckLakeUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op, expressions,
+	                                    update_inline_row_limit);
 }
 
 void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

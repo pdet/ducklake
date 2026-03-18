@@ -126,6 +126,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	for (auto &chunk : local_changes.data->Chunks()) {
 		result->data->Append(chunk);
 	}
+	result->explicit_row_ids = local_changes.explicit_row_ids;
 	return result;
 }
 
@@ -216,6 +217,12 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			}
 			stats_entry->second.MergeStats(entry.second);
 		}
+		// merge explicit_row_ids (for update-inlined data)
+		if (!new_data->explicit_row_ids.empty()) {
+			existing_data.explicit_row_ids.insert(existing_data.explicit_row_ids.end(),
+			                                     new_data->explicit_row_ids.begin(),
+			                                     new_data->explicit_row_ids.end());
+		}
 	} else {
 		// does not exist yet - set it
 		table_changes.new_inlined_data = std::move(new_data);
@@ -248,15 +255,20 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		throw InternalException("DeleteFromLocalInlinedData called but no transaction-local data exists for table");
 	}
 	auto &table_changes = entry->second;
-	auto &existing = *table_changes.new_inlined_data->data;
+	auto &inlined = *table_changes.new_inlined_data;
+	auto &existing = *inlined.data;
+	bool has_explicit = !inlined.explicit_row_ids.empty();
+	auto sequential_count = inlined.SequentialCount();
+
 	// construct a new collection from the existing data minus the deletes
 	auto new_data = make_uniq<ColumnDataCollection>(context, existing.Types());
+	vector<int64_t> new_explicit_row_ids;
 
 	idx_t base_row_id = 0;
+	idx_t explicit_idx = 0;
 	ColumnDataAppendState append_state;
 	new_data->InitializeAppend(append_state);
 	for (auto &chunk : existing.Chunks()) {
-		// slice out non-deleted rows
 		SelectionVector sel(chunk.size());
 		idx_t selected_rows = 0;
 
@@ -264,9 +276,15 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 			auto row_id = base_row_id + r;
 			if (new_deletes.find(row_id) != new_deletes.end()) {
 				// deleted - skip
+				if (has_explicit && row_id >= sequential_count) {
+					explicit_idx++;
+				}
 				continue;
 			}
 			sel.set_index(selected_rows++, r);
+			if (has_explicit && row_id >= sequential_count) {
+				new_explicit_row_ids.push_back(inlined.explicit_row_ids[explicit_idx++]);
+			}
 		}
 		base_row_id += chunk.size();
 		if (selected_rows == 0) {
@@ -276,8 +294,10 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 		new_data->Append(append_state, chunk);
 	}
 
-	// override the existing collection
-	table_changes.new_inlined_data->data = std::move(new_data);
+	inlined.data = std::move(new_data);
+	if (has_explicit) {
+		inlined.explicit_row_ids = std::move(new_explicit_row_ids);
+	}
 }
 
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
@@ -2620,6 +2640,7 @@ void DuckLakeTransaction::AppendInlinedData(TableIndex table_id, unique_ptr<Duck
 	auto context_ref = context.lock();
 	local_changes.AppendInlinedData(*context_ref, table_id, std::move(new_data));
 }
+
 
 void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes) {
 	if (new_deletes.empty()) {

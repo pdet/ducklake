@@ -224,19 +224,17 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				break;
 			}
 			case InlinedVirtualColumn::COLUMN_ROW_ID: {
-				// Generate ordinal data for row IDs
+				// Generate row IDs - use explicit_row_ids for update-inlined rows,
+				// sequential IDs otherwise
 				Vector ordinal_vector(LogicalType::BIGINT);
 				auto ordinal_data = FlatVector::GetData<int64_t>(ordinal_vector);
 				for (idx_t r = 0; r < scan_chunk.size(); r++) {
-					ordinal_data[r] = NumericCast<int64_t>(file_row_number + r);
+					ordinal_data[r] = data->GetRowId(NumericCast<idx_t>(file_row_number + r));
 				}
 				if (TryEvaluateExpression(context, c, ordinal_vector, LogicalType::BIGINT, chunk.data[c])) {
 					continue;
 				}
-				auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[c]);
-				for (idx_t r = 0; r < scan_chunk.size(); r++) {
-					row_id_data[r] = NumericCast<int64_t>(file_row_number + r);
-				}
+				chunk.data[c].Reference(ordinal_vector);
 				continue;
 			}
 			case InlinedVirtualColumn::COLUMN_EMPTY:

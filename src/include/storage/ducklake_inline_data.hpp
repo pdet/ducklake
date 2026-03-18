@@ -11,10 +11,12 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
 #include "storage/ducklake_stats.hpp"
+#include "storage/ducklake_inlined_data.hpp"
 #include "common/ducklake_data_file.hpp"
 
 namespace duckdb {
 class DuckLakeInsert;
+class DuckLakeTableEntry;
 
 class DuckLakeInlineData : public PhysicalOperator {
 public:
@@ -35,6 +37,9 @@ public:
 	                                        OperatorState &state) const override;
 	OperatorFinalResultType OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                                         OperatorFinalizeInput &input) const override;
+
+	//! Compute column stats and verify NOT NULL constraints for inlined data
+	static unique_ptr<DuckLakeInlinedData> ComputeInlinedStats(ColumnDataCollection &data, DuckLakeTableEntry &table);
 
 	bool RequiresFinalExecute() const override {
 		return true;

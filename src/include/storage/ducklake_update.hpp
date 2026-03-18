@@ -16,7 +16,8 @@ class DuckLakeUpdate : public PhysicalOperator {
 public:
 	DuckLakeUpdate(PhysicalPlan &physical_plan, DuckLakeTableEntry &table, vector<PhysicalIndex> columns,
 	               PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-	               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions);
+	               PhysicalOperator &insert_op, vector<unique_ptr<Expression>> &expressions,
+	               idx_t inline_row_limit = 0);
 
 	//! The table to update
 	DuckLakeTableEntry &table;
@@ -31,6 +32,8 @@ public:
 	//! The row-id-index
 	idx_t row_id_index;
 	vector<unique_ptr<Expression>> expressions;
+	//! The row limit for data inlining (0 = disabled)
+	idx_t inline_row_limit;
 
 public:
 	// // Source interface
@@ -62,6 +65,10 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
+
+private:
+	void FlushLocalInlinedDataToCopy(ExecutionContext &context, class DuckLakeUpdateLocalState &lstate,
+	                                 OperatorSinkInput &input) const;
 };
 
 } // namespace duckdb

@@ -291,6 +291,33 @@ void SetFinalStats(DuckLakeBaseColumnStats &stats, DuckLakeInlinedData &result) 
 	}
 }
 
+unique_ptr<DuckLakeInlinedData> DuckLakeInlineData::ComputeInlinedStats(ColumnDataCollection &data,
+                                                                       DuckLakeTableEntry &table) {
+	auto result = make_uniq<DuckLakeInlinedData>();
+	// compute the column stats for the data
+	vector<DuckLakeBaseColumnStats> new_stats;
+	auto &field_data = table.GetFieldData();
+	for (auto &chunk : data.Chunks()) {
+		for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)));
+		}
+	}
+	// set the final stats and verify NOT NULL constraints
+	auto not_null_fields = table.GetNotNullFields();
+	for (idx_t c = 0; c < new_stats.size(); c++) {
+		auto &column_stats = new_stats[c];
+		SetFinalStats(column_stats, *result);
+
+		if (column_stats.stats.null_count > 0) {
+			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
+			if (not_null_fields.count(column_name)) {
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_name);
+			}
+		}
+	}
+	return result;
+}
+
 OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                              OperatorFinalizeInput &input) const {
 	// push inlined data to transaction
@@ -311,33 +338,12 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		throw InternalException("Inlining rows but also inserting rows through a file");
 	}
 	auto &table = insert_gstate.table;
-	auto result = make_uniq<DuckLakeInlinedData>();
 	auto &inlined_data = *gstate.global_inlined_data;
-	result->data = std::move(gstate.global_inlined_data);
 	// set the insert count to the total number of inlined rows
 	insert_gstate.total_insert_count = inlined_data.Count();
 
-	// compute the column stats for the data
-	vector<DuckLakeBaseColumnStats> new_stats;
-	auto &field_data = table.GetFieldData();
-	for (auto &chunk : inlined_data.Chunks()) {
-		for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)));
-		}
-	}
-	// set the final stats and verify NOT NULL constraints
-	auto not_null_fields = table.GetNotNullFields();
-	for (idx_t c = 0; c < new_stats.size(); c++) {
-		auto &column_stats = new_stats[c];
-		SetFinalStats(column_stats, *result);
-
-		if (column_stats.stats.null_count > 0) {
-			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
-			if (not_null_fields.count(column_name)) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_name);
-			}
-		}
-	}
+	auto result = ComputeInlinedStats(inlined_data, table);
+	result->data = std::move(gstate.global_inlined_data);
 
 	// push the inlined data into the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
