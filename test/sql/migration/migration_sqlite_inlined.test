@@ -1,0 +1,53 @@
+# name: test/sql/migration/migration_sqlite_inlined.test
+# description: test that inlined data column types are migrated for SQLite-backed catalogs (FLOAT/DOUBLE → VARCHAR)
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+unzip data/old_ducklake/v03_sqlite_inlined.sqlite.gz __TEST_DIR__/v03_sqlite_inlined.sqlite
+
+statement ok
+ATTACH 'ducklake:sqlite:__TEST_DIR__/v03_sqlite_inlined.sqlite' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_sqlite_inlined', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+# verify version was updated
+query I
+SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key='version'
+----
+0.4
+
+# verify data is preserved after migration (FLOAT/DOUBLE values cast to VARCHAR)
+query IIII
+SELECT i, f, d, s FROM ducklake.test ORDER BY i
+----
+1	1.5	2.5	hello
+2	3.14	6.28	world
+3	0.0	0.0	foo
+
+# verify the inlined table columns were migrated to VARCHAR for FLOAT/DOUBLE
+query II
+SELECT column_name, data_type FROM duckdb_columns()
+WHERE database_name LIKE '%ducklake%' AND table_name = 'ducklake_inlined_data_1_1'
+  AND column_name IN ('f', 'd')
+ORDER BY column_name
+----
+d	VARCHAR
+f	VARCHAR
+
+# verify we can still insert and query
+statement ok
+INSERT INTO ducklake.test VALUES (4, 4.0, 8.0, 'bar')
+
+query IIII
+SELECT i, f, d, s FROM ducklake.test ORDER BY i
+----
+1	1.5	2.5	hello
+2	3.14	6.28	world
+3	0.0	0.0	foo
+4	4.0	8.0	bar
+
+statement ok
+DETACH ducklake

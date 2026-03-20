@@ -1,0 +1,41 @@
+# name: test/sql/migration/migration_inlined.test
+# description: test that inlined data column types are migrated during v0.3 to v0.4 migration
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+unzip data/old_ducklake/v03_inlined.db.gz __TEST_DIR__/v03_inlined.db
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/v03_inlined.db' AS ducklake (DATA_PATH '__TEST_DIR__/ducklake_migrate_inlined', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+# verify data is preserved after migration
+query II
+SELECT i, s FROM ducklake.test ORDER BY i
+----
+1	hello
+2	world
+3	foo
+
+# verify version was updated
+query I
+SELECT value FROM __ducklake_metadata_ducklake.ducklake_metadata WHERE key='version'
+----
+0.4
+
+# verify we can still insert and query
+statement ok
+INSERT INTO ducklake.test VALUES (4, 'bar')
+
+query II
+SELECT i, s FROM ducklake.test ORDER BY i
+----
+1	hello
+2	world
+3	foo
+4	bar
+
+statement ok
+DETACH ducklake

@@ -275,6 +275,110 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 			delete_global_entries->GetErrorObject().Throw("Failed to clean up global schema_versions entries: ");
 		}
 	}
+
+	MigrateInlinedDataTypes(allow_failures);
+}
+
+void DuckLakeMetadataManager::MigrateInlinedDataTypes(bool allow_failures) {
+	// Migrate inlined data table column types: the types used for inlined data columns
+	// may have changed between versions, so we need to recreate tables whose column types differ.
+	// We use a recreate approach (create new → copy → drop old → rename) because SQLite
+	// does not support ALTER COLUMN TYPE.
+	auto inlined_result = transaction.Query(R"(
+SELECT table_id, table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+)");
+	if (inlined_result->HasError()) {
+		return;
+	}
+	for (auto &inlined_row : *inlined_result) {
+		auto table_id = inlined_row.GetValue<int64_t>(0);
+		auto table_name = inlined_row.GetValue<string>(1);
+
+		// Get column definitions from ducklake_column for this table (top-level only)
+		auto col_result = transaction.Query(StringUtil::Format(R"(
+SELECT column_name, column_type FROM {METADATA_CATALOG}.ducklake_column
+WHERE table_id = %d AND parent_column IS NULL AND end_snapshot IS NULL
+ORDER BY column_order
+)",
+		                                                       table_id));
+		if (col_result->HasError()) {
+			continue;
+		}
+
+		// Build the expected column definitions and check for mismatches
+		struct ColumnMigrationInfo {
+			string name;
+			string expected_type;
+		};
+		vector<ColumnMigrationInfo> columns;
+		bool needs_migration = false;
+
+		for (auto &col_row : *col_result) {
+			auto col_name = col_row.GetValue<string>(0);
+			auto ducklake_type = col_row.GetValue<string>(1);
+
+			DuckLakeColumnInfo col_info;
+			col_info.name = col_name;
+			col_info.type = ducklake_type;
+			string expected_type = GetColumnType(col_info);
+
+			// Get the actual column type from the inlined table
+			auto actual_result = transaction.Query(StringUtil::Format(R"(
+SELECT data_type FROM duckdb_columns()
+WHERE database_name = {METADATA_CATALOG_NAME_LITERAL}
+  AND table_name = '%s' AND column_name = '%s'
+)",
+			                                                          StringUtil::Replace(table_name, "'", "''"),
+			                                                          StringUtil::Replace(col_name, "'", "''")));
+			if (!actual_result->HasError()) {
+				for (auto &actual_row : *actual_result) {
+					auto actual_type = actual_row.GetValue<string>(0);
+					if (!actual_type.empty() && !StringUtil::CIEquals(actual_type, expected_type)) {
+						needs_migration = true;
+					}
+				}
+			}
+			columns.push_back({col_name, expected_type});
+		}
+
+		if (!needs_migration) {
+			continue;
+		}
+
+		// Recreate the table with correct types: create new → copy with casts → drop old → rename
+		string tmp_table_name = table_name + "__migration_tmp";
+
+		// Build CREATE TABLE and INSERT SELECT statements
+		string create_cols = "row_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT";
+		string select_cols = "row_id, begin_snapshot, end_snapshot";
+		for (auto &col : columns) {
+			create_cols += StringUtil::Format(", %s %s", SQLIdentifier(col.name), col.expected_type);
+			select_cols += StringUtil::Format(", %s::%s", SQLIdentifier(col.name), col.expected_type);
+		}
+
+		auto create_result = transaction.Query(
+		    StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(%s)", SQLIdentifier(tmp_table_name), create_cols));
+		if (create_result->HasError()) {
+			if (!allow_failures) {
+				create_result->GetErrorObject().Throw("Failed to create migration temp table: ");
+			}
+			continue;
+		}
+
+		auto insert_result = transaction.Query(
+		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s",
+		                       SQLIdentifier(tmp_table_name), select_cols, SQLIdentifier(table_name)));
+		if (insert_result->HasError()) {
+			if (!allow_failures) {
+				insert_result->GetErrorObject().Throw("Failed to copy data during inlined table migration: ");
+			}
+			continue;
+		}
+
+		transaction.Query(StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s", SQLIdentifier(table_name)));
+		transaction.Query(StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s",
+		                                     SQLIdentifier(tmp_table_name), SQLIdentifier(table_name)));
+	}
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
