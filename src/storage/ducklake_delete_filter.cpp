@@ -239,8 +239,21 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeFileData &delete_file) {
 	auto scan_result = ScanDeleteFile(context, delete_file, optional_idx(), optional_idx());
-	delete_data->deleted_rows = std::move(scan_result.deleted_rows);
-	delete_data->snapshot_ids = std::move(scan_result.snapshot_ids);
+	if (delete_data->deleted_rows.empty()) {
+		// first delete file — just move
+		delete_data->deleted_rows = std::move(scan_result.deleted_rows);
+		delete_data->snapshot_ids = std::move(scan_result.snapshot_ids);
+	} else {
+		// additional delete file — merge positions (sorted merge)
+		auto mid_idx = delete_data->deleted_rows.size();
+		for (auto &row : scan_result.deleted_rows) {
+			delete_data->deleted_rows.push_back(row);
+		}
+		std::inplace_merge(delete_data->deleted_rows.begin(), delete_data->deleted_rows.begin() + mid_idx,
+		                   delete_data->deleted_rows.end());
+		// snapshot IDs are not meaningful when merging multiple files
+		delete_data->snapshot_ids.clear();
+	}
 }
 
 void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_deletes) {

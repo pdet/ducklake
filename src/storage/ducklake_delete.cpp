@@ -393,9 +393,11 @@ void DuckLakeDelete::FlushMergedDeletionVector(DuckLakeTransaction &transaction,
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;
-	// track the old delete file for deletion from metadata
+	// soft-delete the old delete file: set end_snapshot so it remains visible for time travel
+	// (like Iceberg's manifest versioning — old snapshots still reference the old deletion vector)
 	written_file.overwritten_delete_file.delete_file_id = data_file_info.delete_file_id;
 	written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
+	written_file.overwritten_delete_file.soft_delete = true;
 
 	global_state.written_files.emplace(filename, std::move(written_file));
 }
@@ -503,15 +505,19 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
 
 	// check if we should use inlined file deletions instead of creating a delete file
+	// skip inlining when deletion vectors are enabled to avoid mixed format issues with time travel
 	if (data_file_info.file_id.IsValid()) {
 		auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-		auto threshold = catalog.DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
-		if (threshold > 0 && sorted_deletes.size() <= threshold) {
-			// use inlined file deletions
-			transaction.AddNewInlinedFileDeletes(table.GetTableId(), data_file_info.file_id.index,
-			                                     std::move(sorted_deletes));
-			return;
+		bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+		if (!use_deletion_vectors) {
+			auto threshold = catalog.DataInliningRowLimit(schema.GetSchemaId(), table.GetTableId());
+			if (threshold > 0 && sorted_deletes.size() <= threshold) {
+				// use inlined file deletions
+				transaction.AddNewInlinedFileDeletes(table.GetTableId(), data_file_info.file_id.index,
+				                                     std::move(sorted_deletes));
+				return;
+			}
 		}
 	}
 

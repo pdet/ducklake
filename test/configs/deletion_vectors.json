@@ -15,16 +15,27 @@
       ]
     },
     {
-      "reason": "Deletion vectors do not support per-position snapshot tracking, breaking tests that rely on precise time travel across multiple deletes",
+      "reason": "Statically loading ICU changes timezone rendering from +00 to local timezone offset",
       "paths": [
-        "test/sql/delete/multi_deletes.test",
-        "test/sql/table_changes/ducklake_table_deletions_compacted.test",
-        "test/sql/table_changes/ducklake_table_deletions_large.test",
-        "test/sql/rewrite_data_files/last_snapshot_multiple_inserts.test",
-        "test/sql/rewrite_data_files/test_last_snapshot_merge_rewrite.test",
-        "test/sql/rewrite_data_files/test_last_snapshot_rewrite.test",
-        "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
-        "test/sql/rewrite_data_files/test_rewrite_db.test"
+        "test/sql/alter/alter_timestamptz_promotion.test",
+        "test/sql/alter/test_insert_select_alter_column_persistence.test"
+      ]
+    },
+    {
+      "reason": "Deletion inlining is disabled when write_deletion_vectors is enabled to avoid mixed format issues",
+      "paths": [
+        "test/sql/deletion_inlining/test_deletion_inlining.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_compaction.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_large.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_partitions.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_stats.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_table_deletes.test",
+        "test/sql/deletion_inlining/test_deletion_inlining_transaction.test",
+        "test/sql/deletion_inlining/test_deletion_from_file_and_inserted_inlining.test",
+        "test/sql/deletion_inlining/test_deletion_from_file_and_inserted_inlining_non_sequential.test",
+        "test/sql/data_inlining/data_inlining_update_inline_verification.test",
+        "test/sql/delete/test_delete_partial_max_snapshot.test",
+        "test/sql/table_changes/ducklake_table_deletions_inlined_flush.test"
       ]
     }
   ]

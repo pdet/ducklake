@@ -36,6 +36,8 @@ enum class DeleteFileSource : uint8_t {
 struct DuckLakeOverwrittenDeleteFile {
 	DataFileIndex delete_file_id;
 	string path;
+	//! If true, set end_snapshot instead of hard-deleting (keeps file visible for time travel)
+	bool soft_delete = false;
 };
 
 struct DuckLakeDeleteFile {

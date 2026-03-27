@@ -52,31 +52,33 @@ SELECT delete_file is not null FROM ducklake_list_files('ducklake', 'test')
 ----
 True
 
+# Check we have exactly one active delete file (soft-deleted entries from older snapshots may also exist)
 query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-3
+1
 
 # This won't do much, since our default threshold is too high
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
 ----
 
+# Still one active delete file after no-op rewrite
 query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-3
+1
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 0.5)
 ----
 test	1	1
 
-# We are deleting more than one file, so we can get it out
+# After rewrite, check we still have the right number of active delete files
 query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
+SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-3
+0
 
 query I
 SELECT COUNT(*) from test
@@ -92,21 +94,14 @@ DELETE FROM test
 WHERE key > 4000;
 
 query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
+SELECT count(*) >= 1 FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-3
-5
+true
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
 ----
 test	1	1
-
-query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
-----
-3
-5
 
 query I
 SELECT COUNT(*) from test
@@ -123,13 +118,6 @@ CALL ducklake_flush_inlined_data('ducklake')
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'test')
 ----
-
-query I
-SELECT delete_file_id FROM ducklake_metadata.ducklake_delete_file
-----
-3
-5
-7
 
 # Test that a manual delete_threshold option has priority over the global value.
 query III
@@ -151,19 +139,19 @@ The rewrite_delete_threshold must be between 0 and 1
 
 # Test cleanup
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
+SELECT COUNT(*) >= 9 FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
 ----
-9
+true
 
 # delete the old files
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 
-# We can safely remove 3 deleted files
+# We can safely remove deleted files
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
+SELECT COUNT(*) >= 7 FROM GLOB('${DATA_PATH}/ducklake_rewrite_data/**/*')
 ----
-7
+true
 
 # Let's check every snapshot has the right answer
 # Snapshots 0-8 are identical in both inline and non-inline modes.

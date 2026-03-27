@@ -364,6 +364,8 @@ struct DuckLakeFileListEntry {
 	optional_idx data_file_id;
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
+	//! Additional delete files for the same data file (e.g. soft-deleted deletion vectors from older snapshots)
+	vector<DuckLakeFileData> additional_delete_files;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx max_row_count;

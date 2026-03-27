@@ -248,10 +248,14 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				reader.deletion_filter = std::move(delete_filter);
 			}
 		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid() ||
-		           !file_entry.inlined_file_deletions.empty()) {
+		           !file_entry.inlined_file_deletions.empty() || !file_entry.additional_delete_files.empty()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
 				delete_filter->Initialize(context, file_entry.delete_file);
+			}
+			// Apply additional delete files (multiple deletion vectors from different snapshots)
+			for (auto &extra_delete_file : file_entry.additional_delete_files) {
+				delete_filter->Initialize(context, extra_delete_file);
 			}
 			if (delete_map && !file_entry.delete_file.path.empty()) {
 				auto delete_data_copy = make_shared_ptr<DuckLakeDeleteData>(*delete_filter->delete_data);

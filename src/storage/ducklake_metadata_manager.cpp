@@ -1396,9 +1396,29 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
 
 	vector<DuckLakeFileListEntry> files;
+	unordered_map<idx_t, idx_t> file_id_to_index;
 	for (auto &row : *result) {
-		DuckLakeFileListEntry file_entry;
 		idx_t col_idx = 0;
+		auto data_file_id = row.GetValue<idx_t>(col_idx);
+
+		// Check if we already have an entry for this data file (multiple delete files per data file)
+		auto existing_it = file_id_to_index.find(data_file_id);
+		if (existing_it != file_id_to_index.end()) {
+			// Skip data file columns to get to the delete file columns
+			col_idx++;
+			ReadDataFile(table, row, col_idx, IsEncrypted()); // skip data file
+			col_idx++;                                        // skip row_id_start
+			col_idx++;                                        // skip begin_snapshot
+			col_idx++;                                        // skip partial_max
+			col_idx++;                                        // skip mapping_id
+			auto extra_delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+			if (!extra_delete_file.path.empty()) {
+				files[existing_it->second].additional_delete_files.push_back(std::move(extra_delete_file));
+			}
+			continue;
+		}
+
+		DuckLakeFileListEntry file_entry;
 		file_entry.file_id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
@@ -1437,6 +1457,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.inlined_file_deletions = std::move(del_entry->second);
 		}
 
+		file_id_to_index[data_file_id] = files.size();
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1547,9 +1568,12 @@ main_results AS (
 	// Main query: partial deletes from delete_file table and full file deletes
 	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot FROM (
-	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
+	SELECT DISTINCT ON (data_file_id)
+		data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+	      AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+	ORDER BY data_file_id, begin_snapshot DESC
 ) AS current_delete
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -1726,9 +1750,18 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		result->GetErrorObject().Throw("Failed to get extended data file list from DuckLake: ");
 	}
 	vector<DuckLakeFileListExtendedEntry> files;
+	unordered_map<idx_t, idx_t> file_id_to_index;
 	for (auto &row : *result) {
+		auto data_file_id = row.GetValue<idx_t>(0);
+
+		// Skip duplicate rows for the same data file (multiple delete files from soft-deleted entries)
+		// Keep only the first (latest) delete file per data file
+		if (file_id_to_index.find(data_file_id) != file_id_to_index.end()) {
+			continue;
+		}
+
 		DuckLakeFileListExtendedEntry file_entry;
-		file_entry.file_id = DataFileIndex(row.GetValue<idx_t>(0));
+		file_entry.file_id = DataFileIndex(data_file_id);
 		if (!row.IsNull(1)) {
 			file_entry.delete_file_id = DataFileIndex(row.GetValue<idx_t>(1));
 		}
@@ -1744,6 +1777,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 			file_entry.delete_file_begin_snapshot = row.GetValue<idx_t>(col_idx);
 		}
 		col_idx++;
+		file_id_to_index[data_file_id] = files.size();
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -3217,32 +3251,53 @@ DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverw
 	if (overwritten_files.empty()) {
 		return {};
 	}
-	string deleted_file_ids;
+	string hard_delete_ids;
+	string soft_delete_ids;
 	string scheduled_deletions;
 	for (auto &file : overwritten_files) {
-		if (!deleted_file_ids.empty()) {
-			deleted_file_ids += ", ";
-		}
-		deleted_file_ids += to_string(file.delete_file_id.index);
+		if (file.soft_delete) {
+			// soft delete: keep metadata with end_snapshot for time travel (deletion vectors)
+			if (!soft_delete_ids.empty()) {
+				soft_delete_ids += ", ";
+			}
+			soft_delete_ids += to_string(file.delete_file_id.index);
+		} else {
+			// hard delete: remove metadata entirely (consolidated parquet with embedded snapshots)
+			if (!hard_delete_ids.empty()) {
+				hard_delete_ids += ", ";
+			}
+			hard_delete_ids += to_string(file.delete_file_id.index);
 
-		if (!scheduled_deletions.empty()) {
-			scheduled_deletions += ", ";
+			// only schedule hard-deleted files for disk deletion
+			if (!scheduled_deletions.empty()) {
+				scheduled_deletions += ", ";
+			}
+			auto path = GetRelativePath(file.path);
+			scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", file.delete_file_id.index,
+			                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
 		}
-		auto path = GetRelativePath(file.path);
-		scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", file.delete_file_id.index,
-		                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
 	}
 
 	string batch_query;
-	// delete the old delete file metadata records
-	batch_query += StringUtil::Format(R"(
+	if (!hard_delete_ids.empty()) {
+		batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE delete_file_id IN (%s);
 )",
-	                                  deleted_file_ids);
-	// schedule the old files for disk deletion
-	batch_query +=
-	    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
+		                                  hard_delete_ids);
+	}
+	if (!soft_delete_ids.empty()) {
+		batch_query += StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_delete_file
+SET end_snapshot = {SNAPSHOT_ID}
+WHERE delete_file_id IN (%s);
+)",
+		                                  soft_delete_ids);
+	}
+	if (!scheduled_deletions.empty()) {
+		batch_query +=
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions + ";";
+	}
 	return batch_query;
 }
 

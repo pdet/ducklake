@@ -1,0 +1,68 @@
+# name: test/sql/delete/deletion_vector_multi_snapshot.test
+# description: Test deletion vectors across multiple snapshots (multiple delete files per data file)
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/dv_multi_snapshot', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.test AS SELECT i id FROM range(100) t(i);
+
+# first delete in its own transaction
+query I
+DELETE FROM ducklake.test WHERE id < 10
+----
+10
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+90
+
+# second delete in a separate transaction — triggers FlushDeleteWithSnapshots
+# which calls GetExtendedFilesForTable to find the existing delete file
+query I
+DELETE FROM ducklake.test WHERE id >= 90
+----
+10
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+80
+
+# third delete — now GetExtendedFilesForTable must handle multiple delete files for this data file
+query I
+DELETE FROM ducklake.test WHERE id >= 80 AND id < 90
+----
+10
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+70
+
+# verify correctness
+query I
+SELECT MIN(id) FROM ducklake.test
+----
+10
+
+query I
+SELECT MAX(id) FROM ducklake.test
+----
+79
+
+# verify only one active delete file per data file (old ones are overwritten)
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+1
