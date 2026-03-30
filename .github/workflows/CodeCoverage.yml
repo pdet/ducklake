@@ -1,0 +1,111 @@
+name: Code Coverage
+on: [push, pull_request, repository_dispatch]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: ['linux_amd64']
+        vcpkg_version: ['2023.04.15']
+        include:
+          - arch: 'linux_amd64'
+            vcpkg_triplet: 'x64-linux'
+
+    env:
+      VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
+      GEN: Ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      DISABLE_EXTENSIONS_FOR_TEST: ON
+
+    steps:
+    - name: Install required ubuntu packages
+      run: |
+        sudo apt-get update -y -qq
+        sudo apt-get install -y -qq build-essential cmake ninja-build ccache python3 lcov
+
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Checkout DuckDB to version
+      run: |
+        cd duckdb
+        git checkout $(cat ../.github/duckdb-version)
+
+    - name: Setup Ccache
+      uses: hendrikmuhs/ccache-action@main
+      with:
+        key: ${{ github.job }}
+        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11.1
+      with:
+        vcpkgGitCommitId: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+
+    - name: Build extension with coverage
+      env:
+        GEN: ninja
+        CMAKE_BUILD_PARALLEL_LEVEL: 2
+      run: |
+        mkdir -p build/coverage
+        cmake -G "Ninja" \
+          -DEXTENSION_STATIC_BUILD=1 \
+          -DDUCKDB_EXTENSION_CONFIGS='${{ github.workspace }}/extension_config.cmake' \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_C_FLAGS="--coverage" \
+          -DCMAKE_CXX_FLAGS="--coverage" \
+          -DVCPKG_BUILD=1 \
+          -DCMAKE_TOOLCHAIN_FILE='${{ env.VCPKG_TOOLCHAIN_PATH }}' \
+          -DVCPKG_TARGET_TRIPLET='${{ matrix.vcpkg_triplet }}' \
+          -DDUCKDB_EXPLICIT_PLATFORM='${{ matrix.arch }}' \
+          -DUNITTEST_ROOT_DIRECTORY='${{ github.workspace }}' \
+          -DENABLE_UNITTEST_CPP_TESTS=FALSE \
+          -DDISABLE_EXTENSIONS_FOR_TEST=ON \
+          -S ./duckdb/ \
+          -B build/coverage
+        cmake --build build/coverage --config Debug
+
+    - name: Run tests
+      run: |
+        build/coverage/test/unittest
+
+    - name: Generate coverage report
+      run: |
+        # Capture coverage data - only for ducklake source files
+        lcov --capture \
+          --directory build/coverage \
+          --output-file coverage_full.info \
+          --ignore-errors mismatch
+
+        # Extract only ducklake extension source files
+        lcov --extract coverage_full.info \
+          '${{ github.workspace }}/src/*' \
+          --output-file coverage.info \
+          --ignore-errors unused
+
+        # Remove any test files that may have slipped in
+        lcov --remove coverage.info \
+          '*/test/*' \
+          --output-file coverage.info \
+          --ignore-errors unused
+
+        # Print summary
+        lcov --list coverage.info
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: coverage.info
+        fail_ci_if_error: true
+        flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
