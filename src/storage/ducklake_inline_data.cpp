@@ -29,7 +29,24 @@ public:
 
 class InlineDataGlobalState : public GlobalOperatorState {
 public:
-	explicit InlineDataGlobalState(const DuckLakeInlineData &op) : op(op), total_inlined_rows(0) {
+	InlineDataGlobalState(const DuckLakeInlineData &op, ClientContext &context) : op(op), total_inlined_rows(0) {
+		// collect NOT NULL nested columns for validation during pass-through
+		if (op.insert) {
+			auto mutable_insert = op.insert.get_mutable();
+			lock_guard<mutex> lock(mutable_insert->lock);
+			if (!mutable_insert->sink_state) {
+				mutable_insert->sink_state = op.insert->GetGlobalSinkState(context);
+			}
+			auto &insert_gstate = mutable_insert->sink_state->Cast<DuckLakeInsertGlobalState>();
+			auto physical_col_count = insert_gstate.table.GetColumns().PhysicalColumnCount();
+			for (idx_t c = 0; c < physical_col_count; c++) {
+				auto &col = insert_gstate.table.GetColumn(LogicalIndex(c));
+				if (col.Type().IsNested() && insert_gstate.not_null_fields.count(col.Name())) {
+					not_null_nested_columns.emplace_back(c, col.Name());
+				}
+			}
+			table_name = insert_gstate.table.name;
+		}
 	}
 
 	InlinePhase AddRows(InlineDataState &state, idx_t new_rows) {
@@ -59,11 +76,31 @@ public:
 		}
 	}
 
+	void ValidateNotNullNested(DataChunk &chunk) const {
+		for (auto &[col_idx, col_name] : not_null_nested_columns) {
+			if (col_idx >= chunk.ColumnCount()) {
+				continue;
+			}
+			auto &vec = chunk.data[col_idx];
+			UnifiedVectorFormat format;
+			vec.ToUnifiedFormat(chunk.size(), format);
+			for (idx_t i = 0; i < chunk.size(); i++) {
+				auto idx = format.sel->get_index(i);
+				if (!format.validity.RowIsValid(idx)) {
+					throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, col_name);
+				}
+			}
+		}
+	}
+
 	const DuckLakeInlineData &op;
 	mutex lock;
 	idx_t total_inlined_rows = 0;
 	InlinePhase global_phase = InlinePhase::INLINING_ROWS;
 	unique_ptr<ColumnDataCollection> global_inlined_data;
+	//! NOT NULL nested columns: (column_index, column_name)
+	vector<pair<idx_t, string>> not_null_nested_columns;
+	string table_name;
 };
 
 unique_ptr<OperatorState> DuckLakeInlineData::GetOperatorState(ExecutionContext &context) const {
@@ -71,7 +108,7 @@ unique_ptr<OperatorState> DuckLakeInlineData::GetOperatorState(ExecutionContext 
 }
 
 unique_ptr<GlobalOperatorState> DuckLakeInlineData::GetGlobalOperatorState(ClientContext &context) const {
-	return make_uniq<InlineDataGlobalState>(*this);
+	return make_uniq<InlineDataGlobalState>(*this, context);
 }
 
 OperatorResultType DuckLakeInlineData::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -80,6 +117,8 @@ OperatorResultType DuckLakeInlineData::Execute(ExecutionContext &context, DataCh
 	auto &gstate = gstate_p.Cast<InlineDataGlobalState>();
 	if (state.phase == InlinePhase::PASS_THROUGH_ROWS) {
 		// not inlining rows - forward the input directly
+		// validate NOT NULL constraints for nested columns (not caught by parquet stats)
+		gstate.ValidateNotNullNested(input);
 		chunk.Reference(input);
 		return OperatorResultType::NEED_MORE_INPUT;
 	}
@@ -245,6 +284,23 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 	auto &column_stats = stats[c];
 	auto &type = data.GetType();
 	if (type.IsNested() && type.id() != LogicalTypeId::VARIANT) {
+		// compute null_count for the top-level nested vector (needed for NOT NULL constraint checks)
+		UnifiedVectorFormat format;
+		data.ToUnifiedFormat(row_count, format);
+		DuckLakeColumnStats nested_stats(type);
+		nested_stats.has_null_count = true;
+		for (idx_t i = 0; i < row_count; i++) {
+			auto idx = format.sel->get_index(i);
+			if (!format.validity.RowIsValid(idx)) {
+				nested_stats.null_count++;
+			}
+		}
+		if (column_stats.has_stats) {
+			column_stats.stats.MergeStats(nested_stats);
+		} else {
+			column_stats.stats = std::move(nested_stats);
+			column_stats.has_stats = true;
+		}
 		// nested - recurse into children
 		switch (data.GetType().id()) {
 		case LogicalTypeId::STRUCT: {

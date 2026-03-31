@@ -1,0 +1,112 @@
+# name: test/sql/constraints/not_null_nested.test
+# description: test NOT NULL constraints on nested types (STRUCT, LIST, MAP)
+# group: [constraints]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake(DATA_PATH '${DATA_PATH}/not_null_nested/')
+
+statement ok
+USE ducklake;
+
+# STRUCT with NOT NULL
+statement ok
+CREATE TABLE t_struct_nn (
+    id INTEGER,
+    s STRUCT(a INTEGER, b VARCHAR) NOT NULL
+)
+
+statement ok
+INSERT INTO t_struct_nn
+VALUES (1, { 'a' : 1, 'b' : 'hello' })
+
+# Inserting NULL into NOT NULL STRUCT column should fail
+statement error
+INSERT INTO t_struct_nn
+VALUES (2, NULL)
+----
+NOT NULL constraint failed
+
+# LIST with NOT NULL
+statement ok
+CREATE TABLE t_list_nn (
+    id INTEGER,
+    l INTEGER [ ] NOT NULL
+)
+
+statement ok
+INSERT INTO t_list_nn
+VALUES (1, [ 1, 2, 3 ])
+
+# Inserting NULL into NOT NULL LIST column should fail
+statement error
+INSERT INTO t_list_nn
+VALUES (2, NULL)
+----
+NOT NULL constraint failed
+
+# MAP with NOT NULL
+statement ok
+CREATE TABLE t_map_nn (
+    id INTEGER,
+    m MAP(VARCHAR, INTEGER) NOT NULL
+)
+
+statement ok
+INSERT INTO t_map_nn
+VALUES (1, MAP { 'key' : 1 })
+
+# Inserting NULL into NOT NULL MAP column should fail
+statement error
+INSERT INTO t_map_nn
+VALUES (2, NULL)
+----
+NOT NULL constraint failed
+
+# Verify valid rows were inserted
+query II
+SELECT *
+FROM t_struct_nn
+----
+1	{'a': 1, 'b': hello}
+
+query II
+SELECT *
+FROM t_list_nn
+----
+1	[1, 2, 3]
+
+query II
+SELECT *
+FROM t_map_nn
+----
+1	{key=1}
+
+# Test NOT NULL on nested types when bypassing inlining (direct parquet write)
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}_direct' AS ducklake_direct(DATA_PATH '${DATA_PATH}/not_null_nested_direct/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake_direct.t_struct_direct (
+    id INTEGER,
+    s STRUCT(a INTEGER, b VARCHAR) NOT NULL
+)
+
+statement error
+INSERT INTO ducklake_direct.t_struct_direct
+SELECT i,
+    CASE
+    WHEN i % 2 = 0 THEN { 'a' : i,
+    'b' : 'hello' }
+    ELSE NULL
+END
+FROM RANGE(10) t(i)
+----
+NOT NULL constraint failed

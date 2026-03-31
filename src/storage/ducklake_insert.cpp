@@ -761,7 +761,19 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = GetInliningLimit(context, ducklake_table, plan->types);
-	if (data_inlining_row_limit > 0) {
+	// check if the table has NOT NULL constraints on nested columns
+	// these require the DuckLakeInlineData operator for validation even when inlining is disabled
+	bool needs_nested_not_null_check = false;
+	if (data_inlining_row_limit == 0) {
+		auto not_null_fields = ducklake_table.GetNotNullFields();
+		for (auto &col : ducklake_table.GetColumns().Physical()) {
+			if (col.Type().IsNested() && not_null_fields.count(col.Name())) {
+				needs_nested_not_null_check = true;
+				break;
+			}
+		}
+	}
+	if (data_inlining_row_limit > 0 || needs_nested_not_null_check) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
