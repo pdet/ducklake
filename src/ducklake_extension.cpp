@@ -6,6 +6,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_secret.hpp"
+#include "functions/ducklake_epoch_transforms.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "storage/ducklake_log_type.hpp"
@@ -92,6 +93,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeSettingsFunction settings;
 	loader.RegisterFunction(settings);
+
+	// Epoch-based partition transform functions (Iceberg-compatible)
+	loader.RegisterFunction(DuckLakeEpochTransforms::GetEpochYearFunction());
+	loader.RegisterFunction(DuckLakeEpochTransforms::GetEpochMonthFunction());
+	loader.RegisterFunction(DuckLakeEpochTransforms::GetEpochDayFunction());
+	loader.RegisterFunction(DuckLakeEpochTransforms::GetEpochHourFunction());
 
 	// Register ducklake_scan so it can be found during deserialization
 	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());

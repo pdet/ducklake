@@ -445,9 +445,19 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			transform_type = DuckLakeTransformType::DAY;
 		} else if (name == "hour") {
 			transform_type = DuckLakeTransformType::HOUR;
+		} else if (name == "epoch_year") {
+			transform_type = DuckLakeTransformType::EPOCH_YEAR;
+		} else if (name == "epoch_month") {
+			transform_type = DuckLakeTransformType::EPOCH_MONTH;
+		} else if (name == "epoch_day") {
+			transform_type = DuckLakeTransformType::EPOCH_DAY;
+		} else if (name == "epoch_hour") {
+			transform_type = DuckLakeTransformType::EPOCH_HOUR;
 		} else {
 			throw NotImplementedException(
-			    "Unsupported partition function %s - only year, month, day, hour are supported", name);
+			    "Unsupported partition function %s - supported: year, month, day, hour, epoch_year, epoch_month, "
+			    "epoch_day, epoch_hour",
+			    name);
 		}
 		if (function.children.size() != 1 || function.children[0]->type != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());

@@ -15,7 +15,7 @@
 namespace duckdb {
 class BaseStatistics;
 
-enum class DuckLakeTransformType { IDENTITY, YEAR, MONTH, DAY, HOUR };
+enum class DuckLakeTransformType { IDENTITY, YEAR, MONTH, DAY, HOUR, EPOCH_YEAR, EPOCH_MONTH, EPOCH_DAY, EPOCH_HOUR };
 
 struct DuckLakeTransform {
 	DuckLakeTransformType type;

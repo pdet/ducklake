@@ -21,6 +21,18 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	case DuckLakeTransformType::HOUR:
 		prefix = "hour";
 		break;
+	case DuckLakeTransformType::EPOCH_YEAR:
+		prefix = "epoch_year";
+		break;
+	case DuckLakeTransformType::EPOCH_MONTH:
+		prefix = "epoch_month";
+		break;
+	case DuckLakeTransformType::EPOCH_DAY:
+		prefix = "epoch_day";
+		break;
+	case DuckLakeTransformType::EPOCH_HOUR:
+		prefix = "epoch_hour";
+		break;
 	default:
 		throw NotImplementedException("Unsupported partition transform type");
 	}
@@ -48,6 +60,10 @@ LogicalType DuckLakePartitionUtils::GetPartitionKeyType(DuckLakeTransformType tr
 	case DuckLakeTransformType::MONTH:
 	case DuckLakeTransformType::DAY:
 	case DuckLakeTransformType::HOUR:
+	case DuckLakeTransformType::EPOCH_YEAR:
+	case DuckLakeTransformType::EPOCH_MONTH:
+	case DuckLakeTransformType::EPOCH_DAY:
+	case DuckLakeTransformType::EPOCH_HOUR:
 		return LogicalType::BIGINT;
 	default:
 		throw NotImplementedException("Unsupported partition transform type");

@@ -413,6 +413,14 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Duc
 		return GetFunction(context, copy_input, "day", field.field_id);
 	case DuckLakeTransformType::HOUR:
 		return GetFunction(context, copy_input, "hour", field.field_id);
+	case DuckLakeTransformType::EPOCH_YEAR:
+		return GetFunction(context, copy_input, "epoch_year", field.field_id);
+	case DuckLakeTransformType::EPOCH_MONTH:
+		return GetFunction(context, copy_input, "epoch_month", field.field_id);
+	case DuckLakeTransformType::EPOCH_DAY:
+		return GetFunction(context, copy_input, "epoch_day", field.field_id);
+	case DuckLakeTransformType::EPOCH_HOUR:
+		return GetFunction(context, copy_input, "epoch_hour", field.field_id);
 	default:
 		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
 	}
