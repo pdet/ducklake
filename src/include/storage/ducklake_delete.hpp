@@ -82,6 +82,10 @@ struct DuckLakeDeleteFileWriter {
 	                                                       WriteDeleteFileWithSnapshotsInput &input);
 	//! Write a deletion vector file (puffin format) instead of a parquet delete file
 	static DuckLakeDeleteFile WriteDeletionVectorFile(ClientContext &context, WriteDeleteFileInput &input);
+	//! Write a puffin file with multiple cumulative DV blobs
+	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
+	                                                               WriteDeleteFileWithSnapshotsInput &input,
+	                                                               const DuckLakeFileData &existing_delete_file);
 };
 
 struct DuckLakeDeleteMap {

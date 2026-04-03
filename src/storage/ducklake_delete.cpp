@@ -181,6 +181,74 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientConte
 	return delete_file;
 }
 
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
+    ClientContext &context, WriteDeleteFileWithSnapshotsInput &input, const DuckLakeFileData &existing_delete_file) {
+	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
+	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
+
+	// Group positions by snapshot_id
+	map<int64_t, set<idx_t>> positions_by_snapshot;
+	for (auto &entry : input.positions) {
+		positions_by_snapshot[entry.snapshot_id].insert(static_cast<idx_t>(entry.position));
+	}
+
+	// Build cumulative position sets (each snapshot includes all previous positions)
+	vector<pair<int64_t, set<idx_t>>> cumulative_snapshots;
+	set<idx_t> cumulative;
+	for (auto &entry : positions_by_snapshot) {
+		cumulative.insert(entry.second.begin(), entry.second.end());
+		cumulative_snapshots.emplace_back(entry.first, cumulative);
+	}
+
+	// Write all blobs sequentially to the puffin file
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle =
+	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
+
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
+	idx_t current_offset = 0;
+
+	// If there's an existing puffin file, copy its old blobs as raw bytes
+	if (!existing_delete_file.path.empty() && existing_delete_file.format == DeleteFileFormat::PUFFIN) {
+		auto old_handle = fs.OpenFile(existing_delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
+		auto old_file_size = old_handle->GetFileSize();
+		if (old_file_size > 0) {
+			auto old_data = make_unsafe_uniq_array<data_t>(old_file_size);
+			old_handle->Read(old_data.get(), old_file_size);
+			file_handle->Write(old_data.get(), old_file_size);
+			current_offset = old_file_size;
+		}
+	}
+
+	// Serialize the new cumulative blob (the last one, containing all positions)
+	auto &last_cumulative = cumulative_snapshots.back();
+	auto blob_data = DuckLakeDeletionVectorData::ToBlob(last_cumulative.second);
+	file_handle->Write(blob_data.data(), blob_data.size());
+
+	// Record blob metadata for the new blob
+	DuckLakeDeleteVectorInfo new_vector;
+	new_vector.begin_snapshot = static_cast<idx_t>(last_cumulative.first);
+	new_vector.delete_vector_offset = current_offset;
+	new_vector.delete_vector_size = blob_data.size();
+	new_vector.delete_count = last_cumulative.second.size();
+	delete_vectors.push_back(new_vector);
+
+	auto total_file_size = current_offset + blob_data.size();
+	file_handle->Close();
+
+	DuckLakeDeleteFile delete_file;
+	delete_file.data_file_path = input.data_file_path;
+	delete_file.file_name = delete_file_path;
+	delete_file.format = DeleteFileFormat::PUFFIN;
+	delete_file.delete_count = last_cumulative.second.size();
+	delete_file.file_size_bytes = total_file_size;
+	delete_file.footer_size = 0;
+	delete_file.encryption_key = input.encryption_key;
+	delete_file.source = input.source;
+	delete_file.delete_vectors = std::move(delete_vectors);
+	return delete_file;
+}
+
 //===--------------------------------------------------------------------===//
 // DuckLakeDelete
 //===--------------------------------------------------------------------===//

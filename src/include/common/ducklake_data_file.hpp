@@ -33,6 +33,14 @@ enum class DeleteFileSource : uint8_t {
 	FLUSH    //! Delete file created during a flush operation (flushing inlined data)
 };
 
+struct DuckLakeDeleteVectorInfo {
+	idx_t begin_snapshot;
+	optional_idx end_snapshot;
+	idx_t delete_vector_offset;
+	idx_t delete_vector_size;
+	idx_t delete_count;
+};
+
 struct DuckLakeOverwrittenDeleteFile {
 	DataFileIndex delete_file_id;
 	string path;
@@ -54,6 +62,8 @@ struct DuckLakeDeleteFile {
 	//! Optional max_snapshot information for partial deletion files.
 	optional_idx max_snapshot;
 	DeleteFileSource source = DeleteFileSource::REGULAR;
+	//! Deletion vector metadata for puffin files
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
 };
 
 struct DuckLakeDataFile {
