@@ -2085,6 +2085,7 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 	delete_file.encryption_key = file.encryption_key;
 	delete_file.begin_snapshot = file.begin_snapshot;
 	delete_file.max_snapshot = file.max_snapshot;
+	delete_file.delete_vectors = file.delete_vectors;
 	return delete_file;
 }
 
@@ -2303,6 +2304,7 @@ string DuckLakeTransaction::CommitChanges(DuckLakeCommitState &commit_state,
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
 		batch_queries += metadata_manager->DeleteOverwrittenDeleteFiles(overwritten_delete_files);
 		batch_queries += metadata_manager->WriteNewDeleteFiles(file_list, new_tables_result, new_schemas_result);
+		batch_queries += metadata_manager->WriteNewDeleteVectors(file_list);
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);

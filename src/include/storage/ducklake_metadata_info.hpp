@@ -194,6 +194,8 @@ struct DuckLakeDeleteFileInfo {
 	optional_idx begin_snapshot;
 	//! Optional max_snapshot information for partial deletion files.
 	optional_idx max_snapshot;
+	//! Deletion vector blob metadata for puffin files
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
 };
 
 struct DuckLakePartitionFieldInfo {

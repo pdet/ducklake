@@ -3313,6 +3313,28 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 	                          delete_file_insert_query);
 }
 
+string DuckLakeMetadataManager::WriteNewDeleteVectors(const vector<DuckLakeDeleteFileInfo> &new_delete_files) {
+	string insert_query;
+	for (auto &file : new_delete_files) {
+		if (file.delete_vectors.empty()) {
+			continue;
+		}
+		for (auto &vec : file.delete_vectors) {
+			if (!insert_query.empty()) {
+				insert_query += ",";
+			}
+			string end_snapshot_str = vec.end_snapshot.IsValid() ? to_string(vec.end_snapshot.GetIndex()) : "NULL";
+			insert_query += StringUtil::Format("(%d, %d, %s, %d, %d, %d)", file.id.index, vec.begin_snapshot,
+			                                   end_snapshot_str, vec.delete_vector_offset, vec.delete_vector_size,
+			                                   vec.delete_count);
+		}
+	}
+	if (insert_query.empty()) {
+		return {};
+	}
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_vector VALUES %s;", insert_query);
+}
+
 vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(optional_idx start_from) {
 	string filter;
 	if (start_from.IsValid()) {

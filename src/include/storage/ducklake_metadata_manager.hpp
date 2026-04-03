@@ -193,6 +193,7 @@ public:
 	virtual string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
+	virtual string WriteNewDeleteVectors(const vector<DuckLakeDeleteFileInfo> &new_delete_files);
 	virtual string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
