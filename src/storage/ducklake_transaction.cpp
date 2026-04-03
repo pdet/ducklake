@@ -2085,8 +2085,6 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 	delete_file.encryption_key = file.encryption_key;
 	delete_file.begin_snapshot = file.begin_snapshot;
 	delete_file.max_snapshot = file.max_snapshot;
-	delete_file.delete_vector_offset = file.delete_vector_offset;
-	delete_file.delete_vector_size = file.delete_vector_size;
 	return delete_file;
 }
 

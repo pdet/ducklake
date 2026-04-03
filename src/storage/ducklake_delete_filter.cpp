@@ -117,7 +117,6 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 
 	auto buffer = make_unsafe_uniq_array<data_t>(file_size);
 	file_handle->Read(buffer.get(), file_size);
-
 	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), file_size);
 
 	DeleteFileScanResult result;

@@ -47,8 +47,6 @@ struct DuckLakeDeleteFile {
 	idx_t file_size_bytes;
 	idx_t footer_size;
 	string encryption_key;
-	optional_idx delete_vector_offset;
-	optional_idx delete_vector_size;
 	bool overwrites_existing_delete = false;
 	//! The old delete file being overwritten (for deletion from metadata and disk)
 	DuckLakeOverwrittenDeleteFile overwritten_delete_file;
