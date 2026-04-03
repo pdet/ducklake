@@ -17,7 +17,7 @@ DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_
 }
 
 DuckLakeColumnStats::DuckLakeColumnStats(LogicalType type_p) : type(std::move(type_p)) {
-	if (DuckLakeTypes::IsGeoType(type)) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
 		extra_stats = make_uniq<DuckLakeColumnGeoStats>();
 	}
 	if (type.id() == LogicalTypeId::VARIANT) {
@@ -115,8 +115,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		has_min = false;
 	} else if (has_min) {
 		// both stats have a min - select the smallest
-		if (type.IsNumeric()) {
-			// for numerics we need to parse the stats
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
 			auto current_min = Value(min).DefaultCastAs(type);
 			auto new_min = Value(new_stats.min).DefaultCastAs(type);
 			if (new_min < current_min) {
@@ -131,9 +131,9 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	if (!new_stats.has_max) {
 		has_max = false;
 	} else if (has_max) {
-		// both stats have a min - select the smallest
-		if (type.IsNumeric()) {
-			// for numerics we need to parse the stats
+		// both stats have a max - select the largest
+		if (RequiresValueComparison(type)) {
+			// for numerics/temporals we need to parse the stats
 			auto current_max = Value(max).DefaultCastAs(type);
 			auto new_max = Value(new_stats.max).DefaultCastAs(type);
 			if (new_max > current_max) {
@@ -200,6 +200,24 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 	return variant_stats.ToStats();
 }
 
+unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
+	if (!extra_stats) {
+		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
+	}
+	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
+	auto stats = geometry_stats.ToStats();
+
+	// set null count
+	if (!has_null_count || null_count > 0) {
+		stats->SetHasNullFast();
+	}
+	if (!has_null_count || !has_num_values || null_count != num_values) {
+		//! Not *all* values are NULL, set HasNoNull
+		stats->SetHasNoNullFast();
+	}
+	return stats;
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 	auto stats = StringStats::CreateEmpty(type);
 	if (has_min && has_max) {
@@ -253,6 +271,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return nullptr;
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();
+	case LogicalTypeId::GEOMETRY:
+		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:
 		return CreateVariantStats();
 	default:

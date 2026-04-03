@@ -26,6 +26,7 @@
 #include "duckdb/function/scalar_macro_function.hpp"
 #include "duckdb/function/table_macro_function.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 namespace duckdb {
 
@@ -60,6 +61,15 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 		con = make_uniq<Connection>(GetDatabase());
 		con->BeginTransaction();
 		context = con->context.get();
+	}
+	// If data_inlining_row_limit wasn't explicitly set via ATTACH options,
+	// use the global DuckDB setting as the default
+	if (options.config_options.find("data_inlining_row_limit") == options.config_options.end()) {
+		Value setting_val;
+		if (context->TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
+			auto limit = setting_val.GetValue<idx_t>();
+			options.config_options["data_inlining_row_limit"] = to_string(limit);
+		}
 	}
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
@@ -446,10 +456,19 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
 			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
 				partition_field.transform.type = DuckLakeTransformType::BUCKET;
-				// "bucket(X)" → remove prefix and suffix
-				auto inner = field.transform.substr(7);
-				inner = inner.substr(0, inner.size() - 1);
-				partition_field.transform.bucket_count = std::stoull(inner);
+
+				StringUtil::Trim(field.transform);
+				if (!StringUtil::EndsWith(field.transform, ")")) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+
+				// "bucket(X)" -> remove prefix and suffix
+				auto inner = field.transform.substr(7, field.transform.size() - 8); // All but ')' (last character)
+				idx_t bucket_count;
+				if (!TryCast::Operation<string_t, idx_t>(string_t(inner), bucket_count) || bucket_count == 0) {
+					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
+				}
+				partition_field.transform.bucket_count = bucket_count;
 			} else {
 				throw InvalidInputException("Unsupported partition transform %s", field.transform);
 			}
@@ -813,7 +832,7 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 }
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
-	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 0);
+	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

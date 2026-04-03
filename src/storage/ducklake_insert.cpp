@@ -141,6 +141,13 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 			if (column_names[0] == "_ducklake_internal_row_id") {
+				if (set_snapshot_id) {
+					// extract the min row_id so flushed files preserve the original row_id_start
+					auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
+					if (row_id_stats.has_min) {
+						data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
+					}
+				}
 				continue;
 			}
 
@@ -378,57 +385,10 @@ static unique_ptr<Expression> GetColumnReference(DuckLakeCopyInput &copy_input, 
 	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
 }
 
-static unique_ptr<Expression> GetFunction(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                          const string &function_name, FieldIndex field_id) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(GetColumnReference(copy_input, field_id));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
-}
-
-static unique_ptr<Expression> GetBucketExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
-                                                  const DuckLakePartitionField &field) {
-	// hash(col)
-	auto hash_expr = GetFunction(context, copy_input, "hash", field.field_id);
-
-	// hash_value % bucket_count
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(hash_expr));
-	children.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(field.transform.bucket_count)));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto mod_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "%", std::move(children), error, false);
-	if (!mod_expr) {
-		error.Throw();
-	}
-	return mod_expr;
-}
-
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, DuckLakeCopyInput &copy_input,
                                                      const DuckLakePartitionField &field) {
-	switch (field.transform.type) {
-	case DuckLakeTransformType::IDENTITY:
-		return GetColumnReference(copy_input, field.field_id);
-	case DuckLakeTransformType::YEAR:
-		return GetFunction(context, copy_input, "year", field.field_id);
-	case DuckLakeTransformType::MONTH:
-		return GetFunction(context, copy_input, "month", field.field_id);
-	case DuckLakeTransformType::DAY:
-		return GetFunction(context, copy_input, "day", field.field_id);
-	case DuckLakeTransformType::HOUR:
-		return GetFunction(context, copy_input, "hour", field.field_id);
-	case DuckLakeTransformType::BUCKET: {
-		return GetBucketExpression(context, copy_input, field);}
-	default:
-		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
-	}
+	auto column_expr = GetColumnReference(copy_input, field.field_id);
+	return DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(column_expr), field);
 }
 
 static string GetPartitionExpressionName(DuckLakeCopyInput &copy_input, const DuckLakePartitionField &field,
@@ -778,7 +738,11 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	optional_ptr<DuckLakeInlineData> inline_data;
 
 	idx_t data_inlining_row_limit = DataInliningRowLimit(ducklake_schema.GetSchemaId(), ducklake_table.GetTableId());
-	if (data_inlining_row_limit > 0) {
+	// FIXME: we are skipping columns that have conflicting names, we should resolve this
+	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(ducklake_table.GetColumns()) &&
+	    metadata_manager.SupportsInliningTypes(plan->types)) {
 		plan = planner.Make<DuckLakeInlineData>(*plan, data_inlining_row_limit);
 		inline_data = plan->Cast<DuckLakeInlineData>();
 	}
@@ -802,7 +766,9 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	reference<PhysicalOperator> root = plan;
 	optional_ptr<DuckLakeInlineData> inline_data;
 	idx_t data_inlining_row_limit = DataInliningRowLimit(duck_schema.GetSchemaId(), TableIndex());
-	if (data_inlining_row_limit > 0) {
+	auto &metadata_manager = duck_transaction.GetMetadataManager();
+	if (data_inlining_row_limit > 0 && !DuckLakeUtil::HasInlinedSystemColumnConflict(columns) &&
+	    metadata_manager.SupportsInliningTypes(plan.types)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}

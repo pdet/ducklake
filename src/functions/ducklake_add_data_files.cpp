@@ -28,7 +28,7 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<string> &names) {
-	auto &catalog = BaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
 	string schema_name;
 	if (input.inputs[1].IsNull()) {
 		throw InvalidInputException("Table name cannot be NULL");
@@ -106,6 +106,7 @@ struct HivePartition {
 	FieldIndex field_index;
 	LogicalType field_type;
 	Value hive_value;
+	DuckLakeTransformType transform_type;
 };
 
 struct ParquetFileMetadata {
@@ -555,9 +556,7 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
-			LogicalType geo_type(LogicalTypeId::BLOB);
-			geo_type.SetAlias("GEOMETRY");
-			return geo_type;
+			return LogicalType::GEOMETRY();
 		}
 	}
 	if (!s_ele.converted_type.empty()) {
@@ -772,8 +771,8 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 		return;
 	}
 
-	if (DuckLakeTypes::IsGeoType(type)) {
-		if (!DuckLakeTypes::IsGeoType(source_type)) {
+	if (type.id() == LogicalTypeId::GEOMETRY) {
+		if (source_type.id() != LogicalTypeId::GEOMETRY) {
 			failures.push_back(StringUtil::Format(
 			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
 			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
@@ -915,7 +914,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	}
 
 	// Store the hive partition information for later statistics processing
-	file_metadata.hive_partition_values.emplace_back(HivePartition {target_field_id, field_id.Type(), hive_value});
+	file_metadata.hive_partition_values.emplace_back(
+	    HivePartition {target_field_id, field_id.Type(), hive_value, DuckLakeTransformType::IDENTITY});
 
 	// return the map - the name is empty on purpose to signal this comes from a partition
 	auto result = make_uniq<DuckLakeNameMapEntry>();
@@ -1048,6 +1048,11 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 	// Process statistics for hive partition columns
 	for (auto &entry : file_metadata.hive_partition_values) {
+		if (entry.transform_type == DuckLakeTransformType::BUCKET) {
+			// Bucket partitioning uses the result of the hash for the folder names, so we can't get statistics from it
+			continue;
+		}
+
 		auto field_index = entry.field_index;
 		auto &field_type = entry.field_type;
 		auto &hive_value = entry.hive_value;
@@ -1082,6 +1087,12 @@ DuckLakeFileProcessor::MapColumns(ParquetFileMetadata &file_metadata,
 			                            "Set ignore_extra_columns => true to add the file anyway",
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filename,
 			                            table.name);
+		}
+		auto hive_entry = hive_partitions.find(col->name);
+		if (hive_entry != hive_partitions.end()) {
+			column_maps.push_back(MapHiveColumn(file_metadata, entry->second.get(), Value(hive_entry->second)));
+			field_id_map.erase(entry);
+			continue;
 		}
 		column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix));
 		field_id_map.erase(entry);
@@ -1136,8 +1147,8 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 			continue;
 		}
 
-		file.hive_partition_values.emplace_back(
-		    HivePartition {partition_field.field_id, field_id->Type(), Value(hive_entry->second)});
+		file.hive_partition_values.emplace_back(HivePartition {
+		    partition_field.field_id, field_id->Type(), Value(hive_entry->second), partition_field.transform.type});
 	}
 }
 
@@ -1210,8 +1221,8 @@ vector<DuckLakeDataFile> DuckLakeFileProcessor::AddFiles(const vector<string> &g
 		ReadParquetFullMetadata(glob);
 	}
 
-	// now we have obtained a list of files to add together with the relevant information (statistics, file size, ...)
-	// we need to create a mapping from the columns in the file to the columns in the table
+	// now we have obtained a list of files to add together with the relevant information (statistics, file size,
+	// ...) we need to create a mapping from the columns in the file to the columns in the table
 	vector<DuckLakeDataFile> written_files;
 	for (auto &entry : parquet_files) {
 		auto file = AddFileToTable(*entry.second);

@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
 test-env DATA_PATH __TEST_DIR__
 
 statement ok
-ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata')
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_partition', METADATA_CATALOG 'ducklake_metadata', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 USE ducklake
@@ -75,7 +75,7 @@ Bucket count must be a constant integer
 statement error
 ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, 'literal'));
 ----
-Expected bucket(column, bucket_count)
+Expected bucket(bucket_count, column)
 
 # Non-integer bucket count (string constant)
 statement error
@@ -382,3 +382,333 @@ FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
 WHERE path LIKE '%bucket_month_day_tbl%' AND path LIKE '%bucket=%' AND path LIKE '%month=%' AND path LIKE '%day=%'
 ----
 true
+
+# ----------------------------------------------------------------------------------------------------------------------
+# UPDATE test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_update_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_update_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_update_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Update a non-partition column
+statement ok
+UPDATE bucket_update_tbl SET value = 10 WHERE user_id = 'alice'
+
+query II
+SELECT user_id, value FROM bucket_update_tbl WHERE user_id = 'alice'
+----
+alice	10
+
+# Update the partition column itself (causes delete + re-insert into potentially different bucket)
+statement ok
+UPDATE bucket_update_tbl SET user_id = 'dave' WHERE user_id = 'bob'
+
+query II
+SELECT user_id, value FROM bucket_update_tbl ORDER BY user_id
+----
+alice	10
+charlie	3
+dave	2
+
+# Verify total row count is preserved
+query I
+SELECT COUNT(*) FROM bucket_update_tbl
+----
+3
+
+# ----------------------------------------------------------------------------------------------------------------------
+# NULL handling test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_null_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_null_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_null_tbl VALUES ('alice', 1), (NULL, 2), ('bob', 3), (NULL, 4);
+
+query II
+SELECT user_id, value FROM bucket_null_tbl ORDER BY value
+----
+alice	1
+NULL	2
+bob	3
+NULL	4
+
+query I
+SELECT COUNT(*) FROM bucket_null_tbl WHERE user_id IS NULL
+----
+2
+
+query I
+SELECT SUM(value) FROM bucket_null_tbl
+----
+10
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DELETE test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_delete_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_delete_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_delete_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3), ('dave', 4);
+
+statement ok
+DELETE FROM bucket_delete_tbl WHERE user_id = 'bob'
+
+query I
+SELECT COUNT(*) FROM bucket_delete_tbl
+----
+3
+
+query II
+SELECT user_id, value FROM bucket_delete_tbl ORDER BY user_id
+----
+alice	1
+charlie	3
+dave	4
+
+# Delete all remaining rows
+statement ok
+DELETE FROM bucket_delete_tbl
+
+query I
+SELECT COUNT(*) FROM bucket_delete_tbl
+----
+0
+
+# Re-insert after full delete
+statement ok
+INSERT INTO bucket_delete_tbl VALUES ('eve', 5);
+
+query II
+SELECT user_id, value FROM bucket_delete_tbl
+----
+eve	5
+
+# ----------------------------------------------------------------------------------------------------------------------
+# RESET PARTITIONED BY test
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_reset_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_reset_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_reset_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Remove bucket partitioning
+statement ok
+ALTER TABLE bucket_reset_tbl RESET PARTITIONED BY
+
+# Verify data is still accessible
+query II
+SELECT user_id, value FROM bucket_reset_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Insert after reset should work (no longer partitioned)
+statement ok
+INSERT INTO bucket_reset_tbl VALUES ('dave', 4);
+
+query I
+SELECT COUNT(*) FROM bucket_reset_tbl
+----
+4
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Change number of bucket partitions on live table
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bucket_repart_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_repart_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_repart_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Verify data readable with 4-bucket partitioning
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Old data bucket values are in [0, 4)
+query I
+SELECT MAX(CAST(regexp_extract(path, '.*bucket=([0-9]+)[/\\].*', 1) AS INTEGER)) < 4
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_repart_tbl%' AND path LIKE '%bucket=%'
+----
+true
+
+# Change to 8 buckets
+statement ok
+ALTER TABLE bucket_repart_tbl SET PARTITIONED BY (bucket(8, user_id));
+
+# Old data should still be readable
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Insert new data under the 8-bucket scheme
+statement ok
+INSERT INTO bucket_repart_tbl VALUES ('dave', 4), ('eve', 5), ('frank', 6);
+
+# All data (old + new) must be readable
+query II
+SELECT user_id, value FROM bucket_repart_tbl ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+dave	4
+eve	5
+frank	6
+
+# Verify partition metadata now says bucket(8)
+query I
+SELECT transform FROM ducklake_metadata.ducklake_partition_info part
+JOIN ducklake_metadata.ducklake_partition_column part_col USING (partition_id, table_id)
+WHERE part.end_snapshot IS NULL
+AND part.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'bucket_repart_tbl')
+----
+bucket(8)
+
+# ----------------------------------------------------------------------------------------------------------------------
+# ducklake_add_data_files
+# ----------------------------------------------------------------------------------------------------------------------
+statement ok
+CREATE TABLE bucket_add_source(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_add_source SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO bucket_add_source VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+# Capture the glob pattern for the files that were written
+query I
+SELECT COUNT(*) > 0
+FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+WHERE path LIKE '%bucket_add_source%' AND path LIKE '%bucket=%'
+----
+true
+
+# Create a second bucket-partitioned table with the same schema and partitioning
+statement ok
+CREATE TABLE bucket_add_target(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE bucket_add_target SET PARTITIONED BY (bucket(4, user_id));
+
+# Store file paths in a variable, then add them to the target table
+statement ok
+SET VARIABLE add_files_list = (SELECT LIST(path) FROM glob('${DATA_PATH}/ducklake_bucket_partition/**/*.parquet') t(path)
+  WHERE path LIKE '%bucket_add_source%');
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'bucket_add_target', getvariable('add_files_list'), hive_partitioning => true);
+
+# Verify all data is accessible in the target table
+query II
+SELECT user_id, value FROM bucket_add_target ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DETACH/ATTACH round-trip test
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Use a separate database (without DATA_INLINING_ROW_LIMIT 0) to test DETACH/ATTACH
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta')
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE reattach_tbl(user_id VARCHAR, value INTEGER);
+
+statement ok
+ALTER TABLE reattach_tbl SET PARTITIONED BY (bucket(4, user_id));
+
+statement ok
+INSERT INTO reattach_tbl VALUES ('alice', 1), ('bob', 2), ('charlie', 3);
+
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Detach and re-attach
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/ducklake_reattach.db' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_bucket_reattach', METADATA_CATALOG 'ducklake_reattach_meta2')
+
+statement ok
+USE ducklake
+
+# Verify data survives re-attach
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+
+# Verify partition metadata is still correct after re-attach
+query I
+SELECT transform FROM ducklake_reattach_meta2.ducklake_partition_column WHERE table_id = 1
+----
+bucket(4)
+
+# Insert new data into the re-attached table to verify writes still work
+statement ok
+INSERT INTO reattach_tbl VALUES ('dave', 6)
+
+query II
+SELECT user_id, SUM(value) FROM reattach_tbl GROUP BY user_id ORDER BY user_id
+----
+alice	1
+bob	2
+charlie	3
+dave	6
