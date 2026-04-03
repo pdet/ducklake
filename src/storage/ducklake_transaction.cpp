@@ -1248,13 +1248,15 @@ void DuckLakeTransaction::CheckForConflicts(const TransactionChangeInformation &
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table", "deleted inlined data from it");
+		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
+		              "deleted inlined data from it");
 	}
 	for (auto &table_id : changes.tables_inserted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
 		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table", "deleted inlined data from it");
+		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
+		              "deleted inlined data from it");
 	}
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
@@ -2083,6 +2085,8 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 	delete_file.encryption_key = file.encryption_key;
 	delete_file.begin_snapshot = file.begin_snapshot;
 	delete_file.max_snapshot = file.max_snapshot;
+	delete_file.delete_vector_offset = file.delete_vector_offset;
+	delete_file.delete_vector_size = file.delete_vector_size;
 	return delete_file;
 }
 

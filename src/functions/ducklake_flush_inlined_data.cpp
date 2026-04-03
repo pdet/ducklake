@@ -398,6 +398,8 @@ struct FileDeleteInfo {
 	idx_t existing_delete_begin_snapshot = 0;
 	string existing_delete_encryption_key;
 	DeleteFileFormat existing_delete_format = DeleteFileFormat::PARQUET;
+	optional_idx existing_delete_vector_offset;
+	optional_idx existing_delete_vector_size;
 };
 
 static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &catalog,
@@ -418,7 +420,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
-       existing_del.format as del_format
+       existing_del.format as del_format, existing_del.delete_vector_offset as del_offset, existing_del.delete_vector_size as del_size
 FROM {METADATA_CATALOG}.%s del
 JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
 LEFT JOIN (
@@ -468,6 +470,12 @@ LEFT JOIN (
 						file_info.existing_delete_format =
 						    DeleteFileFormatFromString(chunk->GetValue(10, row_idx).GetValue<string>());
 					}
+					if (!chunk->GetValue(11, row_idx).IsNull()) {
+						file_info.existing_delete_vector_offset = chunk->GetValue(11, row_idx).GetValue<idx_t>();
+					}
+					if (!chunk->GetValue(12, row_idx).IsNull()) {
+						file_info.existing_delete_vector_size = chunk->GetValue(12, row_idx).GetValue<idx_t>();
+					}
 				}
 			} else {
 				// Update max_snapshot for subsequent rows
@@ -515,6 +523,8 @@ LEFT JOIN (
 			                                     : file_info.existing_delete_path;
 			existing_delete_file_data.encryption_key = file_info.existing_delete_encryption_key;
 			existing_delete_file_data.format = file_info.existing_delete_format;
+			existing_delete_file_data.delete_vector_offset = file_info.existing_delete_vector_offset;
+			existing_delete_file_data.delete_vector_size = file_info.existing_delete_vector_size;
 
 			auto existing_deletions = DuckLakeDeleteFilter::ScanDeleteFile(context, existing_delete_file_data);
 

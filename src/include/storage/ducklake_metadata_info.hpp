@@ -194,6 +194,8 @@ struct DuckLakeDeleteFileInfo {
 	optional_idx begin_snapshot;
 	//! Optional max_snapshot information for partial deletion files.
 	optional_idx max_snapshot;
+	optional_idx delete_vector_offset;
+	optional_idx delete_vector_size;
 };
 
 struct DuckLakePartitionFieldInfo {
@@ -353,6 +355,8 @@ struct DuckLakeFileData {
 	idx_t file_size_bytes = 0;
 	optional_idx footer_size;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
+	optional_idx delete_vector_offset;
+	optional_idx delete_vector_size;
 };
 
 enum class DuckLakeDataType {
