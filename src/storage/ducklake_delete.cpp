@@ -31,23 +31,24 @@ namespace duckdb {
 void MergeExistingDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
                              DuckLakeMetadataManager &metadata_manager, DataFileIndex delete_file_id,
                              idx_t fallback_snapshot, set<PositionWithSnapshot> &result) {
-	// For puffin files with multiple blobs, read each blob to preserve per-snapshot granularity.
-	// Each blob is cumulative, but we need the per-blob snapshot to tag positions correctly
-	// so that the writer can reconstruct the right number of blobs for time-travel.
-	if (delete_file.format == DeleteFileFormat::PUFFIN && delete_file_id.IsValid()) {
-		auto vectors = metadata_manager.GetDeleteVectors(delete_file_id);
-		if (!vectors.empty()) {
-			vector<idx_t> deleted_rows;
-			vector<idx_t> snapshot_ids;
-			DuckLakeDeleteFilter::ScanDeletionVectorBlobs(context, delete_file, vectors, deleted_rows, snapshot_ids);
-			for (idx_t i = 0; i < deleted_rows.size(); i++) {
+	vector<DuckLakeDeleteVectorInfo> existing_vectors;
+	if (delete_file_id.IsValid()) {
+		existing_vectors = metadata_manager.GetDeleteVectors(delete_file_id);
+	}
+	if (delete_file.format == DeleteFileFormat::PUFFIN && !existing_vectors.empty()) {
+		for (auto &vec : existing_vectors) {
+			auto blob_result = DuckLakeDeleteFilter::ScanDeletionVectorFile(context, delete_file,
+			                                                                vec.delete_vector_offset,
+			                                                                vec.delete_vector_size);
+			auto snapshot = vec.begin_snapshot.GetIndex();
+			for (auto &pos : blob_result.deleted_rows) {
 				PositionWithSnapshot pws;
-				pws.position = static_cast<int64_t>(deleted_rows[i]);
-				pws.snapshot_id = static_cast<int64_t>(snapshot_ids[i]);
+				pws.position = static_cast<int64_t>(pos);
+				pws.snapshot_id = static_cast<int64_t>(snapshot);
 				result.insert(pws);
 			}
-			return;
 		}
+		return;
 	}
 	// Parquet or single-blob puffin without vector metadata
 	auto scan_result = DuckLakeDeleteFilter::ScanDeleteFile(context, delete_file);
@@ -180,105 +181,151 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(Client
 	return WriteDeleteFileInternal(context, input);
 }
 
-DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientContext &context,
-                                                                     WriteDeleteFileInput &input) {
-	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
-	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
-
-	// Serialize positions to puffin blob
-	auto blob_data = DuckLakeDeletionVectorData::ToBlob(input.positions);
-
-	// Write blob to file
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto file_handle =
-	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
-	file_handle->Write(blob_data.data(), blob_data.size());
-	file_handle->Close();
-
+template <typename InputType>
+static DuckLakeDeleteFile CreatePuffinDeleteFile(const InputType &input, const string &file_path, idx_t delete_count,
+                                                 idx_t file_size_bytes, vector<DuckLakeDeleteVectorInfo> delete_vectors,
+                                                 optional_idx begin_snapshot = optional_idx()) {
 	DuckLakeDeleteFile delete_file;
 	delete_file.data_file_path = input.data_file_path;
-	delete_file.file_name = delete_file_path;
+	delete_file.file_name = file_path;
 	delete_file.format = DeleteFileFormat::PUFFIN;
-	delete_file.delete_count = input.positions.size();
-	delete_file.file_size_bytes = blob_data.size();
-	delete_file.footer_size = 0;
-	delete_file.encryption_key = input.encryption_key;
-	delete_file.source = input.source;
-
-	// Record the single blob in delete_vectors
-	DuckLakeDeleteVectorInfo vec;
-	vec.delete_vector_offset = 0;
-	vec.delete_vector_size = blob_data.size();
-	vec.delete_count = input.positions.size();
-	delete_file.delete_vectors.push_back(vec);
-
-	return delete_file;
-}
-
-DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
-    ClientContext &context, WriteDeleteFileWithSnapshotsInput &input) {
-	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
-	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
-
-	// Group positions by snapshot_id
-	map<int64_t, set<idx_t>> positions_by_snapshot;
-	for (auto &entry : input.positions) {
-		positions_by_snapshot[entry.snapshot_id].insert(static_cast<idx_t>(entry.position));
-	}
-
-	// Build cumulative position sets (each snapshot includes all previous positions)
-	vector<pair<int64_t, set<idx_t>>> cumulative_snapshots;
-	set<idx_t> cumulative;
-	for (auto &entry : positions_by_snapshot) {
-		cumulative.insert(entry.second.begin(), entry.second.end());
-		cumulative_snapshots.emplace_back(entry.first, cumulative);
-	}
-
-	// Write all blobs sequentially to the puffin file
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto file_handle =
-	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
-
-	vector<DuckLakeDeleteVectorInfo> delete_vectors;
-	idx_t current_offset = 0;
-	for (idx_t i = 0; i < cumulative_snapshots.size(); i++) {
-		auto &snapshot_entry = cumulative_snapshots[i];
-		auto blob_data = DuckLakeDeletionVectorData::ToBlob(snapshot_entry.second);
-		file_handle->Write(blob_data.data(), blob_data.size());
-
-		DuckLakeDeleteVectorInfo vec;
-		vec.begin_snapshot = static_cast<idx_t>(snapshot_entry.first);
-		// end_snapshot = next snapshot's begin, or NULL if last
-		if (i + 1 < cumulative_snapshots.size()) {
-			vec.end_snapshot = static_cast<idx_t>(cumulative_snapshots[i + 1].first);
-		}
-		vec.delete_vector_offset = current_offset;
-		vec.delete_vector_size = blob_data.size();
-		vec.delete_count = snapshot_entry.second.size();
-		delete_vectors.push_back(vec);
-
-		current_offset += blob_data.size();
-	}
-	file_handle->Close();
-
-	// begin_snapshot = earliest snapshot
-	optional_idx begin_snapshot;
-	if (!cumulative_snapshots.empty()) {
-		begin_snapshot = static_cast<idx_t>(cumulative_snapshots.front().first);
-	}
-
-	DuckLakeDeleteFile delete_file;
-	delete_file.data_file_path = input.data_file_path;
-	delete_file.file_name = delete_file_path;
-	delete_file.format = DeleteFileFormat::PUFFIN;
-	delete_file.delete_count = cumulative.size();
-	delete_file.file_size_bytes = current_offset;
+	delete_file.delete_count = delete_count;
+	delete_file.file_size_bytes = file_size_bytes;
 	delete_file.footer_size = 0;
 	delete_file.encryption_key = input.encryption_key;
 	delete_file.source = input.source;
 	delete_file.begin_snapshot = begin_snapshot;
 	delete_file.delete_vectors = std::move(delete_vectors);
 	return delete_file;
+}
+
+template <typename InputType>
+static string GeneratePuffinPath(const InputType &input) {
+	auto uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
+	return DuckLakeUtil::JoinPath(input.fs, input.data_path, uuid);
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientContext &context,
+                                                                     WriteDeleteFileInput &input) {
+	string delete_file_path = GeneratePuffinPath(input);
+
+	auto blob_data = DuckLakeDeletionVectorData::ToBlob(input.positions);
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle =
+	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
+	file_handle->Write(blob_data.data(), blob_data.size());
+	file_handle->Close();
+
+	DuckLakeDeleteVectorInfo vec;
+	vec.delete_vector_offset = 0;
+	vec.delete_vector_size = blob_data.size();
+	vec.delete_count = input.positions.size();
+
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
+	delete_vectors.push_back(vec);
+	return CreatePuffinDeleteFile(input, delete_file_path, input.positions.size(), blob_data.size(),
+	                              std::move(delete_vectors));
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
+    ClientContext &context, WriteDeleteFileWithSnapshotsInput &input) {
+	string delete_file_path = GeneratePuffinPath(input);
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle =
+	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
+
+	// Group positions by snapshot and build cumulative blobs
+	map<int64_t, set<idx_t>> positions_by_snapshot;
+	for (auto &entry : input.positions) {
+		positions_by_snapshot[entry.snapshot_id].insert(static_cast<idx_t>(entry.position));
+	}
+
+	set<idx_t> cumulative;
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
+	idx_t current_offset = 0;
+	for (auto &entry : positions_by_snapshot) {
+		cumulative.insert(entry.second.begin(), entry.second.end());
+
+		auto blob_data = DuckLakeDeletionVectorData::ToBlob(cumulative);
+		file_handle->Write(blob_data.data(), blob_data.size());
+
+		DuckLakeDeleteVectorInfo vec;
+		vec.begin_snapshot = static_cast<idx_t>(entry.first);
+		vec.delete_vector_offset = current_offset;
+		vec.delete_vector_size = blob_data.size();
+		vec.delete_count = cumulative.size();
+		delete_vectors.push_back(vec);
+		current_offset += blob_data.size();
+	}
+	file_handle->Close();
+
+	// Set end_snapshot on non-last vectors
+	for (idx_t i = 0; i + 1 < delete_vectors.size(); i++) {
+		delete_vectors[i].end_snapshot = delete_vectors[i + 1].begin_snapshot;
+	}
+
+	// begin_snapshot = earliest snapshot
+	optional_idx begin_snapshot;
+	for (auto &entry : input.positions) {
+		if (!begin_snapshot.IsValid() || static_cast<idx_t>(entry.snapshot_id) < begin_snapshot.GetIndex()) {
+			begin_snapshot = static_cast<idx_t>(entry.snapshot_id);
+		}
+	}
+
+	return CreatePuffinDeleteFile(input, delete_file_path, cumulative.size(), current_offset,
+	                              std::move(delete_vectors), begin_snapshot);
+}
+
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
+    ClientContext &context, WriteDeleteFileInput &input, const DuckLakeFileData &existing_delete_file,
+    const vector<DuckLakeDeleteVectorInfo> &existing_vectors) {
+	string delete_file_path = GeneratePuffinPath(input);
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle =
+	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
+
+	vector<DuckLakeDeleteVectorInfo> delete_vectors;
+	idx_t current_offset = 0;
+
+	// Raw copy old blobs from the existing puffin file
+	auto &last_old = existing_vectors.back();
+	auto old_data_size = last_old.delete_vector_offset + last_old.delete_vector_size;
+	auto old_handle = fs.OpenFile(existing_delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
+	auto old_data = make_unsafe_uniq_array<data_t>(old_data_size);
+	old_handle->Read(old_data.get(), old_data_size);
+	file_handle->Write(old_data.get(), old_data_size);
+	current_offset = old_data_size;
+
+	for (auto &old_vec : existing_vectors) {
+		delete_vectors.push_back(old_vec);
+	}
+
+	auto old_cumulative = DuckLakeDeleteFilter::ScanDeletionVectorFile(context, existing_delete_file,
+	                                                                   last_old.delete_vector_offset,
+	                                                                   last_old.delete_vector_size);
+	set<idx_t> all_positions;
+	for (auto &pos : old_cumulative.deleted_rows) {
+		all_positions.insert(pos);
+	}
+	all_positions.insert(input.positions.begin(), input.positions.end());
+
+	// Serialize the new cumulative blob
+	auto blob_data = DuckLakeDeletionVectorData::ToBlob(all_positions);
+	file_handle->Write(blob_data.data(), blob_data.size());
+	file_handle->Close();
+
+	// Add new vector entry
+	DuckLakeDeleteVectorInfo new_vec;
+	new_vec.delete_vector_offset = current_offset;
+	new_vec.delete_vector_size = blob_data.size();
+	new_vec.delete_count = all_positions.size();
+	delete_vectors.push_back(new_vec);
+
+	return CreatePuffinDeleteFile(input, delete_file_path, all_positions.size(), current_offset + blob_data.size(),
+	                              std::move(delete_vectors), existing_vectors.front().begin_snapshot);
 }
 
 //===--------------------------------------------------------------------===//
@@ -474,50 +521,68 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
 
-	auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
-
-	// the commit snapshot for new deletes is current_snapshot + 1
-	const auto current_snapshot = transaction.GetSnapshot();
-	const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
-
-	set<PositionWithSnapshot> sorted_deletes_with_snapshots;
-	// add existing deletes with their snapshot IDs
-	MergeExistingDeleteFile(context, data_file_info.delete_file, transaction.GetMetadataManager(),
-	                        data_file_info.delete_file_id, existing_snapshot.GetIndex(),
-	                        sorted_deletes_with_snapshots);
-
-	// add new deletes with the commit snapshot
-	for (auto &pos : sorted_deletes) {
-		PositionWithSnapshot pos_with_snap;
-		pos_with_snap.position = static_cast<int64_t>(pos);
-		pos_with_snap.snapshot_id = static_cast<int64_t>(new_delete_snapshot);
-		sorted_deletes_with_snapshots.insert(pos_with_snap);
-	}
-
 	// clear the deletes from the map
 	delete_map->ClearDeletes(filename);
 
 	// set the delete file as overwriting existing deletes
 	delete_file.overwrites_existing_delete = true;
 
-	if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, sorted_deletes_with_snapshots.size())) {
-		return;
-	}
-
 	auto &fs = FileSystem::GetFileSystem(context);
-	WriteDeleteFileWithSnapshotsInput input {context,
-	                                         transaction,
-	                                         fs,
-	                                         table.DataPath(),
-	                                         encryption_key,
-	                                         filename,
-	                                         sorted_deletes_with_snapshots,
-	                                         DeleteFileSource::REGULAR};
 	DuckLakeDeleteFile written_file;
-	if (use_deletion_vectors) {
-		written_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, input);
+
+	if (use_deletion_vectors && data_file_info.delete_file.format == DeleteFileFormat::PUFFIN &&
+	    data_file_info.delete_file_id.IsValid()) {
+		// Puffin path: raw-copy old blobs + append new cumulative blob
+		auto existing_vectors =
+		    transaction.GetMetadataManager().GetDeleteVectors(data_file_info.delete_file_id);
+		if (existing_vectors.empty()) {
+			throw InternalException("Puffin delete file has no delete vector entries");
+		}
+		// Count total deletes for TryDropFullyDeletedFile (old cumulative + new)
+		auto &last_old = existing_vectors.back();
+		idx_t total_delete_count = last_old.delete_count + sorted_deletes.size();
+		if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info, total_delete_count)) {
+			return;
+		}
+		WriteDeleteFileInput input {context,        transaction, fs,             table.DataPath(),
+		                            encryption_key, filename,    sorted_deletes, DeleteFileSource::REGULAR};
+		written_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
+		    context, input, data_file_info.delete_file, existing_vectors);
 	} else {
-		written_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, input);
+		// Parquet path (or puffin without existing vectors): merge + serialize all
+		auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
+		const auto current_snapshot = transaction.GetSnapshot();
+		const idx_t new_delete_snapshot = current_snapshot.snapshot_id + 1;
+
+		set<PositionWithSnapshot> sorted_deletes_with_snapshots;
+		MergeExistingDeleteFile(context, data_file_info.delete_file, transaction.GetMetadataManager(),
+		                        data_file_info.delete_file_id, existing_snapshot.GetIndex(),
+		                        sorted_deletes_with_snapshots);
+		for (auto &pos : sorted_deletes) {
+			PositionWithSnapshot pos_with_snap;
+			pos_with_snap.position = static_cast<int64_t>(pos);
+			pos_with_snap.snapshot_id = static_cast<int64_t>(new_delete_snapshot);
+			sorted_deletes_with_snapshots.insert(pos_with_snap);
+		}
+
+		if (TryDropFullyDeletedFile(transaction, delete_file, data_file_info,
+		                             sorted_deletes_with_snapshots.size())) {
+			return;
+		}
+
+		WriteDeleteFileWithSnapshotsInput snapshots_input {context,
+		                                                   transaction,
+		                                                   fs,
+		                                                   table.DataPath(),
+		                                                   encryption_key,
+		                                                   filename,
+		                                                   sorted_deletes_with_snapshots,
+		                                                   DeleteFileSource::REGULAR};
+		if (use_deletion_vectors) {
+			written_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, snapshots_input);
+		} else {
+			written_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, snapshots_input);
+		}
 	}
 
 	written_file.data_file_id = delete_file.data_file_id;
@@ -527,11 +592,8 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
 	written_file.overwritten_delete_file.format = data_file_info.delete_file.format;
 
-	idx_t max_snapshot = 0;
-	for (auto &entry : sorted_deletes_with_snapshots) {
-		max_snapshot = MaxValue(max_snapshot, static_cast<idx_t>(entry.snapshot_id));
-	}
-	written_file.max_snapshot = max_snapshot;
+	const auto current_snapshot = transaction.GetSnapshot();
+	written_file.max_snapshot = current_snapshot.snapshot_id + 1;
 
 	global_state.written_files.emplace(filename, std::move(written_file));
 }

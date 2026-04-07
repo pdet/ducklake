@@ -498,6 +498,12 @@ void LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string 
 	result.footer_size = delete_file.footer_size;
 	result.encryption_key = delete_file.encryption_key;
 	result.format = delete_file.format;
+	// For puffin files with delete vectors, we need the offset/size of the latest cumulative blob.
+	if (!delete_file.delete_vectors.empty()) {
+		auto &latest_vec = delete_file.delete_vectors.back();
+		result.delete_vector_offset = latest_vec.delete_vector_offset;
+		result.delete_vector_size = latest_vec.delete_vector_size;
+	}
 }
 
 bool LocalTableChanges::HasLocalInlinedFileDeletes(TableIndex table_id) const {

@@ -61,7 +61,9 @@ public:
 	                                           optional_idx snapshot_filter_max = optional_idx());
 	//! Scan a puffin deletion vector file and return the deleted row positions
 	static DeleteFileScanResult ScanDeletionVectorFile(ClientContext &context, const DuckLakeFileData &delete_file);
-
+	//! Scan a specific blob within a puffin file at the given offset/size
+	static DeleteFileScanResult ScanDeletionVectorFile(ClientContext &context, const DuckLakeFileData &delete_file,
+	                                                   idx_t offset, idx_t size);
 private:
 	//! Scan the data file to get the global row_ids at specific file positions
 	//! Returns a map from file_position to global_row_id

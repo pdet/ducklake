@@ -355,6 +355,9 @@ struct DuckLakeFileData {
 	idx_t file_size_bytes = 0;
 	optional_idx footer_size;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
+	//! Offset/size for reading a specific DV blob within a puffin file
+	optional_idx delete_vector_offset;
+	optional_idx delete_vector_size;
 };
 
 enum class DuckLakeDataType {
