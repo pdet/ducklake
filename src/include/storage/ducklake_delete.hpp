@@ -16,6 +16,7 @@
 namespace duckdb {
 class DuckLakeTableEntry;
 class DuckLakeDeleteGlobalState;
+class DuckLakeMetadataManager;
 class DuckLakeTransaction;
 
 //! A deletion position with the snapshot ID from which it became valid
@@ -56,6 +57,11 @@ inline void MergeDeletesWithSnapshots(const DuckLakeDeleteData &delete_data, idx
 	}
 }
 
+//! Read an existing delete file and merge its positions
+void MergeExistingDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,
+                             DuckLakeMetadataManager &metadata_manager, DataFileIndex delete_file_id,
+                             idx_t fallback_snapshot, set<PositionWithSnapshot> &result);
+
 //! Input parameters for writing a delete file
 template <typename PositionType>
 struct WriteDeleteFileInputBase {
@@ -84,8 +90,7 @@ struct DuckLakeDeleteFileWriter {
 	static DuckLakeDeleteFile WriteDeletionVectorFile(ClientContext &context, WriteDeleteFileInput &input);
 	//! Write a puffin file with multiple cumulative DV blobs
 	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
-	                                                               WriteDeleteFileWithSnapshotsInput &input,
-	                                                               const DuckLakeFileData &existing_delete_file);
+	                                                               WriteDeleteFileWithSnapshotsInput &input);
 };
 
 struct DuckLakeDeleteMap {
@@ -194,12 +199,6 @@ private:
 	                              const DuckLakeFileListExtendedEntry &data_file_info,
 	                              DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
 	                              DuckLakeDeleteFile &delete_file) const;
-	//! Merge existing + new deletes into a single deletion vector (puffin) file
-	void FlushMergedDeletionVector(DuckLakeTransaction &transaction, ClientContext &context,
-	                               DuckLakeDeleteGlobalState &global_state, const string &filename,
-	                               const DuckLakeFileListExtendedEntry &data_file_info,
-	                               DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
-	                               DuckLakeDeleteFile &delete_file) const;
 	//! Try to drop a file if all rows are deleted. Returns true if the file was dropped.
 	bool TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
 	                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count) const;

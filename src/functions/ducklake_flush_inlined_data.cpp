@@ -3,6 +3,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -516,10 +517,9 @@ LEFT JOIN (
 			existing_delete_file_data.encryption_key = file_info.existing_delete_encryption_key;
 			existing_delete_file_data.format = file_info.existing_delete_format;
 
-			auto existing_deletions = DuckLakeDeleteFilter::ScanDeleteFile(context, existing_delete_file_data);
-
-			// Merge existing deletions with new inlined deletions
-			MergeDeletesWithSnapshots(existing_deletions, file_info.existing_delete_begin_snapshot, merged_deletions);
+			MergeExistingDeleteFile(context, existing_delete_file_data, metadata_manager,
+			                        file_info.existing_delete_file_id,
+			                        file_info.existing_delete_begin_snapshot, merged_deletions);
 
 			// Update max_snapshot to include existing deletions
 			for (auto &pos : merged_deletions) {
@@ -538,7 +538,14 @@ LEFT JOIN (
 		                                              file_info.file_path,
 		                                              deletions_to_write,
 		                                              DeleteFileSource::FLUSH};
-		auto delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+		bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+		DuckLakeDeleteFile delete_file;
+		if (use_deletion_vectors) {
+			delete_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, file_input);
+		} else {
+			delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
+		}
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;
 
@@ -548,6 +555,7 @@ LEFT JOIN (
 			delete_file.overwritten_delete_file.path = file_info.existing_delete_path_is_relative
 			                                               ? table.DataPath() + file_info.existing_delete_path
 			                                               : file_info.existing_delete_path;
+			delete_file.overwritten_delete_file.format = file_info.existing_delete_format;
 		}
 
 		delete_files.push_back(std::move(delete_file));

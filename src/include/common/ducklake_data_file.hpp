@@ -34,7 +34,7 @@ enum class DeleteFileSource : uint8_t {
 };
 
 struct DuckLakeDeleteVectorInfo {
-	idx_t begin_snapshot;
+	optional_idx begin_snapshot;
 	optional_idx end_snapshot;
 	idx_t delete_vector_offset;
 	idx_t delete_vector_size;
@@ -44,6 +44,7 @@ struct DuckLakeDeleteVectorInfo {
 struct DuckLakeOverwrittenDeleteFile {
 	DataFileIndex delete_file_id;
 	string path;
+	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 };
 
 struct DuckLakeDeleteFile {
