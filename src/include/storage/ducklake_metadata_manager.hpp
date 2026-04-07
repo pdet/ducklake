@@ -194,6 +194,7 @@ public:
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string WriteNewDeleteVectors(const vector<DuckLakeDeleteFileInfo> &new_delete_files);
+	virtual vector<DuckLakeDeleteVectorInfo> GetDeleteVectors(DataFileIndex delete_file_id);
 	virtual string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -303,6 +304,8 @@ private:
 	bool IsEncrypted() const;
 	string GetFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
+	string GetDeleteFileWithVectorJoin(idx_t table_id_val, const string &snapshot_filter,
+	                                   const string &dv_snapshot_filter);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);

@@ -518,8 +518,8 @@ LEFT JOIN (
 			existing_delete_file_data.format = file_info.existing_delete_format;
 
 			MergeExistingDeleteFile(context, existing_delete_file_data, metadata_manager,
-			                        file_info.existing_delete_file_id,
-			                        file_info.existing_delete_begin_snapshot, merged_deletions);
+			                        file_info.existing_delete_file_id, file_info.existing_delete_begin_snapshot,
+			                        merged_deletions);
 
 			// Update max_snapshot to include existing deletions
 			for (auto &pos : merged_deletions) {

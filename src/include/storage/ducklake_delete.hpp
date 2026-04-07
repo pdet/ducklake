@@ -92,9 +92,10 @@ struct DuckLakeDeleteFileWriter {
 	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
 	                                                               WriteDeleteFileWithSnapshotsInput &input);
 	//! Write a puffin file by raw-copying old blobs and appending the new cumulative blob
-	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context, WriteDeleteFileInput &input,
-	                                                               const DuckLakeFileData &existing_delete_file,
-	                                                               const vector<DuckLakeDeleteVectorInfo> &existing_vectors);
+	static DuckLakeDeleteFile
+	WriteDeletionVectorFileWithSnapshots(ClientContext &context, WriteDeleteFileInput &input,
+	                                     const DuckLakeFileData &existing_delete_file,
+	                                     const vector<DuckLakeDeleteVectorInfo> &existing_vectors);
 };
 
 struct DuckLakeDeleteMap {
