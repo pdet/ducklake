@@ -209,8 +209,8 @@ private:
 
 private:
 	mutex schemas_lock;
-	//! Map of schema index -> schema
-	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
+	//! Map of (schema_version, snapshot_id) -> schema
+	map<pair<idx_t, idx_t>, unique_ptr<DuckLakeCatalogSet>> schemas;
 	//! Map of data file index -> table stats
 	unordered_map<idx_t, unique_ptr<DuckLakeStats>> stats;
 	//! Map of mapping index -> name map
@@ -227,7 +227,7 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
-	//! Whether or not the catalog is initialized
+	//! Whether the catalog is initialized
 	bool initialized = false;
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;

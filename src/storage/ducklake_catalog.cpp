@@ -191,15 +191,16 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(snapshot.schema_version);
+	auto key = make_pair(snapshot.schema_version, snapshot.snapshot_id);
+	auto entry = schemas.find(key);
 	if (entry != schemas.end()) {
-		// this schema version is already cached
+		// this schema version + snapshot is already cached
 		return *entry->second;
 	}
 	// load the schema version from the metadata manager
 	auto schema = LoadSchemaForSnapshot(transaction, snapshot);
 	auto &result = *schema;
-	schemas.insert(make_pair(snapshot.schema_version, std::move(schema)));
+	schemas.insert(make_pair(key, std::move(schema)));
 	return result;
 }
 
