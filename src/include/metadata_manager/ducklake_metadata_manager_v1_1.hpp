@@ -12,6 +12,11 @@
 
 namespace duckdb {
 
+//! DDL for the ducklake_delete_vector metadata table introduced in v1.1
+constexpr const char *DUCKLAKE_DELETE_VECTOR_TABLE_DDL =
+    "{METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, "
+    "delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT)";
+
 template <typename Base>
 class DuckLakeMetadataManagerV1_1 : public Base {
 public:

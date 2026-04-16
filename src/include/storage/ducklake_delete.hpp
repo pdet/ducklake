@@ -92,10 +92,19 @@ struct DuckLakeDeleteFileWriter {
 	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
 	                                                               WriteDeleteFileWithSnapshotsInput &input);
 	//! Write a puffin file by raw-copying old blobs and appending the new cumulative blob
-	static DuckLakeDeleteFile
-	WriteDeletionVectorFileWithSnapshots(ClientContext &context, WriteDeleteFileInput &input,
-	                                     const DuckLakeFileData &existing_delete_file,
-	                                     const vector<DuckLakeDeleteVectorInfo> &existing_vectors);
+	static DuckLakeDeleteFile AppendDeletionVectorBlob(ClientContext &context, WriteDeleteFileInput &input,
+	                                                   const DuckLakeFileData &existing_delete_file,
+	                                                   const vector<DuckLakeDeleteVectorInfo> &existing_vectors);
+
+	//! Dispatch to puffin or parquet based on the use_deletion_vectors config
+	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileInput &input, bool use_deletion_vectors) {
+		return use_deletion_vectors ? WriteDeletionVectorFile(context, input) : WriteDeleteFile(context, input);
+	}
+	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
+	                                bool use_deletion_vectors) {
+		return use_deletion_vectors ? WriteDeletionVectorFileWithSnapshots(context, input)
+		                            : WriteDeleteFileWithSnapshots(context, input);
+	}
 };
 
 struct DuckLakeDeleteMap {
@@ -201,9 +210,19 @@ private:
 	                 const string &filename, ColumnDataCollection &deleted_rows) const;
 	void FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, ClientContext &context,
 	                              DuckLakeDeleteGlobalState &global_state, const string &filename,
-	                              const DuckLakeFileListExtendedEntry &data_file_info,
-	                              DuckLakeDeleteData &existing_delete_data, const set<idx_t> &sorted_deletes,
+	                              const DuckLakeFileListExtendedEntry &data_file_info, const set<idx_t> &sorted_deletes,
 	                              DuckLakeDeleteFile &delete_file) const;
+	//! Puffin append path: raw-copy existing blobs + append new cumulative blob.
+	//! Returns false if the file was fully dropped.
+	bool FlushPuffinDelete(DuckLakeTransaction &transaction, ClientContext &context, const string &filename,
+	                       const DuckLakeFileListExtendedEntry &data_file_info, const set<idx_t> &sorted_deletes,
+	                       const DuckLakeDeleteFile &delete_file, DuckLakeDeleteFile &written_file) const;
+	//! Parquet / fresh-puffin path: merge existing + new deletes and rewrite the delete file.
+	//! Returns false if the file was fully dropped.
+	bool FlushRewriteDelete(DuckLakeTransaction &transaction, ClientContext &context, const string &filename,
+	                        const DuckLakeFileListExtendedEntry &data_file_info, const set<idx_t> &sorted_deletes,
+	                        bool use_deletion_vectors, const DuckLakeDeleteFile &delete_file,
+	                        DuckLakeDeleteFile &written_file) const;
 	//! Try to drop a file if all rows are deleted. Returns true if the file was dropped.
 	bool TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
 	                             const DuckLakeFileListExtendedEntry &data_file_info, idx_t delete_count) const;

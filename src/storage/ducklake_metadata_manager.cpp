@@ -11,6 +11,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/appender.hpp"
+#include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -63,6 +64,24 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 		return make_uniq<SQLiteMetadataManager>(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
+}
+
+unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::CreateVersioned(DuckLakeTransaction &transaction,
+                                                                             DuckLakeMetadataManager &base,
+                                                                             DuckLakeVersion version) {
+	if (version == DuckLakeVersion::UNSET || version == DuckLakeVersion::V1_0) {
+		return nullptr;
+	}
+	if (version == DuckLakeVersion::V1_1_DEV_1) {
+		if (dynamic_cast<PostgresMetadataManager *>(&base)) {
+			return make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
+		}
+		if (dynamic_cast<SQLiteMetadataManager *>(&base)) {
+			return make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);
+		}
+		return make_uniq<DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>>(transaction);
+	}
+	throw InternalException("CreateVersioned: unsupported DuckLake version");
 }
 
 DuckLakeMetadataManager &DuckLakeMetadataManager::Get(DuckLakeTransaction &transaction) {
@@ -303,10 +322,10 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 }
 
 void DuckLakeMetadataManager::MigrateV10() {
-	auto result = transaction.Query(R"(
-CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT);
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
-	)");
+	string query = "CREATE TABLE IF NOT EXISTS ";
+	query += DUCKLAKE_DELETE_VECTOR_TABLE_DDL;
+	query += ";\nUPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';";
+	auto result = transaction.Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to migrate DuckLake from v1.0 to v1.1-dev1: ");
 	}

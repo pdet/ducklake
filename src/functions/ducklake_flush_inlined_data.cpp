@@ -555,12 +555,7 @@ LEFT JOIN (
 		                                              DeleteFileSource::FLUSH};
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 		bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
-		DuckLakeDeleteFile delete_file;
-		if (use_deletion_vectors) {
-			delete_file = DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(context, file_input);
-		} else {
-			delete_file = DuckLakeDeleteFileWriter::WriteDeleteFileWithSnapshots(context, file_input);
-		}
+		auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;
 

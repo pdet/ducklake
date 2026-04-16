@@ -109,20 +109,11 @@ idx_t DuckLakeDeleteFilter::Filter(row_t start_row_index, idx_t count, Selection
 	return delete_data->Filter(start_row_index, count, result_sel, snapshot_filter);
 }
 
-DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext &context,
-                                                                  const DuckLakeFileData &delete_file) {
-	if (delete_file.delete_vector_offset.IsValid() && delete_file.delete_vector_size.IsValid()) {
-		return ScanDeletionVectorFile(context, delete_file, delete_file.delete_vector_offset.GetIndex(),
-		                              delete_file.delete_vector_size.GetIndex());
-	}
-	// read the entire file as a single blob (for single-blob files without vector metadata)
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto file_handle = fs.OpenFile(delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
-	auto file_size = file_handle->GetFileSize();
-
-	auto buffer = make_unsafe_uniq_array<data_t>(file_size);
-	file_handle->Read(buffer.get(), file_size);
-	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), file_size);
+static DeleteFileScanResult ReadPuffinBlob(FileHandle &handle, idx_t offset, idx_t size) {
+	auto buffer = make_unsafe_uniq_array<data_t>(size);
+	handle.Seek(offset);
+	handle.Read(buffer.get(), size);
+	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), size);
 
 	DeleteFileScanResult result;
 	set<idx_t> deleted_set;
@@ -134,25 +125,26 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 }
 
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext &context,
+                                                                  const DuckLakeFileData &delete_file) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto file_handle = fs.OpenFile(delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
+	idx_t offset = 0;
+	idx_t size;
+	if (delete_file.delete_vector_offset.IsValid() && delete_file.delete_vector_size.IsValid()) {
+		offset = delete_file.delete_vector_offset.GetIndex();
+		size = delete_file.delete_vector_size.GetIndex();
+	} else {
+		size = file_handle->GetFileSize();
+	}
+	return ReadPuffinBlob(*file_handle, offset, size);
+}
+
+DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext &context,
                                                                   const DuckLakeFileData &delete_file, idx_t offset,
                                                                   idx_t size) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto file_handle = fs.OpenFile(delete_file.path, FileOpenFlags::FILE_FLAGS_READ);
-
-	auto buffer = make_unsafe_uniq_array<data_t>(size);
-	file_handle->Seek(offset);
-	file_handle->Read(buffer.get(), size);
-	auto dv_data = DuckLakeDeletionVectorData::FromBlob(buffer.get(), size);
-
-	DeleteFileScanResult result;
-	result.has_embedded_snapshots = false;
-
-	set<idx_t> deleted_set;
-	dv_data->ToSet(deleted_set);
-	for (auto &pos : deleted_set) {
-		result.deleted_rows.push_back(pos);
-	}
-	return result;
+	return ReadPuffinBlob(*file_handle, offset, size);
 }
 
 DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context, const DuckLakeFileData &delete_file,

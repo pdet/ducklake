@@ -9,9 +9,9 @@ namespace duckdb {
 template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements() {
 	string result = Base::GetCreateTableStatements();
-	result += R"(
-CREATE TABLE {METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT);
-)";
+	result += "\nCREATE TABLE ";
+	result += DUCKLAKE_DELETE_VECTOR_TABLE_DDL;
+	result += ";\n";
 	return result;
 }
 

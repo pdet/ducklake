@@ -21,6 +21,7 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
+#include "common/ducklake_version.hpp"
 #include "common/index.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
@@ -103,6 +104,10 @@ public:
 	static void Register(const string &name, create_t);
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
+	//! Wrap an existing base metadata manager in the versioned subclass for the given version.
+	//! If version is V1_0 or UNSET, returns null (caller should keep the base instance).
+	static unique_ptr<DuckLakeMetadataManager> CreateVersioned(DuckLakeTransaction &transaction,
+	                                                           DuckLakeMetadataManager &base, DuckLakeVersion version);
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend

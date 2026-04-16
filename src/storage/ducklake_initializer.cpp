@@ -11,9 +11,6 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
-#include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
-#include "metadata_manager/sqlite_metadata_manager.hpp"
-#include "metadata_manager/postgres_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -156,7 +153,10 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	// default to the latest version when creating a new DuckLake
 	auto version =
 	    options.ducklake_version == DuckLakeVersion::UNSET ? DUCKLAKE_LATEST_VERSION : options.ducklake_version;
-	SetVersionedMetadataManager(transaction, version);
+	if (auto versioned =
+	        DuckLakeMetadataManager::CreateVersioned(transaction, transaction.GetMetadataManager(), version)) {
+		transaction.SetMetadataManager(std::move(versioned));
+	}
 	options.resolved_version = version;
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
@@ -260,7 +260,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		options.resolved_version = resolved_version;
-		SetVersionedMetadataManager(transaction, resolved_version);
+		if (auto versioned = DuckLakeMetadataManager::CreateVersioned(transaction, transaction.GetMetadataManager(),
+		                                                              resolved_version)) {
+			transaction.SetMetadataManager(std::move(versioned));
+		}
 	}
 }
 
@@ -282,27 +285,6 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 	throw InvalidInputException("DuckLake catalog version mismatch: catalog version is %s, but the extension requires "
 	                            "version %s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 	                            catalog_version_str, DuckLakeVersionToString(DUCKLAKE_LATEST_VERSION));
-}
-
-void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
-	if (version == DuckLakeVersion::V1_0) {
-		// base metadata managers are already V1.0, nop
-		return;
-	}
-	auto &current = transaction.GetMetadataManager();
-	unique_ptr<DuckLakeMetadataManager> new_manager;
-	if (version == DuckLakeVersion::V1_1_DEV_1) {
-		if (dynamic_cast<PostgresMetadataManager *>(&current)) {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
-		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);
-		} else {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>>(transaction);
-		}
-	} else {
-		throw InternalException("SetVersionedMetadataManager: unsupported version");
-	}
-	transaction.SetMetadataManager(std::move(new_manager));
 }
 
 } // namespace duckdb
