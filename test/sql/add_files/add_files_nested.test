@@ -47,7 +47,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/nested2.parquet')
 
 query II
-FROM ducklake.test
+FROM ducklake.test ORDER BY col1.i
 ----
 {'i': 1, 'j': 2}	{'col1': 100, 'col2': 200}
 {'i': 10, 'j': 20}	{'col1': 200, 'col2': 400}

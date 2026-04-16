@@ -114,16 +114,16 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query III
-FROM sort_on_compaction_2
+FROM sort_on_compaction_2 ORDER BY unique_id DESC
 ----
-3	1	woot3
-2	0	woot2
-1	1	woot1
-0	0	woot0
 7	1	woot7
 6	0	woot6
 5	1	woot5
 4	0	woot4
+3	1	woot3
+2	0	woot2
+1	1	woot1
+0	0	woot0
 
 # SET SORTED BY should be a case insensitive operation (when original columns are lower case)
 statement ok

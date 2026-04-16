@@ -61,7 +61,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/dec9_3.parquet')
 
 query I
-FROM ducklake.test
+FROM ducklake.test ORDER BY col1
 ----
 999.900
 999999.999
@@ -82,7 +82,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/dec18_7.parquet')
 
 query I
-FROM ducklake.test
+FROM ducklake.test ORDER BY ALL
 ----
 999.9000000
 999999.9990000

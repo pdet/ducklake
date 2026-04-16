@@ -34,7 +34,7 @@ statement ok
 COMMIT;
 
 query I
-FROM repro_table;
+FROM repro_table ORDER BY yr;
 ----
 2025
 2026
@@ -44,7 +44,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-FROM repro_table;
+FROM repro_table ORDER BY yr;
 ----
 2025
 2026
