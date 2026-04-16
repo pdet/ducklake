@@ -23,6 +23,7 @@ namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
 class DuckLakeCatalogSet;
+class DuckLakeInitializer;
 class DuckLakeMetadataManager;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
@@ -147,6 +148,8 @@ struct SnapshotAndStats {
 	DuckLakeSnapshot snapshot;
 };
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
+	friend class DuckLakeInitializer;
+
 public:
 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);
 	~DuckLakeTransaction() override;
@@ -263,6 +266,9 @@ public:
 	const set<TableIndex> &GetDroppedTables() {
 		return dropped_tables;
 	}
+	const set<TableIndex> &GetDroppedViews() {
+		return dropped_views;
+	}
 	const set<MacroIndex> &GetDroppedScalarMacros() {
 		return dropped_scalar_macros;
 	}
@@ -288,7 +294,6 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
-	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
 	void CommitCompaction(DuckLakeSnapshot &commit_snapshot, TransactionChangeInformation &transaction_changes);

@@ -7,11 +7,21 @@ set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 include_directories(src/include)
 
 # Roaring is installed via vcpkg and used for deletion vectors
 find_package(roaring CONFIG REQUIRED)
 include_directories(${roaring_DIR}/../../include)
+
+# Warn when returning unique_ptr<Derived> as unique_ptr<Base> without std::move
+# (Clang-specific; GCC does not need an explicit flag for this pattern)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wreturn-std-move)
+endif()
 
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
