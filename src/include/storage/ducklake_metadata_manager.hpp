@@ -309,9 +309,6 @@ private:
 
 	bool IsEncrypted() const;
 	string GetFileSelectList(const string &prefix);
-	string GetDeleteFileSelectList(const string &prefix);
-	string GetDeleteFileWithVectorJoin(idx_t table_id_val, const string &snapshot_filter,
-	                                   const string &dv_snapshot_filter);
 	FilterPushdownQueryComponents GenerateFilterPushdownComponents(const FilterPushdownInfo &filter_info,
 	                                                               TableIndex table_id);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
@@ -350,6 +347,28 @@ private:
 	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:
+	//! Build the SELECT list for delete file columns (v1.1 adds delete_vector_offset/size)
+	virtual string GetDeleteFileSelectList(const string &prefix);
+	//! Build the FROM clause for querying delete files (v1.1 adds LEFT JOIN to ducklake_delete_vector)
+	virtual string GetDeleteFileWithVectorJoin(idx_t table_id_val, const string &snapshot_filter,
+	                                           const string &dv_snapshot_filter);
+	//! Build a LATERAL JOIN subquery for previous delete files (v1.1 adds delete vector columns)
+	virtual string GetDeleteFileLateralJoinSQL(idx_t table_id_val, const string &where_clause, const string &dv_filter);
+	//! Build the NULL sentinel for the current_delete cross-join (v1.1 adds delete vector columns)
+	virtual string GetNullDeleteSentinel() const;
+	//! Get the null delete file columns string for inlined deletion queries
+	virtual string GetNullDeleteFileColumns() const;
+	//! Whether this metadata manager version supports delete vector columns
+	virtual bool HasDeleteVectorColumns() const;
+	//! Hook: cleanup delete vectors before deleting delete files (v1.1 returns DELETE SQL)
+	virtual string DeleteVectorCleanupSQL(const string &delete_file_ids);
+	//! Hook: cleanup delete vectors for compacted data files (v1.1 returns DELETE SQL)
+	virtual string DeleteVectorCleanupForDataFilesSQL(const string &data_file_ids);
+	//! Hook: end-snapshot a delete vector during delete rewrites (v1.1 returns UPDATE SQL)
+	virtual string EndSnapshotDeleteVectorSQL(idx_t delete_file_id, idx_t snapshot);
+	//! Hook: cleanup delete vectors during snapshot deletion (v1.1 executes the query)
+	virtual void CleanupDeleteVectorsForSnapshotDeletion(const string &deleted_delete_ids);
+
 	DuckLakeTransaction &transaction;
 	mutex paths_lock;
 	map<SchemaIndex, string> schema_paths;

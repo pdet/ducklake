@@ -19,6 +19,12 @@
       "paths": [
         "test/sql/attach/attach_ducklake_version.test"
       ]
+    },
+    {
+      "reason": "Deletion vectors (puffin format) require v1.1+",
+      "paths": [
+        "test/sql/delete/deletion_vector.test"
+      ]
     }
   ]
 }

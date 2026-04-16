@@ -1,6 +1,7 @@
 #include "storage/ducklake_transaction.hpp"
 
 #include "common/ducklake_types.hpp"
+#include "storage/ducklake_initializer.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -681,6 +682,11 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
     : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+	// Wrap the metadata manager in the appropriate versioned wrapper if needed
+	auto resolved = ducklake_catalog.Options().resolved_version;
+	if (resolved != DuckLakeVersion::UNSET && resolved != DuckLakeVersion::V1_0) {
+		DuckLakeInitializer::SetVersionedMetadataManager(*this, resolved);
+	}
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {

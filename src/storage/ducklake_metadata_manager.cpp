@@ -160,7 +160,6 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY K
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_file_variant_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, variant_path VARCHAR, shredded_type VARCHAR, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, min_value VARCHAR, max_value VARCHAR, contains_nan BOOLEAN, extra_stats VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT);
-CREATE TABLE {METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, table_id BIGINT, column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_stats(table_id BIGINT, record_count BIGINT, next_row_id BIGINT, file_size_bytes BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_table_column_stats(table_id BIGINT, column_id BIGINT, contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);
@@ -296,7 +295,6 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 
 void DuckLakeMetadataManager::MigrateV04() {
 	auto result = transaction.Query(R"(
-CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'version';
 	)");
 	if (result->HasError()) {
@@ -306,6 +304,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 
 void DuckLakeMetadataManager::MigrateV10() {
 	auto result = transaction.Query(R"(
+CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.ducklake_delete_vector(delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, delete_vector_offset BIGINT, delete_vector_size BIGINT, delete_count BIGINT);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)");
 	if (result->HasError()) {
@@ -925,23 +924,66 @@ string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 }
 
 string DuckLakeMetadataManager::GetDeleteFileSelectList(const string &prefix) {
-	return GetFileSelectList(prefix) + ", " + prefix + ".format AS " + prefix + "_format" + ", " + prefix +
-	       ".delete_vector_offset AS " + prefix + "_delete_vector_offset" + ", " + prefix + ".delete_vector_size AS " +
-	       prefix + "_delete_vector_size";
+	return GetFileSelectList(prefix) + ", " + prefix + ".format AS " + prefix + "_format";
 }
 
 string DuckLakeMetadataManager::GetDeleteFileWithVectorJoin(idx_t table_id_val, const string &snapshot_filter,
                                                             const string &dv_snapshot_filter) {
-	return StringUtil::Format(R"(SELECT df.*, dv.delete_vector_offset, dv.delete_vector_size
+	return StringUtil::Format(R"(SELECT df.*
     FROM {METADATA_CATALOG}.ducklake_delete_file df
-    LEFT JOIN (
-        SELECT DISTINCT ON (delete_file_id) delete_file_id, delete_vector_offset, delete_vector_size
-        FROM {METADATA_CATALOG}.ducklake_delete_vector
-        WHERE %s
-        ORDER BY delete_file_id, begin_snapshot DESC
-    ) dv USING (delete_file_id)
     WHERE df.table_id=%d AND %s)",
-	                          dv_snapshot_filter, table_id_val, snapshot_filter);
+	                          table_id_val, snapshot_filter);
+}
+
+string DuckLakeMetadataManager::GetDeleteFileLateralJoinSQL(idx_t table_id_val, const string &where_clause,
+                                                            const string &dv_filter) {
+	return StringUtil::Format(R"(
+	SELECT DISTINCT ON (df.data_file_id) df.*
+	FROM {METADATA_CATALOG}.ducklake_delete_file df
+	WHERE %s
+	ORDER BY df.data_file_id, df.begin_snapshot DESC
+)",
+	                          where_clause);
+}
+
+string DuckLakeMetadataManager::GetNullDeleteSentinel() const {
+	return R"(	SELECT CAST(NULL AS VARCHAR) AS path,
+		CAST(NULL AS BOOLEAN) AS path_is_relative,
+		CAST(NULL AS BIGINT) AS file_size_bytes,
+		CAST(NULL AS BIGINT) AS footer_size,
+		CAST(NULL AS VARCHAR) AS encryption_key,
+		CAST(NULL AS VARCHAR) AS format
+)";
+}
+
+string DuckLakeMetadataManager::GetNullDeleteFileColumns() const {
+	string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
+	                        "AS BIGINT) AS file_size_bytes, CAST(NULL AS BIGINT) AS footer_size";
+	if (IsEncrypted()) {
+		null_file_cols += ", CAST(NULL AS VARCHAR) AS encryption_key";
+	}
+	null_file_cols += ", NULL format";
+	return null_file_cols;
+}
+
+bool DuckLakeMetadataManager::HasDeleteVectorColumns() const {
+	return false;
+}
+
+string DuckLakeMetadataManager::DeleteVectorCleanupSQL(const string &delete_file_ids) {
+	return "";
+}
+
+string DuckLakeMetadataManager::DeleteVectorCleanupForDataFilesSQL(const string &data_file_ids) {
+	return "";
+}
+
+string DuckLakeMetadataManager::EndSnapshotDeleteVectorSQL(idx_t delete_file_id, idx_t snapshot) {
+	return "";
+}
+
+void DuckLakeMetadataManager::CleanupDeleteVectorsForSnapshotDeletion(const string &deleted_delete_ids) {
+	// v1.0: no delete vectors to clean up
 }
 
 template <class T>
@@ -984,14 +1026,16 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &tab
 		data.format = DeleteFileFormatFromString(row.template GetValue<string>(col_idx));
 	}
 	col_idx++;
-	if (!row.IsNull(col_idx)) {
-		data.delete_vector_offset = row.template GetValue<idx_t>(col_idx);
+	if (HasDeleteVectorColumns()) {
+		if (!row.IsNull(col_idx)) {
+			data.delete_vector_offset = row.template GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
+		if (!row.IsNull(col_idx)) {
+			data.delete_vector_size = row.template GetValue<idx_t>(col_idx);
+		}
+		col_idx++;
 	}
-	col_idx++;
-	if (!row.IsNull(col_idx)) {
-		data.delete_vector_size = row.template GetValue<idx_t>(col_idx);
-	}
-	col_idx++;
 	return data;
 }
 
@@ -1529,27 +1573,17 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
-	auto query =
-	    StringUtil::Format(R"(
+	auto query = StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data, (
-	SELECT
-		CAST(NULL AS BIGINT) delete_file_id,
-		CAST(NULL AS VARCHAR) path,
-		CAST(NULL AS BOOLEAN) path_is_relative,
-		CAST(NULL AS BIGINT) file_size_bytes,
-		CAST(NULL AS BIGINT) footer_size,
-		CAST(NULL AS VARCHAR) encryption_key,
-		CAST(NULL AS VARCHAR) format,
-		CAST(NULL AS BIGINT) delete_vector_offset,
-		CAST(NULL AS BIGINT) delete_vector_size
-) del
+%s) del
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                       select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id);
+	                                select_list, GetNullDeleteSentinel(), table_id.index, start_snapshot.snapshot_id,
+	                                start_snapshot.snapshot_id);
 
 	auto result = transaction.Query(end_snapshot, query);
 	if (result->HasError()) {
@@ -1631,21 +1665,21 @@ main_results AS (
 	auto previous_dv_filter = StringUtil::Format("%d >= begin_snapshot AND (%d < end_snapshot OR end_snapshot IS NULL)",
 	                                             start_snapshot.snapshot_id - 1, start_snapshot.snapshot_id - 1);
 
-	query +=
-	    StringUtil::Format(R"(
+	auto previous_lateral_1 = GetDeleteFileLateralJoinSQL(
+	    table_id.index,
+	    StringUtil::Format("df.table_id = %d AND df.begin_snapshot < %d", table_id.index, start_snapshot.snapshot_id),
+	    previous_dv_filter);
+	auto previous_lateral_2 = GetDeleteFileLateralJoinSQL(
+	    table_id.index,
+	    StringUtil::Format("df.table_id = %d AND df.begin_snapshot < data.end_snapshot", table_id.index),
+	    previous_dv_filter);
+	auto null_sentinel = GetNullDeleteSentinel();
+
+	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot FROM (
 	%s AND df.begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
-LEFT JOIN LATERAL (
-	SELECT DISTINCT ON (df.data_file_id) df.*, dv.delete_vector_offset, dv.delete_vector_size
-	FROM {METADATA_CATALOG}.ducklake_delete_file df
-	LEFT JOIN (
-		SELECT DISTINCT ON (delete_file_id) delete_file_id, delete_vector_offset, delete_vector_size
-		FROM {METADATA_CATALOG}.ducklake_delete_vector WHERE %s ORDER BY delete_file_id, begin_snapshot DESC
-	) dv USING (delete_file_id)
-	WHERE df.table_id = %d AND df.begin_snapshot < %d
-	ORDER BY df.data_file_id, df.begin_snapshot DESC
-) AS previous_delete
+LEFT JOIN LATERAL (%s) AS previous_delete
 USING (data_file_id)
 JOIN (
 	SELECT *
@@ -1661,38 +1695,16 @@ SELECT %s, data.end_snapshot FROM (
 	FROM {METADATA_CATALOG}.ducklake_data_file
 	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}
 ) AS data
-LEFT JOIN LATERAL (
-	SELECT DISTINCT ON (df.data_file_id) df.*, dv.delete_vector_offset, dv.delete_vector_size
-	FROM {METADATA_CATALOG}.ducklake_delete_file df
-	LEFT JOIN (
-		SELECT DISTINCT ON (delete_file_id) delete_file_id, delete_vector_offset, delete_vector_size
-		FROM {METADATA_CATALOG}.ducklake_delete_vector WHERE %s ORDER BY delete_file_id, begin_snapshot DESC
-	) dv USING (delete_file_id)
-	WHERE df.table_id = %d AND df.begin_snapshot < data.end_snapshot
-	ORDER BY df.data_file_id, df.begin_snapshot DESC
-) AS previous_delete
+LEFT JOIN LATERAL (%s) AS previous_delete
 USING (data_file_id), (
-	SELECT CAST(NULL AS VARCHAR) AS path,
-		CAST(NULL AS BOOLEAN) AS path_is_relative,
-		CAST(NULL AS BIGINT) AS file_size_bytes,
-		CAST(NULL AS BIGINT) AS footer_size,
-		CAST(NULL AS VARCHAR) AS encryption_key,
-		CAST(NULL AS VARCHAR) AS format,
-		CAST(NULL AS BIGINT) AS delete_vector_offset,
-		CAST(NULL AS BIGINT) AS delete_vector_size
-) current_delete
+%s) current_delete
 )",
-	                       select_list, GetDeleteFileWithVectorJoin(table_id.index, "true", current_dv_filter),
-	                       previous_dv_filter, table_id.index, start_snapshot.snapshot_id, table_id.index, select_list,
-	                       table_id.index, start_snapshot.snapshot_id, previous_dv_filter, table_id.index);
+	                            select_list, GetDeleteFileWithVectorJoin(table_id.index, "true", current_dv_filter),
+	                            previous_lateral_1, table_id.index, select_list, table_id.index,
+	                            start_snapshot.snapshot_id, previous_lateral_2, null_sentinel);
 
 	if (has_inlined_table) {
-		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
-		                        "AS BIGINT) AS file_size_bytes, CAST(NULL AS BIGINT) AS footer_size";
-		if (IsEncrypted()) {
-			null_file_cols += ", CAST(NULL AS VARCHAR) AS encryption_key";
-		}
-		null_file_cols += ", NULL format, NULL delete_vector_offset, NULL delete_vector_size";
+		auto null_file_cols = GetNullDeleteFileColumns();
 		query += StringUtil::Format(R"(
 UNION ALL
 
@@ -3327,12 +3339,8 @@ DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverw
 	}
 
 	string batch_query;
-	// delete associated delete vector records
-	batch_query += StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_delete_vector
-WHERE delete_file_id IN (%s);
-)",
-	                                  deleted_file_ids);
+	// delete associated delete vector records (v1.1+)
+	batch_query += DeleteVectorCleanupSQL(deleted_file_ids);
 	// delete the old delete file metadata records
 	batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -3379,61 +3387,13 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 }
 
 vector<DuckLakeDeleteVectorInfo> DuckLakeMetadataManager::GetDeleteVectors(DataFileIndex delete_file_id) {
-	auto result = transaction.Query(StringUtil::Format(R"(
-SELECT begin_snapshot, end_snapshot, delete_vector_offset, delete_vector_size, delete_count
-FROM {METADATA_CATALOG}.ducklake_delete_vector
-WHERE delete_file_id = %d
-ORDER BY begin_snapshot
-)",
-	                                                   delete_file_id.index));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to get delete vectors from DuckLake: ");
-	}
-	vector<DuckLakeDeleteVectorInfo> vectors;
-	for (auto &row : *result) {
-		DuckLakeDeleteVectorInfo vec;
-		vec.begin_snapshot = row.GetValue<idx_t>(0);
-		if (!row.IsNull(1)) {
-			vec.end_snapshot = row.GetValue<idx_t>(1);
-		}
-		vec.delete_vector_offset = row.GetValue<idx_t>(2);
-		vec.delete_vector_size = row.GetValue<idx_t>(3);
-		vec.delete_count = row.GetValue<idx_t>(4);
-		vectors.push_back(vec);
-	}
-	return vectors;
+	// v1.0: no delete vector table
+	return {};
 }
 
 string DuckLakeMetadataManager::WriteNewDeleteVectors(const vector<DuckLakeDeleteFileInfo> &new_delete_files) {
-	string insert_query;
-	for (auto &file : new_delete_files) {
-		if (file.delete_vectors.empty()) {
-			continue;
-		}
-		for (idx_t i = 0; i < file.delete_vectors.size(); i++) {
-			auto &vec = file.delete_vectors[i];
-			if (!insert_query.empty()) {
-				insert_query += ",";
-			}
-			string begin_snapshot_str =
-			    vec.begin_snapshot.IsValid() ? to_string(vec.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
-			string end_snapshot_str;
-			if (vec.end_snapshot.IsValid()) {
-				end_snapshot_str = to_string(vec.end_snapshot.GetIndex());
-			} else if (i + 1 < file.delete_vectors.size()) {
-				end_snapshot_str = "{SNAPSHOT_ID}";
-			} else {
-				end_snapshot_str = "NULL";
-			}
-			insert_query +=
-			    StringUtil::Format("(%d, %s, %s, %d, %d, %d)", file.id.index, begin_snapshot_str, end_snapshot_str,
-			                       vec.delete_vector_offset, vec.delete_vector_size, vec.delete_count);
-		}
-	}
-	if (insert_query.empty()) {
-		return {};
-	}
-	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_vector VALUES %s;", insert_query);
+	// v1.0: no delete vector table
+	return {};
 }
 
 vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(optional_idx start_from) {
@@ -4228,11 +4188,8 @@ string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompacte
 	                                      "ducklake_file_partition_value", "ducklake_file_variant_stats"};
 	string batch_query;
 
-	batch_query += StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_delete_vector
-WHERE delete_file_id IN (SELECT delete_file_id FROM {METADATA_CATALOG}.ducklake_delete_file WHERE data_file_id IN (%s));
-)",
-	                                  deleted_file_ids);
+	// delete associated delete vector records (v1.1+)
+	batch_query += DeleteVectorCleanupForDataFilesSQL(deleted_file_ids);
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -4268,12 +4225,8 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 			WHERE delete_file_id = %llu;
 			)",
 			                                  rewrite_snapshot, compaction.delete_file_id.index);
-			// Also end-snapshot the latest delete vector so time-travel reads the correct blob
-			batch_query += StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_delete_vector SET end_snapshot = %llu
-			WHERE delete_file_id = %llu AND end_snapshot IS NULL;
-			)",
-			                                  rewrite_snapshot, compaction.delete_file_id.index);
+			// Also end-snapshot the latest delete vector so time-travel reads the correct blob (v1.1+)
+			batch_query += EndSnapshotDeleteVectorSQL(compaction.delete_file_id.index, rewrite_snapshot);
 		}
 		// We must update the data file table
 		batch_query +=
@@ -4470,15 +4423,8 @@ WHERE %s %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 			files_scheduled_for_cleanup += StringUtil::Format(
 			    "(%d, %s, %s, NOW())", file.id.index, SQLString(path.path), path.path_is_relative ? "true" : "false");
 		}
-		// delete associated delete vector records
-		result = transaction.Query(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_delete_vector
-WHERE delete_file_id IN (%s);
-)",
-		                                              deleted_delete_ids));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to delete old delete vector information in DuckLake: ");
-		}
+		// delete associated delete vector records (v1.1+)
+		CleanupDeleteVectorsForSnapshotDeletion(deleted_delete_ids);
 		// delete the delete files
 		result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file

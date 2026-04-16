@@ -129,6 +129,10 @@ public:
 		return options.encryption;
 	}
 
+	const DuckLakeOptions &Options() const {
+		return options;
+	}
+
 	bool IsEncrypted() const override {
 		return Encryption() == DuckLakeEncryption::ENCRYPTED;
 	}
@@ -145,6 +149,10 @@ public:
 	}
 
 	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id) const {
+		// Delete vectors require v1.1+ (the ducklake_delete_vector table)
+		if (options.resolved_version < DuckLakeVersion::V1_1_DEV_1) {
+			return false;
+		}
 		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false");
 		return write_dv == "true";
 	}

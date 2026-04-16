@@ -22,6 +22,8 @@ public:
 
 public:
 	void Initialize();
+	//! Wrap the metadata manager in the appropriate versioned wrapper for the given version
+	static void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 
 private:
 	void InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema);
@@ -29,7 +31,6 @@ private:
 	void InitializeDataPath();
 	string GetAttachOptions();
 	void CheckAndAutoloadedRequiredExtension(const string &pattern);
-	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
 
 private:
