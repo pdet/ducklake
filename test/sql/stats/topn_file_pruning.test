@@ -85,4 +85,4 @@ SELECT * FROM ducklake.events ORDER BY timestamp DESC, user_id ASC LIMIT 1
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.events ORDER BY timestamp DESC NULLS FIRST LIMIT 1
 ----
-analyzed_plan	<REGEX>:.*1,800 rows.*
+analyzed_plan	<REGEX>:.*Total Files Read: 4.*
