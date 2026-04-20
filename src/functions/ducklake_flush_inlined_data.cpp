@@ -555,7 +555,9 @@ LEFT JOIN (
 		                                              DeleteFileSource::FLUSH};
 		auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 		bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
-		auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
+		bool supports_multi_blob = catalog.SupportsMultiBlobDeletionVectors();
+		auto delete_file =
+		    DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors, supports_multi_blob);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;
 

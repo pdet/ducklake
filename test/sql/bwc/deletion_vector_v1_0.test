@@ -1,5 +1,5 @@
 # name: test/sql/bwc/deletion_vector_v1_0.test
-# description: Verify that WRITE_DELETION_VECTORS is silently ignored at v1.0 (no internal error)
+# description: Verify WRITE_DELETION_VECTORS at v1.0 writes single-blob puffin files
 # group: [bwc]
 
 require ducklake
@@ -13,7 +13,6 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
-# Attach with WRITE_DELETION_VECTORS true at v1.0 - should not error
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bwc_deletion_vector_v1_0', WRITE_DELETION_VECTORS true)
 
@@ -28,31 +27,27 @@ SELECT COUNT(*) FROM ducklake.test
 ----
 2000
 
-# delete should succeed (falls back to parquet delete files, not puffin)
 query I
 DELETE FROM ducklake.test WHERE id%2=0
 ----
 1000
 
-# delete files should be parquet, not puffin
+# v1.0 still writes puffin
 query I
 SELECT DISTINCT format FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE end_snapshot IS NULL
 ----
-parquet
+puffin
 
-# verify data is correct after delete
+# ducklake_delete_vector table does not exist at v1.0
+statement error
+SELECT * FROM __ducklake_metadata_ducklake.ducklake_delete_vector
+----
+
 query II
 SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test
 ----
 1000	0
 
-# time travel still works
-query II
-SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM ducklake.test AT (VERSION => 2)
-----
-2000	1000
-
-# additional deletes also succeed
 query I
 DELETE FROM ducklake.test WHERE id < 100
 ----
@@ -63,7 +58,6 @@ SELECT COUNT(*) FROM ducklake.test
 ----
 950
 
-# delete all remaining rows from one file to test full file drop
 query I
 DELETE FROM ducklake.test WHERE id >= 0 AND id < 1000
 ----

@@ -37,8 +37,9 @@ struct DuckLakeOptions {
 	map<SchemaIndex, option_map_t> schema_options;
 	map<TableIndex, option_map_t> table_options;
 	idx_t busy_timeout = 5000;
+	//! user-requested via attach
 	DuckLakeVersion ducklake_version = DuckLakeVersion::UNSET;
-	//! The actual resolved version of the catalog (set after initialization)
+	//! The actual version of the catalog, we set after initialization
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
 };
 

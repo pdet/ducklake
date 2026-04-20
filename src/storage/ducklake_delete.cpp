@@ -230,9 +230,8 @@ DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFile(ClientConte
 	                              std::move(delete_vectors));
 }
 
-DuckLakeDeleteFile
-DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &context,
-                                                               WriteDeleteFileWithSnapshotsInput &input) {
+DuckLakeDeleteFile DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(
+    ClientContext &context, WriteDeleteFileWithSnapshotsInput &input, bool supports_multi_blob) {
 	string delete_file_path = GeneratePuffinPath(input);
 
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -243,6 +242,24 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 	map<int64_t, set<idx_t>> positions_by_snapshot;
 	for (auto &entry : input.positions) {
 		positions_by_snapshot[entry.snapshot_id].insert(static_cast<idx_t>(entry.position));
+	}
+
+	optional_idx begin_snapshot;
+	if (!positions_by_snapshot.empty()) {
+		begin_snapshot = static_cast<idx_t>(positions_by_snapshot.begin()->first);
+	}
+
+	if (!supports_multi_blob) {
+		// v1.0: write a single cumulative blob covering all positions. Per-snapshot
+		// history for DV-based deletes is not representable without ducklake_delete_vector.
+		set<idx_t> cumulative;
+		for (auto &entry : positions_by_snapshot) {
+			cumulative.insert(entry.second.begin(), entry.second.end());
+		}
+		auto blob_data = DuckLakeDeletionVectorData::ToBlob(cumulative);
+		file_handle->Write(blob_data.data(), blob_data.size());
+		file_handle->Close();
+		return CreatePuffinDeleteFile(input, delete_file_path, cumulative.size(), blob_data.size(), {}, begin_snapshot);
 	}
 
 	set<idx_t> cumulative;
@@ -267,11 +284,6 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 	// Set end_snapshot on non-last vectors
 	for (idx_t i = 0; i + 1 < delete_vectors.size(); i++) {
 		delete_vectors[i].end_snapshot = delete_vectors[i + 1].begin_snapshot;
-	}
-
-	optional_idx begin_snapshot;
-	if (!positions_by_snapshot.empty()) {
-		begin_snapshot = static_cast<idx_t>(positions_by_snapshot.begin()->first);
 	}
 
 	return CreatePuffinDeleteFile(input, delete_file_path, cumulative.size(), current_offset, std::move(delete_vectors),
@@ -542,7 +554,8 @@ bool DuckLakeDelete::FlushPuffinDelete(DuckLakeTransaction &transaction, ClientC
 bool DuckLakeDelete::FlushRewriteDelete(DuckLakeTransaction &transaction, ClientContext &context,
                                         const string &filename, const DuckLakeFileListExtendedEntry &data_file_info,
                                         const set<idx_t> &sorted_deletes, bool use_deletion_vectors,
-                                        const DuckLakeDeleteFile &delete_file, DuckLakeDeleteFile &written_file) const {
+                                        bool supports_multi_blob, const DuckLakeDeleteFile &delete_file,
+                                        DuckLakeDeleteFile &written_file) const {
 	auto existing_snapshot = data_file_info.delete_file_begin_snapshot;
 	const idx_t new_delete_snapshot = transaction.GetSnapshot().snapshot_id + 1;
 
@@ -569,7 +582,7 @@ bool DuckLakeDelete::FlushRewriteDelete(DuckLakeTransaction &transaction, Client
 	                                                   filename,
 	                                                   sorted_deletes_with_snapshots,
 	                                                   DeleteFileSource::REGULAR};
-	written_file = DuckLakeDeleteFileWriter::Write(context, snapshots_input, use_deletion_vectors);
+	written_file = DuckLakeDeleteFileWriter::Write(context, snapshots_input, use_deletion_vectors, supports_multi_blob);
 	return true;
 }
 
@@ -580,18 +593,23 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	auto &catalog = table.catalog.Cast<DuckLakeCatalog>();
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	bool use_deletion_vectors = catalog.WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId());
+	bool supports_multi_blob = catalog.SupportsMultiBlobDeletionVectors();
 
 	delete_map->ClearDeletes(filename);
 	delete_file.overwrites_existing_delete = true;
 
-	bool puffin_append_path = use_deletion_vectors && data_file_info.delete_file.format == DeleteFileFormat::PUFFIN &&
+	// The puffin append path needs ducklake_delete_vector to locate prior blobs; v1.0
+	// catalogs always go through rewrite instead.
+	bool puffin_append_path = use_deletion_vectors && supports_multi_blob &&
+	                          data_file_info.delete_file.format == DeleteFileFormat::PUFFIN &&
 	                          data_file_info.delete_file_id.IsValid();
 
 	DuckLakeDeleteFile written_file;
-	bool wrote = puffin_append_path ? FlushPuffinDelete(transaction, context, filename, data_file_info, sorted_deletes,
-	                                                    delete_file, written_file)
-	                                : FlushRewriteDelete(transaction, context, filename, data_file_info, sorted_deletes,
-	                                                     use_deletion_vectors, delete_file, written_file);
+	bool wrote = puffin_append_path
+	                 ? FlushPuffinDelete(transaction, context, filename, data_file_info, sorted_deletes, delete_file,
+	                                     written_file)
+	                 : FlushRewriteDelete(transaction, context, filename, data_file_info, sorted_deletes,
+	                                      use_deletion_vectors, supports_multi_blob, delete_file, written_file);
 	if (!wrote) {
 		return;
 	}

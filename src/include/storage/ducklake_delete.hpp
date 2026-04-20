@@ -88,9 +88,10 @@ struct DuckLakeDeleteFileWriter {
 	                                                       WriteDeleteFileWithSnapshotsInput &input);
 	//! Write a deletion vector file (puffin format) instead of a parquet delete file
 	static DuckLakeDeleteFile WriteDeletionVectorFile(ClientContext &context, WriteDeleteFileInput &input);
-	//! Write a puffin file with multiple cumulative DV blobs
+	//! Write a puffin file.
 	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
-	                                                               WriteDeleteFileWithSnapshotsInput &input);
+	                                                               WriteDeleteFileWithSnapshotsInput &input,
+	                                                               bool supports_multi_blob);
 	//! Write a puffin file by raw-copying old blobs and appending the new cumulative blob
 	static DuckLakeDeleteFile AppendDeletionVectorBlob(ClientContext &context, WriteDeleteFileInput &input,
 	                                                   const DuckLakeFileData &existing_delete_file,
@@ -101,8 +102,8 @@ struct DuckLakeDeleteFileWriter {
 		return use_deletion_vectors ? WriteDeletionVectorFile(context, input) : WriteDeleteFile(context, input);
 	}
 	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
-	                                bool use_deletion_vectors) {
-		return use_deletion_vectors ? WriteDeletionVectorFileWithSnapshots(context, input)
+	                                bool use_deletion_vectors, bool supports_multi_blob) {
+		return use_deletion_vectors ? WriteDeletionVectorFileWithSnapshots(context, input, supports_multi_blob)
 		                            : WriteDeleteFileWithSnapshots(context, input);
 	}
 };
@@ -221,7 +222,7 @@ private:
 	//! Returns false if the file was fully dropped.
 	bool FlushRewriteDelete(DuckLakeTransaction &transaction, ClientContext &context, const string &filename,
 	                        const DuckLakeFileListExtendedEntry &data_file_info, const set<idx_t> &sorted_deletes,
-	                        bool use_deletion_vectors, const DuckLakeDeleteFile &delete_file,
+	                        bool use_deletion_vectors, bool supports_multi_blob, const DuckLakeDeleteFile &delete_file,
 	                        DuckLakeDeleteFile &written_file) const;
 	//! Try to drop a file if all rows are deleted. Returns true if the file was dropped.
 	bool TryDropFullyDeletedFile(DuckLakeTransaction &transaction, const DuckLakeDeleteFile &delete_file,
