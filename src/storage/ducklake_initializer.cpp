@@ -39,6 +39,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 	if (metadata_type.empty() || metadata_type == "duckdb") {
 		// this is duckdb, we always do latest storage
 		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
+	} else if (metadata_type == "postgres_scanner" && !options.metadata_schema.empty() &&
+	           !options.metadata_parameters.count("schema")) {
+		attach_options.push_back("SCHEMA " + Value(options.metadata_schema).ToSQLString());
 	}
 
 	if (attach_options.empty()) {
