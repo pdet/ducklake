@@ -13,6 +13,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_commit_retry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -2529,42 +2530,14 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 	return result;
 }
 
-bool RetryOnError(const string &original_message) {
-	auto message = StringUtil::Lower(original_message);
-	// retry on primary key errors
-	if (StringUtil::Contains(message, "primary key") || StringUtil::Contains(message, "unique")) {
-		return true;
-	}
-	// retry on conflicts
-	if (StringUtil::Contains(message, "conflict")) {
-		return true;
-	}
-	// retry on concurrent access
-	if (StringUtil::Contains(message, "concurrent")) {
-		return true;
-	}
-	return false;
-}
-
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		// read-only transactions don't need to do anything
 		return;
 	}
-	idx_t max_retry_count = 10;
-	idx_t retry_wait_ms = 100;
-	double retry_backoff = 1.5;
-	Value setting_val;
 	auto context_ref = context.lock();
-	if (context_ref->TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
-		max_retry_count = setting_val.GetValue<idx_t>();
-	}
-	if (context_ref->TryGetCurrentSetting("ducklake_retry_wait_ms", setting_val)) {
-		retry_wait_ms = setting_val.GetValue<idx_t>();
-	}
-	if (context_ref->TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
-		retry_backoff = setting_val.GetValue<double>();
-	}
+	auto retry_config = DuckLakeRetryConfig::LoadFromContext(*context_ref);
+	const idx_t max_retry_count = retry_config.max_retry_count;
 
 	auto transaction_snapshot = GetSnapshot();
 	auto transaction_changes = GetTransactionChanges();
@@ -2635,14 +2608,7 @@ void DuckLakeTransaction::FlushChanges() {
 				error.Throw(error_message.str());
 			}
 
-#ifndef DUCKDB_NO_THREADS
-			RandomEngine random;
-			// random multiplier between 0.5 - 1.0
-			double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
-			uint64_t sleep_amount =
-			    (uint64_t)((double)retry_wait_ms * random_multiplier * pow(retry_backoff, static_cast<double>(i)));
-			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
-#endif
+			SleepBeforeRetry(i, retry_config);
 
 			// retry the transaction (with a new snapshot id)
 			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
