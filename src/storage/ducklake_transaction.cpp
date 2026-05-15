@@ -2530,9 +2530,20 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeCommitSt
 	return result;
 }
 
+bool DuckLakeTransaction::TryFlushChangesViaTempTables() {
+	if (!metadata_manager->SupportsTempTableCommit()) {
+		return false;
+	}
+	// implementation lands in a later step
+	return false;
+}
+
 void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		// read-only transactions don't need to do anything
+		return;
+	}
+	if (TryFlushChangesViaTempTables()) {
 		return;
 	}
 	auto context_ref = context.lock();

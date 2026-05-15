@@ -113,6 +113,10 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	//! Whether this backend can execute a commit via the staged-temp-table path
+	virtual bool SupportsTempTableCommit() const {
+		return false;
+	}
 
 	virtual void ClearCache() {
 	}

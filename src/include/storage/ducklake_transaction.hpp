@@ -293,6 +293,7 @@ protected:
 private:
 	void CleanupFiles();
 	void FlushChanges();
+	bool TryFlushChangesViaTempTables();
 	void FlushSettingChanges();
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
