@@ -10,6 +10,7 @@ add_library(
   ducklake_list_files.cpp
   ducklake_compaction_functions.cpp
   ducklake_set_commit_message.cpp
+  ducklake_commit_function.cpp
   ducklake_set_option.cpp
   ducklake_snapshots.cpp
   ducklake_options.cpp

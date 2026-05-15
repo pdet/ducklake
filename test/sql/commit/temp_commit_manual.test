@@ -1,0 +1,101 @@
+# name: test/sql/commit/temp_commit_manual.test
+# description: Manual exercise of the ducklake_commit() table function with hand-staged commit tables.
+# group: [commit]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/temp_commit_manual_meta.db' AS my_lake (DATA_PATH '__TEST_DIR__/temp_commit_manual_data/');
+
+statement ok
+CREATE TABLE my_lake.main.t(i INTEGER);
+
+statement ok
+INSERT INTO my_lake.main.t VALUES (1);
+
+
+query I
+SELECT max(snapshot_id) FROM __ducklake_metadata_my_lake.main.ducklake_snapshot;
+----
+2
+
+statement ok
+CREATE TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_meta(
+    snapshot_id_was BIGINT NOT NULL,
+    schema_version_was BIGINT NOT NULL,
+    schema_changed BOOLEAN NOT NULL,
+    has_inlined_flush BOOLEAN NOT NULL);
+
+statement ok
+INSERT INTO __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_meta VALUES (2, 1, false, false);
+
+statement ok
+CREATE TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_data_files(
+    data_file_id BIGINT,
+    table_id BIGINT,
+    file_order BIGINT,
+    path VARCHAR,
+    path_is_relative BOOLEAN,
+    file_format VARCHAR,
+    record_count BIGINT,
+    file_size_bytes BIGINT,
+    footer_size BIGINT,
+    row_id_start BIGINT,
+    partition_id BIGINT,
+    encryption_key VARCHAR,
+    mapping_id BIGINT,
+    partial_max BIGINT);
+
+# Pick a data_file_id well above anything the legacy path produced.
+statement ok
+INSERT INTO __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_data_files VALUES
+    (1000, 1, NULL, 'fake/manual.parquet', true, 'parquet',
+     100, 4096, NULL, NULL, NULL, NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_snapshot_changes(
+    changes_made VARCHAR,
+    author VARCHAR,
+    commit_message VARCHAR,
+    commit_extra_info VARCHAR);
+
+statement ok
+INSERT INTO __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_snapshot_changes
+    VALUES ('inserted_into_table:1', NULL, NULL, NULL);
+
+# Invoke the new table function.
+query III
+SELECT snapshot_id, schema_version, retry_count
+  FROM ducklake_commit('my_lake', 'manual_test_uuid');
+----
+3	1	0
+
+query I
+SELECT count(*) FROM __ducklake_metadata_my_lake.main.ducklake_snapshot WHERE snapshot_id = 3;
+----
+1
+
+query II
+SELECT data_file_id, begin_snapshot
+  FROM __ducklake_metadata_my_lake.main.ducklake_data_file
+ WHERE data_file_id = 1000;
+----
+1000	3
+
+query II
+SELECT snapshot_id, changes_made
+  FROM __ducklake_metadata_my_lake.main.ducklake_snapshot_changes
+ WHERE snapshot_id = 3;
+----
+3	inserted_into_table:1
+
+statement ok
+DROP TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_meta;
+
+statement ok
+DROP TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_data_files;
+
+statement ok
+DROP TABLE __ducklake_metadata_my_lake.main._dl_commit_manual_test_uuid_snapshot_changes;

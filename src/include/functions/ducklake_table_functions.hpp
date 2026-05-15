@@ -105,6 +105,11 @@ public:
 	DuckLakeSetCommitMessage();
 };
 
+class DuckLakeCommitFunction : public TableFunction {
+public:
+	DuckLakeCommitFunction();
+};
+
 class DuckLakeOptionsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeOptionsFunction();
