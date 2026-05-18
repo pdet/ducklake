@@ -319,6 +319,7 @@ protected:
 	                                     const vector<DuckLakeTableInfo> &new_tables,
 	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
 
+public:
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
 	//! Get path relative to schema path
@@ -327,6 +328,8 @@ protected:
 	//! Get path relative to table path
 	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
 	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
+
+protected:
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);

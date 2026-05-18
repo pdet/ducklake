@@ -5,6 +5,7 @@ add_library(
   ducklake_checkpoint.cpp
   ducklake_commit_executor.cpp
   ducklake_commit_retry.cpp
+  ducklake_commit_serializer.cpp
   ducklake_commit_temp_tables.cpp
   ducklake_default_functions.cpp
   ducklake_delete_filter.cpp

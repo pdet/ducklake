@@ -15,6 +15,7 @@
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_commit_session.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -132,6 +133,10 @@ public:
 	bool TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const;
 
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
+
+	DuckLakeCommitSession &CommitSession() const {
+		return commit_session;
+	}
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 
@@ -292,6 +297,7 @@ private:
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
+	mutable DuckLakeCommitSession commit_session;
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)

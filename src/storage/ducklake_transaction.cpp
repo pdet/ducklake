@@ -14,6 +14,8 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_commit_retry.hpp"
+#include "storage/ducklake_commit_serializer.hpp"
+#include "storage/ducklake_commit_state.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -759,29 +761,54 @@ bool DuckLakeTransaction::ChangesMade() const {
 	       !new_name_maps.name_maps.empty();
 }
 
-struct TransactionChangeInformation {
-	case_insensitive_set_t created_schemas;
-	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_scalar_macros;
-	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
-
-	set<TableIndex> altered_tables;
-	set<TableIndex> altered_tables_with_schema_version_changes;
-	set<TableIndex> altered_views;
-	set<TableIndex> dropped_tables;
-	set<TableIndex> dropped_views;
-	set<MacroIndex> dropped_scalar_macros;
-	set<MacroIndex> dropped_table_macros;
-	set<TableIndex> tables_inserted_into;
-	set<TableIndex> tables_deleted_from;
-	set<TableIndex> tables_inserted_inlined;
-	set<TableIndex> tables_deleted_inlined;
-	set<TableIndex> tables_flushed_inlined;
-	set<TableIndex> tables_compacted;
-	set<TableIndex> tables_merge_adjacent;
-	set<TableIndex> tables_rewrite_delete;
-};
+bool DuckLakeTransaction::HasOnlyDataChanges() const {
+	if (new_schemas) {
+		return false;
+	}
+	if (!new_tables.empty()) {
+		return false;
+	}
+	if (!new_scalar_macros.empty() || !new_table_macros.empty()) {
+		return false;
+	}
+	if (!dropped_tables.empty() || !renamed_tables.empty()) {
+		return false;
+	}
+	if (!dropped_views.empty() || !renamed_views.empty()) {
+		return false;
+	}
+	if (!dropped_schemas.empty()) {
+		return false;
+	}
+	if (!dropped_scalar_macros.empty() || !dropped_table_macros.empty()) {
+		return false;
+	}
+	if (!new_name_maps.name_maps.empty()) {
+		return false;
+	}
+	if (!flushed_inlined_tables.empty()) {
+		return false;
+	}
+	if (!dropped_files.empty()) {
+		return false;
+	}
+	for (auto &entry : local_changes.Changes()) {
+		auto &tc = entry.GetTableChanges();
+		if (tc.new_inlined_data) {
+			return false;
+		}
+		if (!tc.new_inlined_data_deletes.empty()) {
+			return false;
+		}
+		if (tc.new_inlined_file_deletes) {
+			return false;
+		}
+		if (!tc.compactions.empty()) {
+			return false;
+		}
+	}
+	return true;
+}
 
 void GetTransactionTableChanges(reference<CatalogEntry> table_entry, TransactionChangeInformation &changes) {
 	while (true) {
@@ -930,65 +957,23 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	return changes;
 }
 
-struct DuckLakeCommitState {
-	explicit DuckLakeCommitState(DuckLakeSnapshot &snapshot) : commit_snapshot(snapshot) {
-	}
+SchemaIndex DuckLakeCommitState::GetSchemaId(DuckLakeSchemaEntry &schema) const {
+	auto schema_id = schema.GetSchemaId();
+	RemapIdentifier(schema_id);
+	return schema_id;
+}
 
-	DuckLakeSnapshot &commit_snapshot;
-	map<SchemaIndex, SchemaIndex> committed_schemas;
-	map<TableIndex, TableIndex> committed_tables;
-	map<idx_t, idx_t> committed_partition_ids;
-	map<MappingIndex, MappingIndex> committed_mapping_indexes;
-	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
+TableIndex DuckLakeCommitState::GetTableId(DuckLakeTableEntry &table) const {
+	auto table_id = table.GetTableId();
+	RemapIdentifier(table_id);
+	return table_id;
+}
 
-	void RemapIdentifier(SchemaIndex &schema_id) const {
-		auto entry = committed_schemas.find(schema_id);
-		if (entry != committed_schemas.end()) {
-			schema_id = entry->second;
-		}
-	}
-	void RemapIdentifier(TableIndex &table_id) const {
-		auto entry = committed_tables.find(table_id);
-		if (entry != committed_tables.end()) {
-			table_id = entry->second;
-		}
-	}
-	void RemapPartitionId(optional_idx &partition_id) const {
-		if (!partition_id.IsValid()) {
-			return;
-		}
-		auto entry = committed_partition_ids.find(partition_id.GetIndex());
-		if (entry != committed_partition_ids.end()) {
-			partition_id = entry->second;
-		}
-	}
-	void RemapMappingIndex(MappingIndex &table_id) const {
-		auto entry = committed_mapping_indexes.find(table_id);
-		if (entry != committed_mapping_indexes.end()) {
-			table_id = entry->second;
-		}
-	}
-
-	SchemaIndex GetSchemaId(DuckLakeSchemaEntry &schema) const {
-		auto schema_id = schema.GetSchemaId();
-		RemapIdentifier(schema_id);
-		return schema_id;
-	}
-	TableIndex GetTableId(DuckLakeTableEntry &table) const {
-		auto table_id = table.GetTableId();
-		RemapIdentifier(table_id);
-		return table_id;
-	}
-	TableIndex GetTableId(TableIndex table_id) const {
-		RemapIdentifier(table_id);
-		return table_id;
-	}
-	TableIndex GetViewId(DuckLakeViewEntry &view) const {
-		auto view_id = view.GetViewId();
-		RemapIdentifier(view_id);
-		return view_id;
-	}
-};
+TableIndex DuckLakeCommitState::GetViewId(DuckLakeViewEntry &view) const {
+	auto view_id = view.GetViewId();
+	RemapIdentifier(view_id);
+	return view_id;
+}
 
 void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableDataChanges &table_changes,
                                           TransactionChangeInformation &changes) const {
@@ -2048,11 +2033,6 @@ DuckLakeFileInfo DuckLakeTransaction::GetNewDataFile(const DuckLakeDataFile &fil
 	return data_file;
 }
 
-struct NewDataInfo {
-	vector<DuckLakeFileInfo> new_files;
-	vector<DuckLakeInlinedDataInfo> new_inlined_data;
-};
-
 NewDataInfo DuckLakeTransaction::GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
                                                  optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats) {
 	NewDataInfo result;
@@ -2534,8 +2514,73 @@ bool DuckLakeTransaction::TryFlushChangesViaTempTables() {
 	if (!metadata_manager->SupportsTempTableCommit()) {
 		return false;
 	}
-	// implementation lands in a later step
-	return false;
+	auto context_ref = context.lock();
+	if (!context_ref) {
+		return false;
+	}
+
+	auto uuid = ducklake_catalog.CommitSession().GetUUID();
+	DuckLakeCommitSerializer serializer(*this, *metadata_manager, uuid);
+	if (!serializer.CanHandle()) {
+		return false;
+	}
+
+	DuckLakeCommitSerializerResult ser_result;
+	try {
+		auto txn_changes = GetTransactionChanges();
+		ser_result = serializer.Serialize(txn_changes);
+
+		string populated_kinds_csv;
+		bool first_kind = true;
+		for (auto &name : ser_result.populated_table_names) {
+			if (!first_kind) {
+				populated_kinds_csv.push_back(',');
+			}
+			first_kind = false;
+			populated_kinds_csv.append(name);
+		}
+		auto &m = ser_result.meta;
+		auto retry_config = DuckLakeRetryConfig::LoadFromContext(*context_ref);
+		string commit_sql =
+		    "SELECT snapshot_id, schema_version, retry_count, next_catalog_id, next_file_id FROM ducklake_commit('" +
+		    uuid + "', " + DuckLakeUtil::SQLLiteralToString(ser_result.staging_sql) + ", " +
+		    DuckLakeUtil::SQLLiteralToString(populated_kinds_csv) + ", " + std::to_string(m.snapshot_id_was) + ", " +
+		    std::to_string(m.schema_version_was) + ", " + (m.schema_changed ? "TRUE" : "FALSE") + ", " +
+		    (m.has_inlined_flush ? "TRUE" : "FALSE") + ", " + std::to_string(m.next_catalog_id) + ", " +
+		    std::to_string(m.next_file_id) + ", " + std::to_string(m.next_catalog_id_baseline) + ", " +
+		    std::to_string(m.next_file_id_baseline) + ", " + std::to_string(retry_config.max_retry_count) + ", " +
+		    std::to_string(retry_config.retry_wait_ms) + ", " + std::to_string(retry_config.retry_backoff) + ");";
+		auto commit_result_set = metadata_manager->Query(commit_sql);
+		if (commit_result_set->HasError()) {
+			commit_result_set->GetErrorObject().Throw("ducklake_commit failed: ");
+		}
+		auto chunk = commit_result_set->Fetch();
+		if (!chunk || chunk->size() != 1) {
+			throw InternalException("ducklake_commit returned an unexpected row count");
+		}
+		auto new_snapshot_id = chunk->GetValue(0, 0).GetValue<int64_t>();
+		auto new_schema_version = chunk->GetValue(1, 0).GetValue<int64_t>();
+		auto committed_next_catalog_id = chunk->GetValue(3, 0).GetValue<int64_t>();
+		auto committed_next_file_id = chunk->GetValue(4, 0).GetValue<int64_t>();
+
+		bool flushed_inlined = !flushed_inlined_tables.empty();
+		if (metadata_manager->TakePendingCacheClear()) {
+			metadata_manager->ClearCache();
+		}
+		if (connection && connection->context->transaction.HasActiveTransaction()) {
+			connection->Commit();
+		}
+		if (flushed_inlined) {
+			metadata_manager->DropEmptySupersededInlinedTables();
+		}
+		catalog_version = new_schema_version;
+		ducklake_catalog.SetCommittedSnapshotId(new_snapshot_id);
+		return true;
+	} catch (...) {
+		ducklake_catalog.CommitSession().Reset();
+		CleanupFiles();
+		throw;
+	}
 }
 
 void DuckLakeTransaction::FlushChanges() {

@@ -280,6 +280,15 @@ public:
 	const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &GetNewTables() {
 		return new_tables;
 	}
+	bool HasOnlyDataChanges() const;
+	bool HasFlushedInlinedTables() const {
+		return !flushed_inlined_tables.empty();
+	}
+	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
+	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
+	vector<DuckLakeDeleteFileInfo>
+	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
+	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
 	//! Returns the current version of the catalog:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
@@ -310,11 +319,6 @@ private:
 	void FlushNewPartitionKey(DuckLakeSnapshot &commit_snapshot, DuckLakeTableEntry &table);
 	DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                TableIndex table_id, optional_idx row_id_start);
-	NewDataInfo GetNewDataFiles(string &batch_query, DuckLakeCommitState &commit_state,
-	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats);
-	vector<DuckLakeDeleteFileInfo>
-	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
-	                  vector<DuckLakeOverwrittenDeleteFile> &overwritten_delete_files) const;
 	DuckLakeDeleteFileInfo GetNewDeleteFile(TableIndex table_id, const DuckLakeCommitState &commit_state,
 	                                        const DuckLakeDeleteFile &file) const;
 	string UpdateGlobalTableStats(TableIndex table_id, const DuckLakeNewGlobalStats &new_stats);
