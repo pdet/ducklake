@@ -137,8 +137,14 @@ def wait_for_port(port: int, timeout: float, sidecar: subprocess.Popen) -> bool:
 
 def start_sidecar(duckdb_bin: Path, port: int, token: str, log_path: Path) -> subprocess.Popen:
     sql = (
+        "SET GLOBAL autoinstall_known_extensions = false;\n"
+        "SET GLOBAL httpfs_client_implementation='curl';\n"
+        "SET GLOBAL httpfs_connection_caching=true;\n"
         "LOAD httpfs;\n"
         "LOAD quack;\n"
+        # ducklake_commit() is invoked server-side as a single RPC per commit;
+        # the sidecar must have the ducklake extension loaded to bind it.
+        "LOAD ducklake;\n"
         f"SELECT * FROM quack_serve('quack://localhost:{port}/', token := '{token}');\n"
         # Long-running query that yields no rows — keeps the duckdb process alive
         # while the unittest runs against the server.
