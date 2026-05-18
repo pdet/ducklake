@@ -12,6 +12,31 @@ namespace duckdb {
 QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : DuckLakeMetadataManager(transaction) {
 }
 
+bool QuackMetadataManager::SupportsTempTableCommit() const {
+	lock_guard<mutex> lock(probe_lock);
+	if (checked_ducklake_in_server) {
+		// We already know if ducklake is loaded in server or not
+		return is_ducklake_in_server;
+	}
+	// we need to check if ducklake is loaded in the server.
+	checked_ducklake_in_server = true;
+	auto &ducklake_catalog = transaction.GetCatalog();
+	auto metadata_catalog_name_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
+	string ducklake_commit_query = "SELECT count(*) FROM duckdb_functions() WHERE function_name = 'ducklake_commit';";
+	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
+	                                  SQLString(ducklake_commit_query));
+	auto result = transaction.ExecuteRaw(std::move(wrapper));
+	if (result->HasError()) {
+		return false;
+	}
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	is_ducklake_in_server = chunk->GetValue(0, 0).GetValue<int64_t>() > 0;
+	return is_ducklake_in_server;
+}
+
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/mutex.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
@@ -23,6 +24,7 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool SupportsTempTableCommit() const override;
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> Query(string &query) override;
@@ -33,6 +35,11 @@ public:
 
 protected:
 	string MetadataExistsQuery() const override;
+
+private:
+	mutable mutex probe_lock;
+	mutable bool checked_ducklake_in_server = false;
+	mutable bool is_ducklake_in_server = false;
 };
 
 } // namespace duckdb
