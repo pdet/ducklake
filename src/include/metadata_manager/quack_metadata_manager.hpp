@@ -36,8 +36,18 @@ public:
 
 	bool MetadataExists() override;
 
+	idx_t GetRoundTripCount() const {
+		return round_trip_count;
+	}
+	void ResetRoundTripCount() {
+		round_trip_count = 0;
+	}
+
 protected:
 	string MetadataExistsQuery() const override;
+
+private:
+	idx_t round_trip_count = 0;
 };
 
 } // namespace duckdb

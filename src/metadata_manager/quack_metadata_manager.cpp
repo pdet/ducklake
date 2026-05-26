@@ -12,6 +12,7 @@ QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : D
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
+	round_trip_count++;
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
@@ -30,6 +31,7 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attach_query) {
+	round_trip_count++;
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
@@ -105,6 +107,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
 	DuckLakeStagedCommit staged(flush_transaction.GenerateUUID());
 	string batch = staged.Build(flush_transaction, transaction_changes, transaction_snapshot, retry_config);
+	batch += "CALL quack_clear_cache();";
 	auto result = Query(batch);
 	if (!result || result->HasError()) {
 		if (result) {
@@ -119,16 +122,18 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	auto committed_snapshot_id = chunk->GetValue(0, 0).GetValue<int64_t>();
 	auto committed_schema_version = chunk->GetValue(1, 0).GetValue<int64_t>();
 	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
-	flush_transaction.GetCatalog().SetCommittedSnapshotId(static_cast<idx_t>(committed_snapshot_id));
+	auto next_catalog_id = chunk->GetValue(3, 0).GetValue<int64_t>();
+	auto next_file_id = chunk->GetValue(4, 0).GetValue<int64_t>();
+	fprintf(stderr, "QUACK RT count: %llu\n", (unsigned long long)round_trip_count);
+	ResetRoundTripCount();
+	DuckLakeSnapshot committed_snapshot(static_cast<idx_t>(committed_snapshot_id),
+	                                    static_cast<idx_t>(committed_schema_version),
+	                                    static_cast<idx_t>(next_catalog_id), static_cast<idx_t>(next_file_id));
+	flush_transaction.GetCatalog().SetCommittedSnapshot(committed_snapshot);
 	flush_transaction.ApplyServerSideCommit(static_cast<idx_t>(committed_schema_version));
 	if (had_flushes) {
-		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching
-		// references
 		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
 	}
-	// We got clear the cache, if this creates inlined tables (e.g., `ducklake_inlined_data_<id>_<v>` or
-	// `ducklake_inlined_delete_<id>`)
-	ClearCache();
 }
 
 bool QuackMetadataManager::MetadataExists() {

@@ -44,6 +44,10 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("had_flushes");
 	return_types.emplace_back(LogicalType::BOOLEAN);
+	names.emplace_back("next_catalog_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("next_file_id");
+	return_types.emplace_back(LogicalType::BIGINT);
 	return std::move(result);
 }
 
@@ -67,6 +71,8 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	output.SetValue(0, 0, Value::BIGINT(result.committed_snapshot_id));
 	output.SetValue(1, 0, Value::BIGINT(result.committed_schema_version));
 	output.SetValue(2, 0, Value::BOOLEAN(result.had_flushes));
+	output.SetValue(3, 0, Value::BIGINT(result.next_catalog_id));
+	output.SetValue(4, 0, Value::BIGINT(result.next_file_id));
 }
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()

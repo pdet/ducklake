@@ -20,6 +20,8 @@ class ClientContext;
 struct DuckLakeServerSideCommitResult {
 	int64_t committed_snapshot_id = 0;
 	int64_t committed_schema_version = 0;
+	int64_t next_catalog_id = 0;
+	int64_t next_file_id = 0;
 	bool had_flushes = false;
 };
 
@@ -85,7 +87,8 @@ private:
 	//! Build a full DuckLakeStats map from global stats.
 	unique_ptr<DuckLakeStats> BuildStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats);
 	//! Assemble the DuckLakeCommitContext with all closures.
-	DuckLakeCommitContext BuildContext(idx_t &committed_snapshot_id, idx_t &committed_schema_version);
+	DuckLakeCommitContext BuildContext(idx_t &committed_snapshot_id, idx_t &committed_schema_version,
+	                                   idx_t &committed_next_catalog_id, idx_t &committed_next_file_id);
 	//! Build INSERT SQL from staged inlined tuples.
 	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
 	//! Resolve and cache the latest inlined-data table name.

@@ -93,7 +93,6 @@ DuckLakeColumnStats StatsFromRow(const LogicalType &type, const Value &column_si
 	return stats;
 }
 
-
 //! Read the 9 shared DuckLakeDeleteFile fields starting at `base` column.
 //! Layout: file_name, format, delete_count, file_size_bytes, footer_size,
 //! encryption_key, begin_snapshot, max_snapshot, source.
@@ -216,13 +215,18 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
+	idx_t committed_next_catalog_id = 0;
+	idx_t committed_next_file_id = 0;
 	state->Commit(transaction_snapshot, transaction_changes, retry_config,
-	              BuildContext(committed_snapshot_id, committed_schema_version));
+	              BuildContext(committed_snapshot_id, committed_schema_version, committed_next_catalog_id,
+	                           committed_next_file_id));
 
 	RunQuery(DuckLakeStagedTable::DropAllSql(schema_id, identifier_suffix), "drop staging");
 	DuckLakeServerSideCommitResult result;
 	result.committed_snapshot_id = static_cast<int64_t>(committed_snapshot_id);
 	result.committed_schema_version = static_cast<int64_t>(committed_schema_version);
+	result.next_catalog_id = static_cast<int64_t>(committed_next_catalog_id);
+	result.next_file_id = static_cast<int64_t>(committed_next_file_id);
 	result.had_flushes = !state->flushed_inlined_tables.empty();
 	return result;
 }
@@ -260,9 +264,8 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
 	if (schema_version < 0) {
-		transaction_snapshot.schema_version = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
-		                                         ? transaction_snapshot.schema_version
-		                                         : 0;
+		transaction_snapshot.schema_version =
+		    transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX ? transaction_snapshot.schema_version : 0;
 	} else {
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
@@ -286,8 +289,8 @@ string DuckLakeServerSideCommit::BuildHydrationBatch() {
 	append(Select("data_file_id, table_id, column_id, column_size_bytes, value_count, "
 	              "null_count, min_value, max_value, contains_nan, extra_stats",
 	              DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS));
-	append(Select("local_file_id, partition_column_idx, partition_value",
-	              DuckLakeStagedTableType::DATA_FILE_PARTITION, "ORDER BY local_file_id, partition_column_idx"));
+	append(Select("local_file_id, partition_column_idx, partition_value", DuckLakeStagedTableType::DATA_FILE_PARTITION,
+	              "ORDER BY local_file_id, partition_column_idx"));
 	append(Select("attached_local_file_id, file_name, format, delete_count, file_size_bytes, "
 	              "footer_size, encryption_key, begin_snapshot, max_snapshot, source",
 	              DuckLakeStagedTableType::DELETE_FILE, "WHERE attached_local_file_id IS NOT NULL"));
@@ -296,16 +299,16 @@ string DuckLakeServerSideCommit::BuildHydrationBatch() {
 	              "begin_snapshot, compaction_id",
 	              DuckLakeStagedTableType::DATA_FILE, "ORDER BY table_id, file_order"));
 	append(Select("table_id, has_preserved_row_ids", DuckLakeStagedTableType::INLINED_DATA));
-	append(Select("table_id, preserved_row_id, value_literals",
-	              DuckLakeStagedTableType::INLINED_ROW, "ORDER BY table_id, row_order"));
+	append(Select("table_id, preserved_row_id, value_literals", DuckLakeStagedTableType::INLINED_ROW,
+	              "ORDER BY table_id, row_order"));
 	append(Select("table_id, column_id, column_size_bytes, has_num_values, num_values, has_null_count, "
 	              "null_count, has_min, min_value, has_max, max_value, has_contains_nan, contains_nan, "
 	              "any_valid, extra_stats",
 	              DuckLakeStagedTableType::INLINED_COLUMN_STATS));
-	append(Select("table_id, inlined_table_name, deleted_row_id",
-	              DuckLakeStagedTableType::INLINED_DELETE, "ORDER BY table_id, inlined_table_name"));
-	append(Select("table_id, file_id, deleted_row_id",
-	              DuckLakeStagedTableType::INLINED_FILE_DELETE, "ORDER BY table_id, file_id"));
+	append(Select("table_id, inlined_table_name, deleted_row_id", DuckLakeStagedTableType::INLINED_DELETE,
+	              "ORDER BY table_id, inlined_table_name"));
+	append(Select("table_id, file_id, deleted_row_id", DuckLakeStagedTableType::INLINED_FILE_DELETE,
+	              "ORDER BY table_id, file_id"));
 	append(Select("table_id, data_file_path, data_file_id, file_name, format, delete_count, file_size_bytes, "
 	              "footer_size, encryption_key, begin_snapshot, max_snapshot, source, "
 	              "overwrites_existing_delete, overwrite_delete_file_id, overwrite_delete_file_path",
@@ -347,9 +350,9 @@ void DuckLakeServerSideCommit::ProcessColumnTypes(MaterializedQueryResult &resul
 }
 
 void DuckLakeServerSideCommit::ProcessStagedDataFiles(MaterializedQueryResult &stats_result,
-                                                       MaterializedQueryResult &part_result,
-                                                       MaterializedQueryResult &attached_result,
-                                                       MaterializedQueryResult &files_result) {
+                                                      MaterializedQueryResult &part_result,
+                                                      MaterializedQueryResult &attached_result,
+                                                      MaterializedQueryResult &files_result) {
 	map<DataFileIndex, map<FieldIndex, DuckLakeColumnStats>> per_file_stats;
 	{
 		for (auto &row : stats_result) {
@@ -359,10 +362,10 @@ void DuckLakeServerSideCommit::ProcessStagedDataFiles(MaterializedQueryResult &s
 			if (type_it == column_types.end()) {
 				continue;
 			}
-			per_file_stats[local_file_id].emplace(key.column_id, StatsFromRow(type_it->second, row.GetBaseValue(3),
-			                                                               row.GetBaseValue(4), row.GetBaseValue(5),
-			                                                               row.GetBaseValue(6), row.GetBaseValue(7),
-			                                                               row.GetBaseValue(8), row.GetBaseValue(9)));
+			per_file_stats[local_file_id].emplace(
+			    key.column_id,
+			    StatsFromRow(type_it->second, row.GetBaseValue(3), row.GetBaseValue(4), row.GetBaseValue(5),
+			                 row.GetBaseValue(6), row.GetBaseValue(7), row.GetBaseValue(8), row.GetBaseValue(9)));
 		}
 	}
 
@@ -631,7 +634,7 @@ void DuckLakeServerSideCommit::ProcessStagedCompactions(MaterializedQueryResult 
 }
 
 void DuckLakeServerSideCommit::ProcessStagedNameMaps(MaterializedQueryResult &entries_result,
-                                                      MaterializedQueryResult &header_result) {
+                                                     MaterializedQueryResult &header_result) {
 	map<idx_t, vector<EntryShell>> entries_by_map;
 	{
 		for (auto &row : entries_result) {
@@ -758,7 +761,9 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 }
 
 DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_snapshot_id,
-                                                             idx_t &committed_schema_version) {
+                                                             idx_t &committed_schema_version,
+                                                             idx_t &committed_next_catalog_id,
+                                                             idx_t &committed_next_file_id) {
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
@@ -815,8 +820,11 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.set_catalog_version = [&committed_schema_version](idx_t v) {
 		committed_schema_version = v;
 	};
-	ctx.set_committed_snapshot_id = [&committed_snapshot_id](idx_t v) {
+	ctx.set_committed_snapshot_id = [&committed_snapshot_id, &committed_next_catalog_id, &committed_next_file_id,
+	                                 this](idx_t v) {
 		committed_snapshot_id = v;
+		committed_next_catalog_id = transaction_snapshot.next_catalog_id;
+		committed_next_file_id = transaction_snapshot.next_file_id;
 	};
 	return ctx;
 }

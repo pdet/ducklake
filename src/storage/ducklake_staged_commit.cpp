@@ -526,8 +526,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction,
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
 	                            DuckLakeUtil::SQLLiteralToString(identifier_suffix),
 	                            DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()),
-	                            schema_version_param, retry_config.max_retry_count,
-	                            retry_config.retry_wait_ms, retry_config.retry_backoff);
+	                            schema_version_param, retry_config.max_retry_count, retry_config.retry_wait_ms,
+	                            retry_config.retry_backoff);
 	return batch;
 }
 

@@ -217,10 +217,23 @@ public:
 
 	void SetCommittedSnapshotId(idx_t value) {
 		lock_guard<mutex> guard(commit_lock);
-		last_committed_snapshot = value;
+		last_committed_snapshot_id = value;
 	}
 
-	//! Whether the metadata server can execute the commit retry loop server-side.
+	void SetCommittedSnapshot(DuckLakeSnapshot snapshot) {
+		lock_guard<mutex> guard(commit_lock);
+		last_committed_snapshot_id = snapshot.snapshot_id;
+		cached_committed_snapshot = snapshot;
+	}
+
+	unique_ptr<DuckLakeSnapshot> GetCachedCommittedSnapshot() const {
+		lock_guard<mutex> guard(commit_lock);
+		if (cached_committed_snapshot.snapshot_id != DConstants::INVALID_INDEX) {
+			return make_uniq<DuckLakeSnapshot>(cached_committed_snapshot);
+		}
+		return nullptr;
+	}
+
 	bool RetrialsServerSide() const {
 		return retrials_server_side;
 	}
@@ -230,8 +243,8 @@ public:
 
 	Value GetLastCommittedSnapshotId() const {
 		lock_guard<mutex> guard(commit_lock);
-		if (last_committed_snapshot.IsValid()) {
-			return Value::UBIGINT(last_committed_snapshot.GetIndex());
+		if (last_committed_snapshot_id.IsValid()) {
+			return Value::UBIGINT(last_committed_snapshot_id.GetIndex());
 		}
 		return Value();
 	}
@@ -314,7 +327,8 @@ private:
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
-	optional_idx last_committed_snapshot;
+	optional_idx last_committed_snapshot_id;
+	DuckLakeSnapshot cached_committed_snapshot;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
 };
