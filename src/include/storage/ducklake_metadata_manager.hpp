@@ -178,20 +178,15 @@ protected:
 	void SubstituteSnapshotPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 
 public:
-	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
-	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
-	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
 	static string GlobalTableStatsQuery();
-	//! Pure parsers for the results of the above queries.
+
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
-	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
-	//! executor (responsible for `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` substitution) plus the
-	//! data path and separator used for resolving stored relative paths.
+
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
@@ -224,22 +219,13 @@ public:
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed);
 	static string DropMacros(const set<MacroIndex> &ids);
-
-	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
-	//! since path resolution depends on the catalog's data_path / separator (instance state).
 	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
 	                              const vector<DuckLakePath> &resolved_paths);
-	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
-	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
 	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
 	                             const vector<DuckLakePath> &resolved_paths);
 	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
-	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
-	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
 	                                    const vector<DuckLakePartitionInfo> &new_partitions);
-	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
-	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
 	                               const vector<DuckLakeSortInfo> &new_sorts);
 	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
@@ -249,12 +235,9 @@ public:
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 vector<DuckLakeSchemaInfo> &new_schemas_result);
-	//! SQL branch of WriteNewDataFiles, shared with the server-side commit path. Returns SQL with
-	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
-	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
-	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
+static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
 	                                        const vector<DuckLakePath> &resolved_paths);
-	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
+	//! Opt-in fast-path, if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
 	                        vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -287,31 +270,24 @@ public:
 	static string LatestInlinedTableQuery(idx_t table_id);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	static string DropDeleteFiles(const set<DataFileIndex> &dropped_files);
-	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
-	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
-	//! Caller supplies one resolved path per compaction, in the same order.
 	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
 	                                 const vector<DuckLakePath> &resolved_paths);
 	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
-	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
-	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
 	                               const vector<DuckLakePath> &resolved_paths);
 	virtual string InsertSnapshot();
 	virtual string WriteSnapshotChanges(const SnapshotChangeInfo &change_info,
 	                                    const DuckLakeSnapshotCommit &commit_info);
-	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
-	//! server-side commit path. The virtuals above delegate to these and only exist so backends
-	//! (e.g. Postgres) can override the dispatch — there are no overrides for these three today.
-	static string InsertSnapshotSql();
+
+static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);

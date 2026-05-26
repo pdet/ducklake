@@ -48,28 +48,35 @@ private:
 
 	//! Read commit metadata (author, message, snapshot ids).
 	void ReadCommitHeader();
-	//! Load column types for every table touched in this commit.
-	void ReadColumnTypes();
-	//! Read staged data files and their per-file column stats.
-	void ReadStagedDataFiles();
-	//! Read staged inlined data rows, row ids, and column stats.
-	void ReadStagedInlinedData();
-	//! Read staged inlined row deletes grouped by table.
-	void ReadStagedInlinedDeletes();
-	//! Read staged inlined file-level deletes grouped by table.
-	void ReadStagedInlinedFileDeletes();
-	//! Read staged delete files not attached to data files.
-	void ReadStagedDeleteFiles();
-	//! Read staged dropped file paths and tables deleted from.
-	void ReadStagedDroppedFiles();
-	//! Read staged flushed inlined table entries.
-	void ReadStagedFlushedInlinedTables();
-	//! Read staged compaction headers and their source files.
-	void ReadStagedCompactions();
-	//! Read staged name maps and rebuild entry trees.
-	void ReadStagedNameMaps();
-	//! Load current global table stats from the metadata catalog.
-	void ReadExistingTableStats();
+	//! Build the batched SQL for all hydration queries after the commit header.
+	string BuildHydrationBatch();
+	//! Advance to the next result in the chain; throw on error or missing.
+	MaterializedQueryResult &AdvanceResult(QueryResult *&cursor, const char *what);
+
+	//! Process column types from a batched result.
+	void ProcessColumnTypes(MaterializedQueryResult &result);
+	//! Process staged data files and their per-file column stats.
+	void ProcessStagedDataFiles(MaterializedQueryResult &stats_result, MaterializedQueryResult &part_result,
+	                            MaterializedQueryResult &attached_result, MaterializedQueryResult &files_result);
+	//! Process staged inlined data rows, row ids, and column stats.
+	void ProcessStagedInlinedData(MaterializedQueryResult &meta_result, MaterializedQueryResult &rows_result,
+	                              MaterializedQueryResult &inlined_stats_result);
+	//! Process staged inlined row deletes grouped by table.
+	void ProcessStagedInlinedDeletes(MaterializedQueryResult &result);
+	//! Process staged inlined file-level deletes grouped by table.
+	void ProcessStagedInlinedFileDeletes(MaterializedQueryResult &result);
+	//! Process staged delete files not attached to data files.
+	void ProcessStagedDeleteFiles(MaterializedQueryResult &result);
+	//! Process staged dropped file paths and tables deleted from.
+	void ProcessStagedDroppedFiles(MaterializedQueryResult &dropped_result, MaterializedQueryResult &tables_result);
+	//! Process staged flushed inlined table entries.
+	void ProcessStagedFlushedInlinedTables(MaterializedQueryResult &result);
+	//! Process staged compaction headers and their source files.
+	void ProcessStagedCompactions(MaterializedQueryResult &header_result, MaterializedQueryResult &sources_result);
+	//! Process staged name maps and rebuild entry trees.
+	void ProcessStagedNameMaps(MaterializedQueryResult &entries_result, MaterializedQueryResult &header_result);
+	//! Process current global table stats from a batched result.
+	void ProcessExistingTableStats(MaterializedQueryResult &result);
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
