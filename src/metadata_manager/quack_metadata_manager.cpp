@@ -107,7 +107,6 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
 	DuckLakeStagedCommit staged(flush_transaction.GenerateUUID());
 	string batch = staged.Build(flush_transaction, transaction_changes, transaction_snapshot, retry_config);
-	batch += "CALL quack_clear_cache();";
 	auto result = Query(batch);
 	if (!result || result->HasError()) {
 		if (result) {
@@ -124,8 +123,6 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
 	auto next_catalog_id = chunk->GetValue(3, 0).GetValue<int64_t>();
 	auto next_file_id = chunk->GetValue(4, 0).GetValue<int64_t>();
-	fprintf(stderr, "QUACK RT count: %llu\n", (unsigned long long)round_trip_count);
-	ResetRoundTripCount();
 	DuckLakeSnapshot committed_snapshot(static_cast<idx_t>(committed_snapshot_id),
 	                                    static_cast<idx_t>(committed_schema_version),
 	                                    static_cast<idx_t>(next_catalog_id), static_cast<idx_t>(next_file_id));
@@ -134,6 +131,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	if (had_flushes) {
 		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
 	}
+	ClearCache();
 }
 
 bool QuackMetadataManager::MetadataExists() {

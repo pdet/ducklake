@@ -1474,12 +1474,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 	}
 	lock_guard<mutex> guard(snapshot_lock);
 	if (!snapshot) {
-		auto cached = ducklake_catalog.GetCachedCommittedSnapshot();
-		if (cached) {
-			snapshot = std::move(cached);
-		} else {
-			snapshot = metadata_manager->GetSnapshot();
-		}
+		snapshot = metadata_manager->GetSnapshot();
 	}
 	return *snapshot;
 }
