@@ -35,6 +35,10 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
+	DuckLakeMetadata LoadDuckLake() override;
+	DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot) override;
+	unique_ptr<DuckLakeSnapshot> GetSnapshot() override;
+	vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot) override;
 
 	idx_t GetRoundTripCount() const {
 		return round_trip_count;
@@ -48,6 +52,27 @@ protected:
 
 private:
 	idx_t round_trip_count = 0;
+
+	struct CachedInitData {
+		bool valid = false;
+		bool metadata_exists = false;
+		bool has_ducklake_commit = false;
+		DuckLakeMetadata metadata;
+	};
+	CachedInitData cached_init;
+
+	struct CachedCatalogData {
+		bool valid = false;
+		DuckLakeSnapshot snapshot;
+		DuckLakeCatalogInfo catalog;
+		vector<DuckLakeGlobalStatsInfo> global_stats;
+	};
+	CachedCatalogData cached_catalog;
+
+	void RunCombinedInit();
+	void RunCombinedCatalogLoad();
+	static DuckLakeCatalogInfo ParseCatalogFromRow(QueryResult &result, const string &data_path,
+	                                               const string &separator);
 };
 
 } // namespace duckdb
