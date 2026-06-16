@@ -73,8 +73,7 @@ static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx
 static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, bool parent_is_list = false) {
 	for (auto &col : columns) {
 		// basically array, element becomes list
-		if (parent_is_list &&
-		    (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
+		if (parent_is_list && (col.name.GetIdentifierName() == "array" || col.name.GetIdentifierName() == "element")) {
 			col.name = "list";
 		}
 		if (!col.children.empty()) {
@@ -492,40 +491,58 @@ vector<MultiFileColumnDefinition> CreateNewMapping(ClientContext &context, Multi
 	return MapColumns(context, reader_data, global_map, name_map.column_maps);
 }
 
+DuckLakeScanProjection DuckLakeMultiFileReader::ComputeScanProjection(const DuckLakeMultiFileList &file_list,
+                                                                      const vector<ColumnIndex> &global_column_ids) {
+	DuckLakeScanProjection projection;
+	// For deletion scans, we may need to internally project row_id for snapshot lookups
+	// Check if this is a deletion scan and if row_id is not already in the user's query
+	if (!file_list.IsDeleteScan()) {
+		return projection;
+	}
+	// Locate the rowid and snapshot_id virtual columns by their position in global_column_ids, which is the
+	// order in which the columns appear in the FinalizeChunk output_chunk. The per-file local virtual-column
+	// index cannot be used: the snapshot_id virtual column is emitted as a constant expression and does not
+	// advance the local column counter, so it does not line up with the output_chunk layout.
+	bool has_rowid = false;
+	for (idx_t out_idx = 0; out_idx < global_column_ids.size(); out_idx++) {
+		auto primary_index = global_column_ids[out_idx].GetPrimaryIndex();
+		if (primary_index == COLUMN_IDENTIFIER_ROW_ID) {
+			has_rowid = true;
+			projection.deletion_scan_rowid_col = out_idx;
+		} else if (primary_index == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+			projection.deletion_scan_snapshot_col = out_idx;
+		}
+	}
+	// We need internal row_id if it's not in the user's query
+	projection.internally_projected_rowid = !has_rowid;
+	return projection;
+}
+
+unique_ptr<MultiFileReaderGlobalState>
+DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
+                                               const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
+                                               const vector<MultiFileColumnDefinition> &global_columns,
+                                               const vector<ColumnIndex> &global_column_ids) {
+	// The projection state is a scan-wide constant: compute it once here (single-threaded) so that the parallel
+	// FinalizeChunk calls only read it, instead of every CreateMapping racily writing it on the shared reader.
+	auto projection = ComputeScanProjection(file_list.Cast<DuckLakeMultiFileList>(), global_column_ids);
+	return make_uniq<DuckLakeMultiFileReaderGlobalState>(vector<LogicalType>(), &file_list, projection);
+}
+
 ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
     const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
     const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
 	NormalizeListChildNames(reader_data.reader->columns);
 
-	// For deletion scans, we may need to internally project row_id for snapshot lookups
-	// Check if this is a deletion scan and if row_id is not already in the user's query
+	// For deletion scans, we may need to internally project row_id for snapshot lookups. The projection is a
+	// scan-wide constant (also computed once in InitializeGlobalState and read in FinalizeChunk); recompute it here
+	// locally to decide whether to extend the column ids - this writes no shared state on the reader.
 	auto &file_list = multi_file_list.Cast<DuckLakeMultiFileList>();
-	bool needs_internal_rowid = false;
-	if (file_list.IsDeleteScan()) {
-		// Locate the rowid and snapshot_id virtual columns by their position in global_column_ids, which is the
-		// order in which the columns appear in the FinalizeChunk output_chunk. The per-file local virtual-column
-		// index cannot be used: the snapshot_id virtual column is emitted as a constant expression and does not
-		// advance the local column counter, so it does not line up with the output_chunk layout.
-		deletion_scan_rowid_col = optional_idx();
-		deletion_scan_snapshot_col = optional_idx();
-		bool has_rowid = false;
-		for (idx_t out_idx = 0; out_idx < global_column_ids.size(); out_idx++) {
-			auto primary_index = global_column_ids[out_idx].GetPrimaryIndex();
-			if (primary_index == COLUMN_IDENTIFIER_ROW_ID) {
-				has_rowid = true;
-				deletion_scan_rowid_col = out_idx;
-			} else if (primary_index == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
-				deletion_scan_snapshot_col = out_idx;
-			}
-		}
-		// We need internal row_id if it's not in the user's query
-		needs_internal_rowid = !has_rowid;
-	}
+	bool needs_internal_rowid = ComputeScanProjection(file_list, global_column_ids).internally_projected_rowid;
 
 	// Create extended column ids if we need to internally project row_id
 	vector<ColumnIndex> extended_column_ids;
-	internally_projected_rowid = needs_internal_rowid;
 	if (needs_internal_rowid) {
 		extended_column_ids = global_column_ids;
 		extended_column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
@@ -632,10 +649,11 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
 
 void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader,
                                                           const MultiFileReaderData &reader_data, DataChunk &chunk,
+                                                          const DuckLakeScanProjection &projection,
                                                           optional_idx rowid_col_override) const {
 	auto &delete_filter = static_cast<DuckLakeDeleteFilter &>(*reader.deletion_filter);
-	optional_idx snapshot_col_idx = deletion_scan_snapshot_col;
-	optional_idx rowid_col_idx = rowid_col_override.IsValid() ? rowid_col_override : deletion_scan_rowid_col;
+	optional_idx snapshot_col_idx = projection.deletion_scan_snapshot_col;
+	optional_idx rowid_col_idx = rowid_col_override.IsValid() ? rowid_col_override : projection.deletion_scan_rowid_col;
 
 	if (delete_filter.delete_data->scan_snapshot_map.empty() || !snapshot_col_idx.IsValid() ||
 	    !rowid_col_idx.IsValid()) {
@@ -690,9 +708,17 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
                                             DataChunk &input_chunk, DataChunk &output_chunk,
                                             ExpressionExecutor &executor,
                                             optional_ptr<MultiFileReaderGlobalState> global_state) {
+	// The per-scan projection state lives on the (single, single-threaded) reader global state, so reading it here
+	// from the parallel FinalizeChunk calls does not race. It is null only if no global state was initialized, in
+	// which case there is nothing to internally project.
+	DuckLakeScanProjection projection;
+	if (global_state) {
+		projection = global_state->Cast<DuckLakeMultiFileReaderGlobalState>().projection;
+	}
+
 	// If we internally projected row_id for deletion scan snapshot lookups,
 	// we need to use a temp chunk that includes the row_id column
-	if (internally_projected_rowid && read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS) {
+	if (projection.internally_projected_rowid && read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS) {
 		// Create a temp chunk with user columns + internally projected row_id
 		vector<LogicalType> temp_types;
 		for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
@@ -711,7 +737,7 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		// The row_id column is at the last position in temp_chunk (we added it at the end)
 		if (reader.deletion_filter) {
 			idx_t internal_rowid_col = output_chunk.ColumnCount(); // last column in temp_chunk
-			GatherDeletionScanSnapshots(reader, reader_data, temp_chunk, internal_rowid_col);
+			GatherDeletionScanSnapshots(reader, reader_data, temp_chunk, projection, internal_rowid_col);
 		}
 
 		// Copy only user columns (excluding internally projected row_id) to output_chunk
@@ -726,7 +752,7 @@ void DuckLakeMultiFileReader::FinalizeChunk(ClientContext &context, const MultiF
 		// We need to gather the snapshot_id information correctly for scan deletions if the files are partial deletion
 		// files.
 		if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader.deletion_filter) {
-			GatherDeletionScanSnapshots(reader, reader_data, output_chunk);
+			GatherDeletionScanSnapshots(reader, reader_data, output_chunk, projection);
 		}
 	}
 }

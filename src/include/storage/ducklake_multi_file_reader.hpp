@@ -17,6 +17,29 @@ class DuckLakeMultiFileList;
 struct DuckLakeDeleteMap;
 class DuckLakeFieldData;
 
+//! Scan-wide constants derived from the projected columns + scan type. These are the same for every file in a scan,
+//! so they are computed once in InitializeGlobalState rather than stored on the (shared) reader.
+struct DuckLakeScanProjection {
+	//! Whether row_id was internally projected (not in the user's query) - needed for DCF queries over inlined
+	//! deletions
+	bool internally_projected_rowid = false;
+	//! For deletion scans: output_chunk column index of rowid in global_column_ids order, if projected
+	optional_idx deletion_scan_rowid_col;
+	//! For deletion scans: output_chunk column index of snapshot_id in global_column_ids order, if projected
+	optional_idx deletion_scan_snapshot_col;
+};
+
+//! Per-scan reader state. Created once (single-threaded) in InitializeGlobalState and read read-only by all parallel
+//! FinalizeChunk calls, so the per-scan projection state no longer races on the shared reader.
+struct DuckLakeMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
+	DuckLakeMultiFileReaderGlobalState(vector<LogicalType> extra_columns_p,
+	                                   optional_ptr<const MultiFileList> file_list_p,
+	                                   DuckLakeScanProjection projection_p)
+	    : MultiFileReaderGlobalState(std::move(extra_columns_p), file_list_p), projection(projection_p) {
+	}
+	DuckLakeScanProjection projection;
+};
+
 struct DuckLakeMultiFileReader : public MultiFileReader {
 public:
 	static constexpr column_t COLUMN_IDENTIFIER_SNAPSHOT_ID = UINT64_C(10000000000000000000);
@@ -49,6 +72,12 @@ public:
 	                                      optional_ptr<TableFilterSet> table_filters, ClientContext &context,
 	                                      MultiFileGlobalState &gstate) override;
 
+	unique_ptr<MultiFileReaderGlobalState>
+	InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
+	                      const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
+	                      const vector<MultiFileColumnDefinition> &global_columns,
+	                      const vector<ColumnIndex> &global_column_ids) override;
+
 	shared_ptr<BaseFileReader> CreateReader(ClientContext &context, GlobalTableFunctionState &gstate,
 	                                        const OpenFileInfo &file, idx_t file_idx,
 	                                        const MultiFileBindData &bind_data) override;
@@ -79,9 +108,15 @@ public:
 	                                                              bool emit_key_value = false);
 
 private:
+	//! Compute the scan-wide projection state (whether row_id is internally projected, and the output-chunk positions
+	//! of the rowid / snapshot_id columns for deletion scans). Depends only on the projected columns and the scan type,
+	//! so it is identical for every file in a scan.
+	static DuckLakeScanProjection ComputeScanProjection(const DuckLakeMultiFileList &file_list,
+	                                                    const vector<ColumnIndex> &global_column_ids);
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);
 	//! For deletion scans we need to get the snapshot_id values using per-row snapshot information
 	void GatherDeletionScanSnapshots(BaseFileReader &reader, const MultiFileReaderData &reader_data, DataChunk &chunk,
+	                                 const DuckLakeScanProjection &projection,
 	                                 optional_idx rowid_col_override = optional_idx()) const;
 
 private:
@@ -89,15 +124,6 @@ private:
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
-	//! For deletion scans: output_chunk column index of snapshot_id in global_column_ids order, if projected
-	//! (set in CreateMapping).
-	optional_idx deletion_scan_snapshot_col;
-	//! For deletion scans: output_chunk column index of rowid in global_column_ids order, if projected.
-	//! Same semantics as deletion_scan_snapshot_col.
-	optional_idx deletion_scan_rowid_col;
-	//! Whether row_id was internally projected (not in user's query)
-	//! This is necessary for DCF queries over inlined deletions
-	bool internally_projected_rowid = false;
 };
 
 } // namespace duckdb
