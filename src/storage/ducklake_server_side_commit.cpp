@@ -461,6 +461,7 @@ void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
 		entry.inlined_table.table_name = row.GetValue<string>(0);
 		entry.inlined_table.schema_version = AsIdx(row, 1);
 		entry.flush_snapshot_id = AsIdx(row, 2);
+		entry.drop_table = !row.GetValue<Value>(3).IsNull() && row.GetValue<bool>(3);
 		state->flushed_inlined_tables.push_back(std::move(entry));
 	}
 }

@@ -102,7 +102,7 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	case DuckLakeStagedTableType::TABLES_DELETED_FROM:
 		return "table_id BIGINT";
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
-		return "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT";
+		return "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT, drop_table BOOLEAN";
 	case DuckLakeStagedTableType::COMPACTION:
 		return "compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, "
 		       "row_id_start BIGINT, output_local_file_id BIGINT";
@@ -475,10 +475,10 @@ string DuckLakeStagedCommit::EmitNameMaps(const DuckLakeNameMapSet &name_maps) c
 string DuckLakeStagedCommit::EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed) const {
 	string sql;
 	for (auto &entry : flushed) {
-		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu, %llu);",
+		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu, %llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::FLUSHED_INLINED),
 		                          SQLString(entry.inlined_table.table_name), entry.inlined_table.schema_version,
-		                          entry.flush_snapshot_id);
+		                          entry.flush_snapshot_id, entry.drop_table ? "true" : "false");
 	}
 	return sql;
 }
