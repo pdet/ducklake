@@ -173,6 +173,13 @@ public:
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
+	//! Generates SQL  that drops the inlined-data tables flushed in this transaction
+	string GenerateDropFlushedInlinedTablesSql(const DuckLakeCommitContext &context) const;
+	//! True if any flushed inlined table in this transaction requested to be dropped.
+	bool HasInlinedTableDropsRequested() const;
+	//! Invalidates the cached schema for every schema version (used after dropping inlined-data tables).
+	static void InvalidateAllSchemaCaches(const DuckLakeCommitContext &context);
+
 	void CleanupFiles();
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;

@@ -1,0 +1,46 @@
+# name: test/sql/data_inlining/flush_drop_inlined_tables_concurrent_loss.test
+# description: drop_inlined_tables must not drop an inlined table that a concurrent txn inlined into
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_drop_concurrent_det', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+SELECT count(*) FROM ducklake.t
+
+# con2 inlines a new row into the SAME inlined table and commits at a later snapshot
+statement ok con2
+INSERT INTO ducklake.t VALUES (999)
+
+# con1 flushes at its (older) snapshot
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', drop_inlined_tables => true)
+
+statement ok con1
+COMMIT
+
+# row 999 must survive
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+1
+2
+3
+999

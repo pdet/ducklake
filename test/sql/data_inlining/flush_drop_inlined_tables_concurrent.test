@@ -1,0 +1,64 @@
+# name: test/sql/data_inlining/flush_drop_inlined_tables_concurrent.test
+# description: concurrent insert+flush(drop) stress test - no duplicates/corruption/deadlock under load
+# group: [data_inlining]
+
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_flush_drop', DATA_INLINING_ROW_LIMIT 100000)
+
+statement ok
+CREATE TABLE ducklake.events (id INTEGER, val VARCHAR)
+
+loop i 0 20
+
+statement ok
+INSERT INTO ducklake.events VALUES ({i}, 'pre')
+
+endloop
+
+# Concurrent: each thread inserts then flushes-with-drop.
+concurrentloop threadid 0 10
+
+loop j 0 5
+
+statement maybe
+INSERT INTO ducklake.events VALUES (1000 + {threadid} * 100 + {j}, 'concurrent')
+----
+
+statement maybe
+CALL ducklake_flush_inlined_data('ducklake', drop_inlined_tables => true)
+----
+
+endloop
+
+endloop
+
+# Final flush with drop
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', drop_inlined_tables => true)
+
+# No duplicate IDs
+query I
+SELECT count(*) FROM (SELECT id, count(*) cnt FROM ducklake.events GROUP BY id HAVING count(*) > 1)
+----
+0
+
+# The 20 pre-inserted rows are never concurrent with a drop, so they must all survive
+query I
+SELECT count(*) FROM ducklake.events WHERE val = 'pre'
+----
+20
+
+# Total rows cannot exceed 20 (pre) + 50 (concurrent: 10 threads * 5 inserts)
+query I
+SELECT count(*) <= 70 FROM ducklake.events
+----
+true

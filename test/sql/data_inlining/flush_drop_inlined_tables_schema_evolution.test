@@ -1,0 +1,48 @@
+# name: test/sql/data_inlining/flush_drop_inlined_tables_schema_evolution.test
+# description: dropping an inlined table from an older schema version must refresh the current version's cache
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_drop_schema_evo', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t1(i INTEGER)
+
+# t1 inlined at schema version 1 -> ducklake_inlined_data_1_1
+statement ok
+INSERT INTO ducklake.t1 VALUES (1), (2), (3)
+
+# unrelated DDL bumps the schema version to 2; t1's only inlined table stays at version 1
+statement ok
+CREATE TABLE ducklake.t2(x INTEGER)
+
+# CREATE TABLE registers an inlined table per table, so t1 (v1) and t2 (v2) each have one
+query II
+SELECT table_id, schema_version FROM ducklake_meta.ducklake_inlined_data_tables ORDER BY ALL
+----
+1	1
+2	2
+
+# flush+drop spans both schema versions
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', drop_inlined_tables => true)
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables
+----
+0
+
+query I
+SELECT i FROM ducklake.t1 ORDER BY i
+----
+1
+2
+3

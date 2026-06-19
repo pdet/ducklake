@@ -1502,6 +1502,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	// in case of a retry, we generate the deletion of inlined data from the tables
 	if (!flushed_inlined_tables.empty()) {
 		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables);
+		batch_queries += GenerateDropFlushedInlinedTablesSql(context);
 	}
 
 	// drop data files
@@ -1673,8 +1674,51 @@ WHERE idt.schema_version < (
 		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
 	}
 	// We also need to invalidate the existing schema versions in our catalog
-	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
-	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
+	InvalidateAllSchemaCaches(context);
+}
+
+bool DuckLakeTransactionState::HasInlinedTableDropsRequested() const {
+	for (auto &flushed : flushed_inlined_tables) {
+		if (flushed.drop_table) {
+			return true;
+		}
+	}
+	return false;
+}
+
+string DuckLakeTransactionState::GenerateDropFlushedInlinedTablesSql(const DuckLakeCommitContext &context) const {
+	string drops_sql;
+	for (auto &flushed : flushed_inlined_tables) {
+		if (!flushed.drop_table) {
+			continue;
+		}
+		auto &table_name = flushed.inlined_table.table_name;
+		// Only drop the inlined table if the table is empty.
+		auto count_result = context.query_metadata(
+		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s WHERE begin_snapshot > %d",
+		                       SQLIdentifier(table_name), flushed.flush_snapshot_id));
+		if (count_result->HasError()) {
+			count_result->GetErrorObject().Throw("Failed to count remaining inlined rows for table " + table_name +
+			                                     ": ");
+		}
+		bool table_empty = false;
+		for (auto &row : *count_result) {
+			table_empty = row.GetValue<idx_t>(0) == 0;
+		}
+		if (!table_empty) {
+			continue;
+		}
+		drops_sql += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_name=%s;"
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
+		    SQLString(table_name), SQLIdentifier(table_name));
+	}
+	return drops_sql;
+}
+
+void DuckLakeTransactionState::InvalidateAllSchemaCaches(const DuckLakeCommitContext &context) {
+	auto snapshot_versions =
+	    context.query_metadata("SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;");
 	if (snapshot_versions->HasError()) {
 		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
 	}
@@ -1735,10 +1779,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				res->GetErrorObject().Throw("Failed to flush changes into DuckLake: ");
 			}
 			bool flushed_inlined = !flushed_inlined_tables.empty();
+			bool dropped_flushed_inlined = HasInlinedTableDropsRequested();
 			context.flush_cache_if_pending();
 			context.commit_connection();
 			if (flushed_inlined && !context.skip_drop_empty_inlined) {
 				DropEmptySupersededInlinedTables(context);
+			}
+			if (dropped_flushed_inlined) {
+				// The commit batch may have dropped current-version inlined tables, refresh cached schemas.
+				InvalidateAllSchemaCaches(context);
 			}
 			context.set_catalog_version(commit_snapshot.schema_version);
 
