@@ -46,6 +46,7 @@ class DuckLakeTransactionState;
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;
 	idx_t flush_snapshot_id;
+	bool drop_table = false;
 };
 
 struct LocalTableDataChanges {
@@ -253,7 +254,9 @@ public:
 	//! Delete inlined data rows with begin_snapshot <= flush_snapshot_id
 	void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
 	//! Marks that inlined data have been deleted in a flush if retries are necessary
-	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
+	//! If drop_table is set the (now empty) inlined table is dropped on commit
+	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
+	                                bool drop_table = false);
 
 	bool ChangesMade() const;
 	idx_t GetLocalCatalogId();

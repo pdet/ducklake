@@ -1510,8 +1510,9 @@ void DuckLakeTransaction::DeleteFlushedInlinedData(const DuckLakeInlinedTableInf
 	metadata_manager.DeleteFlushedInlinedData(inlined_table, flush_snapshot_id);
 }
 
-void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
+void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
+                                                     bool drop_table) {
+	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id, drop_table});
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {

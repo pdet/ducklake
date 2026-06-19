@@ -52,10 +52,10 @@ static void AttachDeleteFilesToWrittenFiles(vector<DuckLakeDeleteFile> &delete_f
 DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
                                      DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
                                      string encryption_key_p, optional_idx partition_id, string sort_order_sql_p,
-                                     PhysicalOperator &child)
+                                     bool drop_inlined_table, PhysicalOperator &child)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table),
       inlined_table(std::move(inlined_table_p)), encryption_key(std::move(encryption_key_p)),
-      partition_id(partition_id), sort_order_sql(std::move(sort_order_sql_p)) {
+      partition_id(partition_id), sort_order_sql(std::move(sort_order_sql_p)), drop_inlined_table(drop_inlined_table) {
 	children.push_back(child);
 }
 
@@ -200,7 +200,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
 	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
-	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, drop_inlined_table);
 	return SinkFinalizeType::READY;
 }
 
@@ -217,10 +217,11 @@ string DuckLakeFlushData::GetName() const {
 class DuckLakeLogicalFlush : public LogicalExtensionOperator {
 public:
 	DuckLakeLogicalFlush(TableIndex table_index, DuckLakeTableEntry &table, DuckLakeInlinedTableInfo inlined_table_p,
-	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p)
+	                     string encryption_key_p, optional_idx partition_id_p, string sort_order_sql_p,
+	                     bool drop_inlined_table_p)
 	    : table_index(table_index), table(table), inlined_table(std::move(inlined_table_p)),
 	      encryption_key(std::move(encryption_key_p)), partition_id(partition_id_p),
-	      sort_order_sql(std::move(sort_order_sql_p)) {
+	      sort_order_sql(std::move(sort_order_sql_p)), drop_inlined_table(drop_inlined_table_p) {
 	}
 
 	TableIndex table_index;
@@ -229,12 +230,13 @@ public:
 	string encryption_key;
 	optional_idx partition_id;
 	string sort_order_sql;
+	bool drop_inlined_table;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
 		return planner.Make<DuckLakeFlushData>(types, table, std::move(inlined_table), std::move(encryption_key),
-		                                       partition_id, std::move(sort_order_sql), child);
+		                                       partition_id, std::move(sort_order_sql), drop_inlined_table, child);
 	}
 
 	string GetName() const override {
@@ -263,7 +265,8 @@ public:
 class DuckLakeDataFlusher {
 public:
 	DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                    Binder &binder, TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table);
+	                    Binder &binder, TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table,
+	                    bool drop_inlined_table);
 
 	unique_ptr<LogicalOperator> GenerateFlushCommand();
 
@@ -274,13 +277,14 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	const DuckLakeInlinedTableInfo &inlined_table;
+	bool drop_inlined_table;
 };
 
 DuckLakeDataFlusher::DuckLakeDataFlusher(ClientContext &context, DuckLakeCatalog &catalog,
                                          DuckLakeTransaction &transaction, Binder &binder, TableIndex table_id,
-                                         const DuckLakeInlinedTableInfo &inlined_table_p)
+                                         const DuckLakeInlinedTableInfo &inlined_table_p, bool drop_inlined_table)
     : context(context), catalog(catalog), transaction(transaction), binder(binder), table_id(table_id),
-      inlined_table(inlined_table_p) {
+      inlined_table(inlined_table_p), drop_inlined_table(drop_inlined_table) {
 }
 
 unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
@@ -395,9 +399,9 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the
-	auto compaction =
-	    make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
-	                                    std::move(copy_input.encryption_key), partition_id, std::move(sort_order_sql));
+	auto compaction = make_uniq<DuckLakeLogicalFlush>(binder.GenerateTableIndex(), table, inlined_table,
+	                                                  std::move(copy_input.encryption_key), partition_id,
+	                                                  std::move(sort_order_sql), drop_inlined_table);
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }
@@ -613,6 +617,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	if (table_entry != named_parameters.end()) {
 		table = StringValue::Get(table_entry->second);
 	}
+	bool drop_inlined_tables = false;
+	auto drop_entry = named_parameters.find("drop_inlined_tables");
+	if (drop_entry != named_parameters.end() && !drop_entry->second.IsNull()) {
+		drop_inlined_tables = BooleanValue::Get(drop_entry->second);
+	}
 
 	// no or table schema specified - scan all schemas
 	if (table.empty()) {
@@ -657,7 +666,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			auto &inlined_tables = table.GetInlinedDataTables();
 			for (auto &inlined_table : inlined_tables) {
 				DuckLakeDataFlusher compactor(context, ducklake_catalog, transaction, *input.binder, table.GetTableId(),
-				                              inlined_table);
+				                              inlined_table, drop_inlined_tables);
 				flushes.push_back(compactor.GenerateFlushCommand());
 			}
 			// Also flush inlined file deletions for this table
@@ -770,6 +779,7 @@ DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
     : TableFunction("ducklake_flush_inlined_data", {LogicalType::VARCHAR}, nullptr, nullptr, nullptr) {
 	named_parameters["schema_name"] = LogicalType::VARCHAR;
 	named_parameters["table_name"] = LogicalType::VARCHAR;
+	named_parameters["drop_inlined_tables"] = LogicalType::BOOLEAN;
 	bind_operator = FlushInlinedDataBind;
 }
 
