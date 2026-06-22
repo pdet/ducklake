@@ -171,7 +171,8 @@ public:
 	static DuckLakeFileInfo GetNewDataFile(const DuckLakeDataFile &file, DuckLakeCommitState &commit_state,
 	                                       TableIndex table_id, optional_idx row_id_start);
 
-	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
+	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context,
+	                                             const set<TableIndex> &flushed_table_ids);
 
 	void CleanupFiles();
 

@@ -1343,7 +1343,7 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	}
 }
 
-void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
+void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide(const set<TableIndex> &flushed_table_ids) {
 	DuckLakeCommitContext context;
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
@@ -1351,7 +1351,7 @@ void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
 		ducklake_catalog.InvalidateSchemaCache(schema_version);
 	};
-	DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+	DuckLakeTransactionState::DropEmptySupersededInlinedTables(context, flushed_table_ids);
 }
 
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,

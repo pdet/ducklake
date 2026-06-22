@@ -310,7 +310,7 @@ public:
 	                   const DuckLakeRetryConfig &retry_config);
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
-	void DropEmptySupersededInlinedTablesClientSide();
+	void DropEmptySupersededInlinedTablesClientSide(const set<TableIndex> &flushed_table_ids);
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);

@@ -1621,21 +1621,34 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 	return change_info;
 }
 
-void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
-	// Superseded inlined tables.
-	string find_targets_sql = R"(
+void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context,
+                                                                const set<TableIndex> &flushed_table_ids) {
+	if (flushed_table_ids.empty()) {
+		return;
+	}
+	// Flushing empties every inlined table of a flushed table, so any non-MAX (superseded) inlined
+	// table for those tables can be dropped, we only the keep ze MAX
+	string id_list;
+	for (auto &table_id : flushed_table_ids) {
+		if (!id_list.empty()) {
+			id_list += ",";
+		}
+		id_list += to_string(table_id.index);
+	}
+	string find_targets_sql = StringUtil::Format(R"(
 SELECT idt.table_id, idt.schema_version, idt.table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-WHERE idt.schema_version < (
+WHERE idt.table_id IN (%s)
+  AND idt.schema_version < (
     SELECT MAX(idt2.schema_version)
     FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
     WHERE idt2.table_id = idt.table_id
-);)";
+  );)",
+	                                             id_list);
 	auto targets = context.query_metadata(find_targets_sql);
 	if (targets->HasError()) {
 		targets->GetErrorObject().Throw("Failed to identify superseded inlined-data tables in DuckLake: ");
 	}
-	// Collect candidates before issuing the per-table emptiness queries on the same connection.
 	struct SupersededInlinedTable {
 		idx_t table_id;
 		idx_t schema_version;
@@ -1645,28 +1658,15 @@ WHERE idt.schema_version < (
 	for (auto &row : *targets) {
 		candidates.push_back({row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), row.GetValue<string>(2)});
 	}
+	if (candidates.empty()) {
+		return;
+	}
 	string drops_sql;
 	for (auto &candidate : candidates) {
-		auto count_result = context.query_metadata(
-		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
-		if (count_result->HasError()) {
-			count_result->GetErrorObject().Throw(
-			    "Failed to check emptiness of superseded inlined-data table in DuckLake: ");
-		}
-		idx_t row_count = 0;
-		for (auto &row : *count_result) {
-			row_count = row.GetValue<idx_t>(0);
-		}
-		if (row_count != 0) {
-			continue;
-		}
 		drops_sql += StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
 		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
 		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name));
-	}
-	if (drops_sql.empty()) {
-		return;
 	}
 	auto res = context.query_metadata(drops_sql);
 	if (res->HasError()) {
@@ -1738,7 +1738,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.flush_cache_if_pending();
 			context.commit_connection();
 			if (flushed_inlined && !context.skip_drop_empty_inlined) {
-				DropEmptySupersededInlinedTables(context);
+				DropEmptySupersededInlinedTables(context, attempt_changes.tables_flushed_inlined);
 			}
 			context.set_catalog_version(commit_snapshot.schema_version);
 
