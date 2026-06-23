@@ -1,0 +1,32 @@
+# name: test/sql/data_inlining/flush_keep_max_inlined.test
+# description: the max inlined table is kept on flush even when inlining is disabled
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_keep_max_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+# the only inlined table is the max (not superseded), so it is kept
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables WHERE table_id = 1
+----
+1

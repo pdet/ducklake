@@ -351,12 +351,23 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 	auto &cache = GetObjectCacheInstance();
 	auto key = SchemaCacheKey(snapshot.schema_version);
 	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
-	if (cached) {
+	// Only consume a cached entry for a requesting snapshot at-or-after the entry's load snapshot
+	if (cached && snapshot.snapshot_id >= cached->loaded_at_snapshot) {
 		return cached;
 	}
 	auto schema = LoadSchemaForSnapshot(transaction, snapshot);
 	auto entry = make_shared_ptr<DuckLakeSchemaCacheEntry>(std::move(schema));
-	cache.Put(std::move(key), entry);
+	entry->loaded_at_snapshot = snapshot.snapshot_id;
+	// Only publish into the shared cache when loading at the latest committed snapshot
+	bool is_latest_snapshot;
+	{
+		lock_guard<mutex> guard(commit_lock);
+		is_latest_snapshot =
+		    !last_committed_snapshot.IsValid() || snapshot.snapshot_id >= last_committed_snapshot.GetIndex();
+	}
+	if (is_latest_snapshot) {
+		cache.Put(std::move(key), entry);
+	}
 	return entry;
 }
 

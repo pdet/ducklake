@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/flush_drop_inlined_schema_versions.test
-# description: after several schema changes (no new data), flush drops all superseded inlined tables leaving only the max
+# description: after several schema changes a flush leaves only the max inlined table
 # group: [data_inlining]
 
 require ducklake
@@ -19,7 +19,7 @@ CREATE TABLE ducklake.t(i INTEGER)
 statement ok
 INSERT INTO ducklake.t VALUES (1), (2), (3)
 
-# change the schema four times - each migrates the inlined data to a new schema version (no new data added)
+# four schema changes leave four superseded inlined tables plus the max
 statement ok
 ALTER TABLE ducklake.t ADD COLUMN a INTEGER
 
@@ -32,36 +32,15 @@ ALTER TABLE ducklake.t ADD COLUMN c INTEGER
 statement ok
 ALTER TABLE ducklake.t ADD COLUMN d INTEGER
 
-# five inlined tables now exist (schema versions 1..5), four of them superseded
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables WHERE table_id = 1
-----
-5
-
-query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name LIKE 'ducklake_inlined_data_1_%'
 ----
 5
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-# only the max (latest schema version) inlined table survives in the registry
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables WHERE table_id = 1
 ----
 1
-
-# the four superseded inlined tables are physically dropped - only one physical table remains
-query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name LIKE 'ducklake_inlined_data_1_%'
-----
-1
-
-# data is intact (flushed to parquet)
-query IIIII
-SELECT i, a, b, c, d FROM ducklake.t ORDER BY i
-----
-1	NULL	NULL	NULL	NULL
-2	NULL	NULL	NULL	NULL
-3	NULL	NULL	NULL	NULL

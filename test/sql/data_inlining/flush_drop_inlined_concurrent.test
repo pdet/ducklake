@@ -1,0 +1,48 @@
+# name: test/sql/data_inlining/flush_drop_inlined_concurrent.test
+# description: a concurrent open transaction's inserts are unaffected by a flush dropping a superseded inlined table
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_concurrent_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+statement ok con1
+ALTER TABLE ducklake.t ADD COLUMN a INTEGER
+
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (10, 100)
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+# con2's open transaction keeps inserting across the flush and commits
+statement ok con2
+INSERT INTO ducklake.t VALUES (20, 200)
+
+statement ok con2
+COMMIT
+
+query II con2
+SELECT i, a FROM ducklake.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+10	100
+20	200

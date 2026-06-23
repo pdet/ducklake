@@ -56,6 +56,8 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	}
 
 	DuckLakeCatalogSet catalog_set;
+	//! Snapshot this entry was loaded at.
+	idx_t loaded_at_snapshot = DConstants::INVALID_INDEX;
 
 	static string ObjectType() {
 		return "ducklake_schema";

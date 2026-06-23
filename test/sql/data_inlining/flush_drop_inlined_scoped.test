@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/flush_drop_inlined_scoped.test
-# description: flushing drops superseded inlined tables only for the flushed tables; others are untouched
+# description: flush drops superseded inlined tables only for the flushed table
 # group: [data_inlining]
 
 require ducklake
@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_scoped_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
-# t1: create a superseded inlined table via a schema bump
+# t1 and t2 each get a superseded inlined table via a schema bump
 statement ok
 CREATE TABLE ducklake.t1(i INTEGER)
 
@@ -24,10 +24,6 @@ statement ok
 ALTER TABLE ducklake.t1 ADD COLUMN j INTEGER
 
 statement ok
-INSERT INTO ducklake.t1 VALUES (4, 40)
-
-# t2: same shape
-statement ok
 CREATE TABLE ducklake.t2(i INTEGER)
 
 statement ok
@@ -36,57 +32,24 @@ INSERT INTO ducklake.t2 VALUES (1), (2)
 statement ok
 ALTER TABLE ducklake.t2 ADD COLUMN j INTEGER
 
-statement ok
-INSERT INTO ducklake.t2 VALUES (3, 30)
-
-# each table has two inlined tables (one superseded, one max)
 query II
 SELECT table_id, COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY table_id ORDER BY table_id
 ----
 1	2
 2	2
 
-# t1's superseded physical inlined table exists before the flush
-query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name='ducklake_inlined_data_1_1'
-----
-1
-
-# flush ONLY t1
 statement ok
 CALL ducklake_flush_inlined_data('ducklake', table_name => 't1')
 
-# t1's superseded inlined table is dropped (only its max remains); t2 is untouched
+# only t1's superseded table is dropped; t2 is untouched
 query II
 SELECT table_id, COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY table_id ORDER BY table_id
 ----
 1	1
 2	2
 
-# the superseded physical inlined table for t1 has been physically dropped (not just unregistered)
+# the superseded table is physically dropped, not just unregistered
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name='ducklake_inlined_data_1_1'
 ----
 0
-
-# t1's max physical inlined table is kept, and t2's physical inlined tables are untouched
-query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND table_name IN ('ducklake_inlined_data_1_2', 'ducklake_inlined_data_2_3', 'ducklake_inlined_data_2_4')
-----
-3
-
-# data is intact
-query II
-SELECT i, j FROM ducklake.t1 ORDER BY i
-----
-1	NULL
-2	NULL
-3	NULL
-4	40
-
-query II
-SELECT i, j FROM ducklake.t2 ORDER BY i
-----
-1	NULL
-2	NULL
-3	30

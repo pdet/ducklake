@@ -1,0 +1,54 @@
+# name: test/sql/data_inlining/flush_drop_inlined_pinned_reader.test
+# description: a snapshot-pinned reader keeps its rows when a concurrent flush drops a superseded inlined table
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_pinned_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+# the ALTER supersedes the inlined table that still holds 1,2,3
+statement ok con1
+ALTER TABLE ducklake.t ADD COLUMN a INTEGER
+
+statement ok con3
+BEGIN
+
+# con3 pins its pre-flush snapshot
+query II con3
+SELECT i, a FROM ducklake.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+# con2 repopulates the shared schema cache at the latest snapshot
+query II con2
+SELECT i, a FROM ducklake.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+
+# con3 must still see its rows
+query II con3
+SELECT i, a FROM ducklake.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
