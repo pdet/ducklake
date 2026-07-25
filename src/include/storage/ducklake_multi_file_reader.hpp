@@ -43,6 +43,13 @@ public:
 	void BindOptions(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
 	                 vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
 
+	//! Materializes the file list before the scan fans out across threads
+	unique_ptr<MultiFileReaderGlobalState>
+	InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
+	                      const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
+	                      const vector<MultiFileColumnDefinition> &global_columns,
+	                      const vector<ColumnIndex> &global_column_ids) override;
+
 	ReaderInitializeType InitializeReader(MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
 	                                      const vector<MultiFileColumnDefinition> &global_columns,
 	                                      const vector<ColumnIndex> &global_column_ids,

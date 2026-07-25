@@ -234,6 +234,19 @@ void DuckLakeMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileLi
                                           MultiFileReaderBindData &bind_data) {
 }
 
+unique_ptr<MultiFileReaderGlobalState>
+DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
+                                               const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
+                                               const vector<MultiFileColumnDefinition> &global_columns,
+                                               const vector<ColumnIndex> &global_column_ids) {
+	// Materialize the file list here, while we are still single-threaded. It is otherwise first touched from
+	// the scan tasks, where every worker piles into DuckLakeMultiFileList::GetFiles() and blocks on its lock
+	// while one of them runs the metadata query - which costs far more in scheduler churn than the scan itself.
+	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+	return MultiFileReader::InitializeGlobalState(context, file_options, bind_data, file_list, global_columns,
+	                                              global_column_ids);
+}
+
 ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderData &reader_data,
                                                                const MultiFileBindData &bind_data,
                                                                const vector<MultiFileColumnDefinition> &global_columns,
