@@ -132,7 +132,7 @@ unique_ptr<DuckLakeDeletionVectorData> DuckLakeDeletionVectorData::FromBlob(data
 	blob_start += sizeof(uint32_t);
 	if (blob_start != blob_end) {
 		throw InvalidInputException("Deletion vector blob has %lld unexpected trailing bytes",
-		                            static_cast<int64_t>(blob_end - blob_start));
+		                            NumericCast<int64_t>(blob_end - blob_start));
 	}
 
 	CRC32 crc;
