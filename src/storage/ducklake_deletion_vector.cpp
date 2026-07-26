@@ -15,7 +15,7 @@ public:
 
 public:
 	void Update(const data_t *data, idx_t length) {
-		auto &table = GetTable();
+		auto table = GetTable();
 		for (idx_t i = 0; i < length; i++) {
 			crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 		}
