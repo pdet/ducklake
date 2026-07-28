@@ -1999,12 +1999,14 @@ static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_
 		renamed_set.insert(id);
 		return;
 	}
-	// so any columns added / types changed / prior renames earlier in this
-	// transaction still get committed, re-parent the old version under the new name
-	auto dropped = entries.DropEntry(old_name);
-	auto new_entry_ptr = entries.GetEntry(new_name);
-	if (new_entry_ptr && dropped) {
-		new_entry_ptr->SetChild(std::move(dropped));
+	// changes made earlier in this transaction must still commit under the new name, but when the
+	// name does not change they are already chained under it and the drop would take them with it
+	if (!StringUtil::CIEquals(old_name, new_name)) {
+		auto dropped = entries.DropEntry(old_name);
+		auto new_entry_ptr = entries.GetEntry(new_name);
+		if (new_entry_ptr && dropped) {
+			new_entry_ptr->SetChild(std::move(dropped));
+		}
 	}
 	if (!IsTransactionLocal(id)) {
 		// committed entry that was altered earlier in this transaction - the old row still needs closing
