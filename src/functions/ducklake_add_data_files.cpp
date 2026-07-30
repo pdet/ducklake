@@ -1227,7 +1227,7 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
 				throw InvalidInputException(
 				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
 				    "table \"%s\"",
-				    full_name, file.filename, source_field_id, table.name.GetIdentifierName());
+				    full_name, file.filepath, source_field_id, table.name.GetIdentifierName());
 			}
 		}
 		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, full_name);
