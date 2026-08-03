@@ -1,6 +1,7 @@
 #include "storage/ducklake_deletion_vector.hpp"
 
 #include "duckdb/common/bswap.hpp"
+#include "duckdb/common/operator/numeric_cast.hpp"
 
 namespace duckdb {
 
