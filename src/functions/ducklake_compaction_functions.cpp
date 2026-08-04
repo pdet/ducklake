@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -117,8 +119,8 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(table.schema.name));
-	chunk.data[1].Append(Value(table.name));
+	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	chunk.SetChildCardinality(1);
@@ -494,6 +496,30 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	return std::move(projected);
 }
 
+optional_ptr<DuckLakeTableEntry>
+DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const DuckLakeCompactionFileEntry &source_file,
+                                             idx_t partition_id) {
+	auto partition_data = table.GetPartitionData();
+	if (partition_data && partition_data->partition_id == partition_id) {
+		return &table;
+	}
+	if (!source_file.partition_snapshot_id.IsValid() || !source_file.partition_schema_version.IsValid()) {
+		return nullptr;
+	}
+	DuckLakeSnapshot partition_snapshot(source_file.partition_snapshot_id.GetIndex(),
+	                                    source_file.partition_schema_version.GetIndex(), 0, 0);
+	auto partition_entry = catalog.GetEntryById(transaction, partition_snapshot, table_id);
+	if (!partition_entry) {
+		throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");
+	}
+	auto &partition_table = partition_entry->Cast<DuckLakeTableEntry>();
+	partition_data = partition_table.GetPartitionData();
+	if (!partition_data || partition_data->partition_id != partition_id) {
+		throw InternalException("DuckLakeCompactor: failed to find partition spec");
+	}
+	return &partition_table;
+}
+
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
@@ -575,7 +601,23 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto &columns = table.GetColumns();
 	string data_path;
 	if (partition_id.IsValid()) {
-		data_path = DuckLakePartitionUtils::BuildHivePartitionPath(table, partition_values, catalog.Separator());
+		auto partition_table = ResolvePartitionSpecTable(table, source_files[0], partition_id.GetIndex());
+		if (partition_table) {
+			data_path =
+			    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
+		} else {
+			auto &file_path = source_files[0].file.data.path;
+			auto &table_path = table.DataPath();
+			if (!StringUtil::StartsWith(file_path, table_path)) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			auto relative_path = file_path.substr(table_path.size());
+			auto separator_pos = relative_path.rfind(catalog.Separator());
+			if (separator_pos == string::npos) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+		}
 	}
 
 	bool write_row_id = false;
@@ -614,7 +656,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          StringsToIdentifiers(copy_options.names), std::move(virtual_columns));
+	                          copy_options.names, std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -689,7 +731,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = false;
 	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = StringsToIdentifiers(copy_options.names);
+	copy->names = copy_options.names;
 	copy->expected_types = std::move(copy_options.expected_types);
 	copy->children.push_back(std::move(root));
 
