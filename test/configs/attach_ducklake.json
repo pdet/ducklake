@@ -338,7 +338,8 @@
         "test/sql/types/time/test_time_tz_collate.test",
         "test/sql/types/time/test_time_tz_icu.test",
         "test/sql/types/timestamp/test_timestamp_to_tz_cast.test",
-        "test/sql/timezone/test_icu_timezone.test"
+        "test/sql/timezone/test_icu_timezone.test",
+        "test/sql/function/timetz/test_extract.test"
       ]
     },
     {
@@ -455,7 +456,8 @@
     {
       "reason": "FIXME: Unstable OID",
       "paths": [
-        "test/sql/pg_catalog/pg_namespace.test"
+        "test/sql/pg_catalog/pg_namespace.test",
+        "test/sql/catalog/test_alter_oid_stability.test"
       ]
     },
     {
@@ -576,7 +578,10 @@
         "test/sql/storage/compression/string/blob.test",
         "test/sql/storage/compression/string/empty.test",
         "test/sql/storage/compression/rle/rle_bool.test",
-        "test/sql/storage/optimistic_write/optimistic_write_not_trigger_checkpoint.test"
+        "test/sql/storage/optimistic_write/optimistic_write_not_trigger_checkpoint.test",
+        "test/sql/storage/compression/rle/rle_corrupted_count_offset.test",
+        "test/sql/storage/compression/patas/patas_corrupted_file.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_expression_filter.test"
       ]
     },
     {
@@ -617,7 +622,8 @@
           "test/sql/storage/types/variant/struct_of_variant.test",
           "test/sql/storage/types/variant/test_all_types_single_table.test",
           "test/sql/storage/types/variant/test_all_types.test",
-          "test/sql/storage/types/variant/test_all_types_variant.test"
+          "test/sql/storage/types/variant/test_all_types_variant.test",
+          "test/sql/types/variant/variant_map_to_variant_filter.test"
       ]
     },
     {
@@ -654,7 +660,27 @@
       "paths": [
         "test/parquet/variant/variant_comparison.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
-        "test/parquet/variant/variant_json_copy.test"
+        "test/parquet/variant/variant_json_copy.test",
+        "test/sql/storage/types/variant/variant_shredding_empty_keys.test"
+      ]
+    },
+    {
+      "reason": "FIXME?: DuckLake wraps the drop conflict with different wording than DuckDB",
+      "paths": [
+        "test/sql/transactions/rollback_drop_table.test"
+      ]
+    },
+    {
+      "reason": "FIXME?: does DuckLake intend to propagate invalidation to CHECKPOINT / surface autocheckpoint failure as FATAL?",
+      "paths": [
+        "test/sql/storage/attach/attach_invalidation_default_db.test",
+        "test/sql/storage/checkpoint/initial_database_autocheckpoint_failure.test"
+      ]
+    },
+    {
+      "reason": "FIXME: ADD COLUMN ... DEFAULT false is rejected as a non-literal default",
+      "paths": [
+        "test/sql/alter/add_col/test_add_col_if_not_exists_default.test"
       ]
     }
   ]
