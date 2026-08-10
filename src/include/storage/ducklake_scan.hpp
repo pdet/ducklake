@@ -29,7 +29,7 @@ public:
 
 	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, TableFunction &function);
 
-	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
+	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const Identifier &name);
 };
 
 //! Serialize/Deserialize callbacks for DuckLakeScan (used by table macro Copy)

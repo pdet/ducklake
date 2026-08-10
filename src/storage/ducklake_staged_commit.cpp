@@ -523,7 +523,7 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction, const DuckL
 	                                   : -1;
 	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %lld, "
 	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
-	                            DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName()),
+	                            DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName()),
 	                            schema_version_param, retry_config.max_retry_count, retry_config.retry_wait_ms,
 	                            retry_config.retry_backoff);
 	return batch;
