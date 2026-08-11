@@ -3779,8 +3779,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	}
 
 	// Create appenders for each table
-	Appender data_file_appender(connection, Identifier(db_name), schema_name,
-	                            Identifier("ducklake_data_file"));
+	Appender data_file_appender(connection, Identifier(db_name), schema_name, Identifier("ducklake_data_file"));
 	Appender column_stats_appender(connection, Identifier(db_name), schema_name,
 	                               Identifier("ducklake_file_column_stats"));
 	Appender partition_value_appender(connection, Identifier(db_name), schema_name,
@@ -4439,9 +4438,8 @@ WHERE snapshot_id = (
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
 	if (result->HasError()) {
-		result->GetErrorObject().Throw(StringUtil::Format(
-		    "Failed to query snapshot at %s %s for DuckLake: ", StringUtil::Lower(unit.GetIdentifierName()),
-		    val.ToString()));
+		result->GetErrorObject().Throw(StringUtil::Format("Failed to query snapshot at %s %s for DuckLake: ",
+		                                                  StringUtil::Lower(unit.GetIdentifierName()), val.ToString()));
 	}
 	auto snapshot = ParseSnapshot(*result);
 	if (!snapshot) {

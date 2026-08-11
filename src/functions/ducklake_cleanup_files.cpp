@@ -106,7 +106,8 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	return std::move(result);
 }
 static unique_ptr<FunctionData> DuckLakeCleanupOldFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<Identifier> &names) {
+                                                            vector<LogicalType> &return_types,
+                                                            vector<Identifier> &names) {
 	return CleanupBind(context, input, return_types, names, CleanupType::OLD_FILES);
 }
 
