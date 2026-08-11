@@ -17,7 +17,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (lcase == "override_data_path") {
 		options.override_data_path = value.GetValue<bool>();
 	} else if (lcase == "metadata_schema") {
-		options.metadata_schema = value.ToString();
+		options.metadata_schema = Identifier(value.ToString());
 	} else if (lcase == "metadata_catalog") {
 		options.metadata_database = value.ToString();
 	} else if (lcase == "metadata_path") {
