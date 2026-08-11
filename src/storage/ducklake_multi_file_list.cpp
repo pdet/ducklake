@@ -421,6 +421,10 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 	}
 }
 
+bool DuckLakeMultiFileList::CanUseGlobalStats() const {
+	return read_info.CanUseGlobalStats();
+}
+
 bool DuckLakeMultiFileList::IsDeleteScan() const {
 	return read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS;
 }
