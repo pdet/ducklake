@@ -8,8 +8,6 @@ require parquet
 
 require postgres_scanner
 
-require-env DUCKLAKE_CI
-
 test-env DATA_PATH {TEST_DIR}
 
 # set up an unrelated schema in the metadata database - it should not be reflected by DuckLake attaches
