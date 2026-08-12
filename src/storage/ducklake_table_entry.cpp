@@ -580,9 +580,18 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			field.transform.type = DuckLakeTransformType::DAY;
 		} else if (name == "hour") {
 			field.transform.type = DuckLakeTransformType::HOUR;
+		} else if (name == "epoch_year") {
+			field.transform.type = DuckLakeTransformType::EPOCH_YEAR;
+		} else if (name == "epoch_month") {
+			field.transform.type = DuckLakeTransformType::EPOCH_MONTH;
+		} else if (name == "epoch_day") {
+			field.transform.type = DuckLakeTransformType::EPOCH_DAY;
+		} else if (name == "epoch_hour") {
+			field.transform.type = DuckLakeTransformType::EPOCH_HOUR;
 		} else {
-			throw NotImplementedException(
-			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
+			throw NotImplementedException("Unsupported partition function %s - only year, month, day, hour, "
+			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
+			                              name);
 		}
 
 		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
@@ -593,9 +602,10 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		break;
 	}
 	default:
-		throw NotImplementedException(
-		    "Unsupported partition key %s - only identity columns and year/month/day/hour/bucket are supported",
-		    expr.ToString());
+		throw NotImplementedException("Unsupported partition key %s - only identity columns and "
+		                              "year/month/day/hour/epoch_year/epoch_month/epoch_day/epoch_hour/bucket are "
+		                              "supported",
+		                              expr.ToString());
 	}
 	if (!table.ColumnExists(Identifier(column_name))) {
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);

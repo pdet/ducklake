@@ -1107,6 +1107,18 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		case DuckLakeTransformType::HOUR:
 			partition_field.transform = "hour";
 			break;
+		case DuckLakeTransformType::EPOCH_YEAR:
+			partition_field.transform = "epoch_year";
+			break;
+		case DuckLakeTransformType::EPOCH_MONTH:
+			partition_field.transform = "epoch_month";
+			break;
+		case DuckLakeTransformType::EPOCH_DAY:
+			partition_field.transform = "epoch_day";
+			break;
+		case DuckLakeTransformType::EPOCH_HOUR:
+			partition_field.transform = "epoch_hour";
+			break;
 		case DuckLakeTransformType::BUCKET:
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
 			break;
