@@ -80,7 +80,11 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		secret = DuckLakeSecret::GetSecret(context, DuckLakeSecret::DEFAULT_SECRET);
 		if (!secret) {
 			throw InvalidInputException(
-			    "Default secret was not found - either specify a path to attach to directly, or create the secret");
+			    "Default secret was not found. Either:\n"
+			    "	- Specify a path to attach to directly,\n"
+			    "	- Create a new (default) secret,\n"
+			    "	- Or reattach using a named secret (e.g `ATTACH 'ducklake:my_named_secret' AS my_ducklake;`),\n"
+			    "For more information, see https://ducklake.select/docs/stable/duckdb/usage/connecting#secrets");
 		}
 	} else if (DuckLakeSecret::PathIsSecret(info.path)) {
 		// if the path is a plain name - load the secret name
