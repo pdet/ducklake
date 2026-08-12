@@ -51,7 +51,8 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 	return candidate;
 }
 
-string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name) {
+string DuckLakePartitionUtils::GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name,
+                                                         const LogicalType &source_type) {
 	if (transform.type == DuckLakeTransformType::IDENTITY) {
 		return col_name;
 	}
@@ -153,6 +154,21 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
 	return function;
 }
 
+static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string &op, unique_ptr<Expression> left,
+                                           unique_ptr<Expression> right) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(left));
+	children.push_back(std::move(right));
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto result =
+	    binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children), error, false);
+	if (!result) {
+		error.Throw();
+	}
+	return result;
+}
+
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContext &context,
                                                                     unique_ptr<Expression> column_expr,
                                                                     idx_t bucket_count) {
@@ -163,26 +179,10 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 
 	// Iceberg bucket: (hash & Integer.MAX_VALUE) % N
 	// Mask off sign bit to ensure non-negative result
-	vector<unique_ptr<Expression>> and_children;
-	and_children.push_back(std::move(hash_expr));
-	and_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericLimits<int32_t>::Maximum())));
-
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto and_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "&", std::move(and_children), error, false);
-	if (!and_expr) {
-		error.Throw();
-	}
-
-	vector<unique_ptr<Expression>> mod_children;
-	mod_children.push_back(std::move(and_expr));
-	mod_children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
-
-	auto mod_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "%", std::move(mod_children), error, false);
-	if (!mod_expr) {
-		error.Throw();
-	}
-	return mod_expr;
+	auto and_expr = BindBinaryOp(context, "&", std::move(hash_expr),
+	                             make_uniq<BoundConstantExpression>(Value::INTEGER(NumericLimits<int32_t>::Maximum())));
+	return BindBinaryOp(context, "%", std::move(and_expr),
+	                    make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientContext &context,
