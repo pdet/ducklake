@@ -593,6 +593,12 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
 			                              name);
 		}
+		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
+		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsEpochPartitionTransforms()) {
+			throw InvalidInputException("DuckLake 1.0 does not support the %s partition transform - attach with "
+			                            "AUTOMATIC_MIGRATION set to TRUE to migrate the catalog to a newer version",
+			                            name);
+		}
 
 		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
