@@ -57,6 +57,7 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
+	bool CanUseGlobalStats();
 };
 
 } // namespace duckdb
