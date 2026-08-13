@@ -239,6 +239,10 @@ public:
 	bool SupportsViewColumnTags() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
+	//! Whether the catalog may contain epoch partition transforms (added in 1.1-dev1)
+	bool SupportsEpochPartitionTransforms() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
 
 	void OnDetach(ClientContext &context) override;
 

@@ -650,6 +650,12 @@
       ]
     },
     {
+      "reason": "Flaky upstream: segment count sometimes 2 instead of 1, disabled in duckdb db513b8b51 (after current pin)",
+      "paths": [
+        "test/sql/storage/compression/fsst/fsst_greedy_long_strings.test"
+      ]
+    },
+    {
       "reason": "FIXME: CI Deadlock?",
       "paths": [
         "test/sql/update/test_stress_update_issue_19688.test"
