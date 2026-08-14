@@ -14,10 +14,10 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
 
 statement ok
-CREATE TABLE ducklake.test(s VARCHAR);
+CREATE TABLE ducklake.test(i INTEGER, s VARCHAR);
 
 statement ok
-INSERT INTO ducklake.test VALUES ('hello'), ('world');
+INSERT INTO ducklake.test VALUES (1, 'hello'), (2, 'world');
 
 statement ok
 DETACH ducklake
@@ -27,31 +27,32 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_
 
 # stats rows that existed before the migration have NULL exactness flags
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY column_id
 ----
+1	2	NULL	NULL
 hello	world	NULL	NULL
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
+1	2	NULL	NULL
 hello	world	NULL	NULL
 
-# writes after the migration keep the wider schema in sync
+# writes after the migration record exactness: value types are always exact, string exactness
+# is not known on the COPY path yet so it is conservatively false
 statement ok
-INSERT INTO ducklake.test VALUES ('apple'), ('zebra');
-
-query I
-SELECT COUNT(*) FROM ducklake.test
-----
-4
+INSERT INTO ducklake.test VALUES (3, 'apple'), (4, 'zebra');
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY data_file_id
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY data_file_id, column_id
 ----
+1	2	NULL	NULL
 hello	world	NULL	NULL
-apple	zebra	NULL	NULL
+3	4	true	true
+apple	zebra	false	false
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
-apple	zebra	NULL	NULL
+1	4	true	true
+apple	zebra	false	false

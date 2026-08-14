@@ -3919,8 +3919,16 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 
 			// min_is_exact and max_is_exact
 			if (supports_v1_1_metadata) {
-				column_stats_appender.Append(Value());
-				column_stats_appender.Append(Value());
+				if (stats.has_min) {
+					column_stats_appender.Append<bool>(stats.EffectiveMinIsExact());
+				} else {
+					column_stats_appender.Append(Value());
+				}
+				if (stats.has_max) {
+					column_stats_appender.Append<bool>(stats.EffectiveMaxIsExact());
+				} else {
+					column_stats_appender.Append(Value());
+				}
 			}
 			column_stats_appender.EndRow();
 
@@ -4091,7 +4099,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			    column_stats.column_size_bytes, column_stats.value_count, column_stats.null_count, column_stats.min_val,
 			    column_stats.max_val, column_stats.contains_nan, column_stats.extra_stats);
 			if (supports_v1_1_metadata) {
-				column_stats_insert_query += ", NULL, NULL";
+				column_stats_insert_query +=
+				    StringUtil::Format(", %s, %s", column_stats.min_is_exact, column_stats.max_is_exact);
 			}
 			column_stats_insert_query += ")";
 			for (auto &variant_stats : column_stats.variant_stats) {
@@ -4803,6 +4812,8 @@ struct ColumnStatsSQL {
 	string min_val;
 	string max_val;
 	string extra_stats;
+	string min_is_exact;
+	string max_is_exact;
 
 	static ColumnStatsSQL FromColumnStats(const DuckLakeGlobalColumnStatsInfo &col_stats) {
 		ColumnStatsSQL result;
@@ -4811,6 +4822,8 @@ struct ColumnStatsSQL {
 		result.min_val = col_stats.has_min ? DuckLakeUtil::StatsToString(col_stats.min_val) : "NULL";
 		result.max_val = col_stats.has_max ? DuckLakeUtil::StatsToString(col_stats.max_val) : "NULL";
 		result.extra_stats = col_stats.has_extra_stats ? col_stats.extra_stats : "NULL";
+		result.min_is_exact = col_stats.has_min ? (col_stats.min_is_exact ? "true" : "false") : "NULL";
+		result.max_is_exact = col_stats.has_max ? (col_stats.max_is_exact ? "true" : "false") : "NULL";
 		return result;
 	}
 };
@@ -4830,7 +4843,7 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 			    StringUtil::Format("(%d, %d, %s, %s, %s, %s, %s", stats.table_id.index, col_stats.column_id.index,
 			                       sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats);
 			if (write_stats_exactness) {
-				column_stats_values += ", NULL, NULL";
+				column_stats_values += StringUtil::Format(", %s, %s", sql.min_is_exact, sql.max_is_exact);
 			}
 			column_stats_values += ")";
 		}
@@ -4858,12 +4871,17 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 		// unrecognized token ":").
 		for (auto &col_stats : stats.column_stats) {
 			auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
+			string exactness_set;
+			if (write_stats_exactness) {
+				exactness_set = StringUtil::Format(", min_is_exact=CAST(%s AS BOOLEAN), max_is_exact=CAST(%s AS BOOLEAN)",
+				                                   sql.min_is_exact, sql.max_is_exact);
+			}
 			batch_query += StringUtil::Format(
 			    "UPDATE {METADATA_CATALOG}.ducklake_table_column_stats "
 			    "SET contains_null=CAST(%s AS BOOLEAN), contains_nan=CAST(%s AS BOOLEAN), min_value=%s, max_value=%s, "
-			    "extra_stats=%s WHERE table_id=%d AND column_id=%d;",
-			    sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats, stats.table_id.index,
-			    col_stats.column_id.index);
+			    "extra_stats=%s%s WHERE table_id=%d AND column_id=%d;",
+			    sql.contains_null, sql.contains_nan, sql.min_val, sql.max_val, sql.extra_stats, exactness_set,
+			    stats.table_id.index, col_stats.column_id.index);
 		}
 	}
 	return batch_query;

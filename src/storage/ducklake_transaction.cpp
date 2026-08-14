@@ -1256,6 +1256,8 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		if (column_stats.has_max) {
 			col_stats.max_val = column_stats.max;
 		}
+		col_stats.min_is_exact = column_stats.EffectiveMinIsExact();
+		col_stats.max_is_exact = column_stats.EffectiveMaxIsExact();
 		if (column_stats.extra_stats) {
 			col_stats.has_extra_stats = column_stats.extra_stats->TrySerialize(col_stats.extra_stats);
 		} else {
@@ -1275,6 +1277,8 @@ DuckLakeColumnStatsInfo DuckLakeColumnStatsInfo::FromColumnStats(FieldIndex fiel
 	column_stats.column_id = field_id;
 	column_stats.min_val = stats.has_min ? DuckLakeUtil::StatsToString(stats.min) : "NULL";
 	column_stats.max_val = stats.has_max ? DuckLakeUtil::StatsToString(stats.max) : "NULL";
+	column_stats.min_is_exact = stats.has_min ? (stats.EffectiveMinIsExact() ? "true" : "false") : "NULL";
+	column_stats.max_is_exact = stats.has_max ? (stats.EffectiveMaxIsExact() ? "true" : "false") : "NULL";
 	column_stats.column_size_bytes = to_string(stats.column_size_bytes);
 	if (stats.has_null_count && stats.has_num_values) {
 		// value_count should be the count of non-null values: num_values - null_count
