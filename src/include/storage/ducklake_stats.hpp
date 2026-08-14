@@ -44,12 +44,21 @@ struct DuckLakeColumnStats {
 	bool has_max = false;
 	bool any_valid = true;
 	bool has_contains_nan = false;
+	bool min_is_exact = false;
+	bool max_is_exact = false;
 
 	bool AnyValid() const {
 		if (has_num_values && has_null_count) {
 			return num_values > null_count;
 		}
 		return any_valid;
+	}
+	//! Strings can have truncated min/max stats, other types are always exact
+	bool EffectiveMinIsExact() const {
+		return has_min && (min_is_exact || RequiresValueComparison(type));
+	}
+	bool EffectiveMaxIsExact() const {
+		return has_max && (max_is_exact || RequiresValueComparison(type));
 	}
 
 	unique_ptr<DuckLakeColumnExtraStats> extra_stats;

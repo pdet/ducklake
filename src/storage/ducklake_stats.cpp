@@ -41,6 +41,8 @@ DuckLakeColumnStats::DuckLakeColumnStats(const DuckLakeColumnStats &other) {
 	has_max = other.has_max;
 	any_valid = other.any_valid;
 	has_contains_nan = other.has_contains_nan;
+	min_is_exact = other.min_is_exact;
+	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -64,6 +66,8 @@ DuckLakeColumnStats &DuckLakeColumnStats::operator=(const DuckLakeColumnStats &o
 	has_num_values = other.has_num_values;
 	any_valid = other.any_valid;
 	has_contains_nan = other.has_contains_nan;
+	min_is_exact = other.min_is_exact;
+	max_is_exact = other.max_is_exact;
 
 	if (other.extra_stats) {
 		extra_stats = other.extra_stats->Copy();
@@ -138,8 +142,10 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		// all values in the current stats are null - copy the min/max
 		min = new_stats.min;
 		has_min = new_stats.has_min;
+		min_is_exact = new_stats.min_is_exact;
 		max = new_stats.max;
 		has_max = new_stats.has_max;
+		max_is_exact = new_stats.max_is_exact;
 		any_valid = true;
 		return;
 	}
@@ -151,34 +157,46 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		if (!new_stats.has_min) {
 			has_min = false;
 		} else if (has_min) {
-			// both stats have a min - select the smallest
+			// both stats have a min - select the smallest, on a tie the min is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_min = Value(min).DefaultCastAs(type);
 				auto new_min = Value(new_stats.min).DefaultCastAs(type);
 				if (new_min < current_min) {
 					min = new_stats.min;
+					min_is_exact = new_stats.min_is_exact;
+				} else if (new_min == current_min) {
+					min_is_exact = min_is_exact && new_stats.min_is_exact;
 				}
 			} else if (new_stats.min < min) {
 				// for other types we can compare the strings directly
 				min = new_stats.min;
+				min_is_exact = new_stats.min_is_exact;
+			} else if (new_stats.min == min) {
+				min_is_exact = min_is_exact && new_stats.min_is_exact;
 			}
 		}
 
 		if (!new_stats.has_max) {
 			has_max = false;
 		} else if (has_max) {
-			// both stats have a max - select the largest
+			// both stats have a max - select the largest, on a tie the max is exact only if both are exact
 			if (RequiresValueComparison(type)) {
 				// for numerics/temporals we need to parse the stats
 				auto current_max = Value(max).DefaultCastAs(type);
 				auto new_max = Value(new_stats.max).DefaultCastAs(type);
 				if (new_max > current_max) {
 					max = new_stats.max;
+					max_is_exact = new_stats.max_is_exact;
+				} else if (new_max == current_max) {
+					max_is_exact = max_is_exact && new_stats.max_is_exact;
 				}
 			} else if (new_stats.max > max) {
 				// for other types we can compare the strings directly
 				max = new_stats.max;
+				max_is_exact = new_stats.max_is_exact;
+			} else if (new_stats.max == max) {
+				max_is_exact = max_is_exact && new_stats.max_is_exact;
 			}
 		}
 	}
