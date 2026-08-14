@@ -1034,7 +1034,8 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 }
 
 template <class ROW>
-void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0) {
+void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0,
+                             bool has_exactness = false) {
 	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
 
 	if (global_stats.empty() || global_stats.back().table_id != table_id) {
@@ -1095,6 +1096,13 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		column_stats.extra_stats = row.template GetValue<string>(COLUMN_STATS_START + 4);
 	}
 
+	if (has_exactness) {
+		column_stats.min_is_exact =
+		    !row.IsNull(COLUMN_STATS_START + 5) && row.template GetValue<bool>(COLUMN_STATS_START + 5);
+		column_stats.max_is_exact =
+		    !row.IsNull(COLUMN_STATS_START + 6) && row.template GetValue<bool>(COLUMN_STATS_START + 6);
+	}
+
 	stats_entry.column_stats.push_back(std::move(column_stats));
 }
 
@@ -1105,21 +1113,36 @@ vector<DuckLakeGlobalStatsInfo> TransformGlobalStats(QueryResult &result) {
 
 	vector<DuckLakeGlobalStatsInfo> global_stats;
 
+	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(result, "min_is_exact");
 	for (auto &row : result) {
-		TransformGlobalStatsRow(row, global_stats);
+		TransformGlobalStatsRow(row, global_stats, 0, has_exactness);
 	}
 
 	return global_stats;
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery() {
+bool DuckLakeMetadataManager::ResultHasColumn(QueryResult &result, const string &name) {
+	for (auto &col_name : result.GetNames()) {
+		if (col_name == name) {
+			return true;
+		}
+	}
+	return false;
+}
+
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness) {
 	// Pure all-tables template (only {METADATA_CATALOG} is substituted by the caller; it is NOT run
 	// through StringUtil::Format). It must NOT contain a printf placeholder such as `WHERE table_id =
 	// %llu` - the server-side commit path (DuckLakeServerSideCommit::ReadExistingTableStats) executes
 	// the returned SQL verbatim, so a stray %llu would reach the parser and fail every server-side
 	// commit. The single-table GetGlobalTableStats() below keeps its own StringUtil::Format query.
-	return R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
+	string select_list =
+	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
+	    "max_value, extra_stats";
+	if (include_exactness) {
+		select_list += ", min_is_exact, max_is_exact";
+	}
+	return "\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE record_count IS NOT NULL
@@ -1134,8 +1157,13 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
                                                                              TableIndex table_id) {
-	string query = StringUtil::Format(R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
+	string select_list =
+	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
+	    "max_value, extra_stats";
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+		select_list += ", min_is_exact, max_is_exact";
+	}
+	string query = StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
 WHERE table_id = %llu
@@ -3397,11 +3425,15 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	                          select_list, inlined_table_name);
 }
 
-string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id) {
-	return StringUtil::Format(R"(
-SELECT data.data_file_id, data.record_count, data.file_size_bytes,
-       stats.column_id, stats.value_count, stats.null_count, stats.min_value, stats.max_value,
-       stats.contains_nan, stats.extra_stats
+string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness) {
+	string select_list = "data.data_file_id, data.record_count, data.file_size_bytes,\n"
+	                     "       stats.column_id, stats.value_count, stats.null_count, stats.min_value, "
+	                     "stats.max_value,\n"
+	                     "       stats.contains_nan, stats.extra_stats";
+	if (include_exactness) {
+		select_list += ", stats.min_is_exact, stats.max_is_exact";
+	}
+	return StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_data_file data
 LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
 WHERE data.table_id = %d
@@ -4327,7 +4359,14 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
 }
 
-string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery() {
+string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(bool include_exactness) {
+	// both UNION arms must stay column-aligned - extend them together
+	string snapshot_arm_padding;
+	string stats_arm_columns;
+	if (include_exactness) {
+		snapshot_arm_padding = ",\n    NULL AS min_is_exact,\n    NULL AS max_is_exact";
+		stats_arm_columns = ",\n    min_is_exact,\n    max_is_exact";
+	}
 	return R"(
 SELECT
     snapshot_id,
@@ -4348,7 +4387,8 @@ SELECT
     NULL AS contains_nan,
     NULL AS min_value,
     NULL AS max_value,
-    NULL AS extra_stats
+    NULL AS extra_stats)" +
+	       snapshot_arm_padding + R"(
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id = (
         SELECT MAX(snapshot_id)
@@ -4369,7 +4409,8 @@ SELECT
     contains_nan,
     min_value,
     max_value,
-    extra_stats
+    extra_stats)" +
+	       stats_arm_columns + R"(
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
@@ -4382,6 +4423,7 @@ ORDER BY table_id NULLS FIRST;
 SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(QueryResult &result,
                                                                             SnapshotAndStats &current_snapshot) {
 	SnapshotChangeInfo change_info;
+	bool has_exactness = ResultHasColumn(result, "min_is_exact");
 	bool first_row = true;
 	for (auto &row : result) {
 		if (first_row) {
@@ -4391,7 +4433,7 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
 			change_info.changes_made = row.GetValue<string>(4);
 		} else {
-			TransformGlobalStatsRow(row, current_snapshot.stats, 5);
+			TransformGlobalStatsRow(row, current_snapshot.stats, 5, has_exactness);
 		}
 		first_row = false;
 	}
@@ -4400,8 +4442,9 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 
 SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-                                                       const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	auto result = executor(GetSnapshotAndStatsAndChangesQuery());
+                                                       const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                       bool include_exactness) {
+	auto result = executor(GetSnapshotAndStatsAndChangesQuery(include_exactness));
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 

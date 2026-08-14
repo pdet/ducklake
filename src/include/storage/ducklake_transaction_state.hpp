@@ -123,7 +123,8 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                   const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                   bool supports_v1_1_metadata);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot,
 	                       const std::function<unique_ptr<QueryResult>(string)> &executor) const;

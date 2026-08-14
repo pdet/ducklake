@@ -870,10 +870,11 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = context.query_metadata_with_snapshot(
-	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id));
+	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, context.supports_v1_1_metadata));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
 	}
+	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
 	bool have_file = false;
 	idx_t last_file_id = 0;
 	for (auto &row : *result) {
@@ -919,6 +920,10 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		}
 		if (!row.IsNull(9) && col_stats.extra_stats) {
 			col_stats.extra_stats->Deserialize(row.GetValue<string>(9));
+		}
+		if (has_exactness) {
+			col_stats.min_is_exact = !row.IsNull(10) && row.GetValue<bool>(10);
+			col_stats.max_is_exact = !row.IsNull(11) && row.GetValue<bool>(11);
 		}
 		new_stats.MergeStats(field_idx, col_stats);
 	}
@@ -1901,10 +1906,12 @@ WHERE idt.schema_version < (
 SnapshotAndStats
 DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                             const TransactionChangeInformation &changes,
-                                            const std::function<unique_ptr<QueryResult>(string)> &executor) {
+                                            const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                            bool supports_v1_1_metadata) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
+	auto changes_made =
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, supports_v1_1_metadata);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -1929,8 +1936,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes,
+				                                          context.conflict_query_executor, context.supports_v1_1_metadata);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();

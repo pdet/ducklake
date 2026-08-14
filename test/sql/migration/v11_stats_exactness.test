@@ -56,3 +56,39 @@ SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_c
 ----
 1	4	true	true
 apple	zebra	false	false
+
+# the flags survive a detach/re-attach round-trip through the global stats read path
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.test VALUES (0, 'melon'), (5, 'kiwi');
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	false	false
+
+# compaction recomputes global stats from the per-file flags (mixed NULL and false files stay false)
+statement ok
+CALL ducklake.merge_adjacent_files();
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact
+FROM dl.ducklake_file_column_stats stats
+JOIN dl.ducklake_data_file f USING (data_file_id)
+WHERE f.end_snapshot IS NULL
+ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	false	false
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	5	true	true
+apple	zebra	false	false

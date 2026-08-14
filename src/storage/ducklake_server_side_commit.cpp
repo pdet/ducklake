@@ -67,15 +67,6 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 	return entry;
 }
 
-static bool HasResultColumn(QueryResult &result, const string &name) {
-	for (auto &col_name : result.GetNames()) {
-		if (col_name == name) {
-			return true;
-		}
-	}
-	return false;
-}
-
 template <class ROW>
 DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness) {
 	DuckLakeColumnStats s(type);
@@ -147,6 +138,7 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
+	supports_v1_1_metadata = ReadSupportsV1_1Metadata();
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -288,7 +280,7 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	{
 		auto stats_result = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS);
 		// staged tables from older clients lack the min_is_exact/max_is_exact columns
-		bool has_exactness = HasResultColumn(*stats_result, "min_is_exact");
+		bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
 		for (auto &row : *stats_result) {
 			DataFileIndex local_file_id(AsIdx(row, 0));
 			ColumnKey key {TableIndex(AsIdx(row, 1)), FieldIndex(AsIdx(row, 2))};
@@ -396,7 +388,7 @@ void DuckLakeServerSideCommit::ReadStagedInlinedData() {
 
 	auto stats_result = ScanStagedTable(DuckLakeStagedTableType::INLINED_COLUMN_STATS);
 	// staged tables from older clients lack the min_is_exact/max_is_exact columns
-	bool has_exactness = HasResultColumn(*stats_result, "min_is_exact");
+	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*stats_result, "min_is_exact");
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> stats_per_table;
 	for (auto &row : *stats_result) {
 		TableIndex table_id(AsIdx(row, 0));
@@ -646,7 +638,8 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 }
 
 void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(), "{METADATA_CATALOG}", schema_id);
+	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata),
+	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 
@@ -745,7 +738,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
-	ctx.supports_v1_1_metadata = ReadSupportsV1_1Metadata();
+	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return unique_ptr_cast<MaterializedQueryResult, QueryResult>(fresh_conn.Query(sql));

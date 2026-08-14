@@ -96,6 +96,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	if (col.has_max) {
 		stats.max = col.max_val;
 	}
+	stats.min_is_exact = col.min_is_exact;
+	stats.max_is_exact = col.max_is_exact;
 	stats.any_valid = stats.has_min || stats.has_max || col.has_extra_stats;
 	if (col.has_extra_stats && stats.extra_stats) {
 		stats.extra_stats->Deserialize(col.extra_stats);

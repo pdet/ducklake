@@ -212,10 +212,12 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery();
+	static string GlobalTableStatsQuery(bool include_exactness);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Whether the result contains a column with the given name
+	static bool ResultHasColumn(QueryResult &result, const string &name);
 
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
@@ -353,8 +355,9 @@ public:
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor);
-	static string GetSnapshotAndStatsAndChangesQuery();
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                              bool include_exactness);
+	static string GetSnapshotAndStatsAndChangesQuery(bool include_exactness);
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
@@ -376,7 +379,7 @@ public:
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list);
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types);
 
