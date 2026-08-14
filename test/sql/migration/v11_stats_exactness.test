@@ -1,0 +1,57 @@
+# name: test/sql/migration/v11_stats_exactness.test
+# description: stats written under v1.0 keep NULL min_is_exact/max_is_exact after migrating to v1.1
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/v11_stats_exactness.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.test(s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.test VALUES ('hello'), ('world');
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_stats_exactness_files', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0, AUTOMATIC_MIGRATION TRUE)
+
+# stats rows that existed before the migration have NULL exactness flags
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats
+----
+hello	world	NULL	NULL
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats
+----
+hello	world	NULL	NULL
+
+# writes after the migration keep the wider schema in sync
+statement ok
+INSERT INTO ducklake.test VALUES ('apple'), ('zebra');
+
+query I
+SELECT COUNT(*) FROM ducklake.test
+----
+4
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY data_file_id
+----
+hello	world	NULL	NULL
+apple	zebra	NULL	NULL
+
+query IIII
+SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats
+----
+apple	zebra	NULL	NULL

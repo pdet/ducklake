@@ -182,6 +182,8 @@ public:
 	virtual string GetCreateTableStatements();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
+	virtual string GetFileColumnStatsTableStatement();
+	virtual string GetTableColumnStatsTableStatement();
 	//! Get the version string written to ducklake_metadata
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
@@ -288,7 +290,7 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -348,7 +350,7 @@ public:
 	static string InsertSnapshotSql();
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
-	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats);
+	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor);

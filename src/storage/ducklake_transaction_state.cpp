@@ -977,7 +977,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	new_globals.initialized = true;
 	new_globals.stats = std::move(new_stats);
 	batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 }
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
@@ -1064,7 +1064,7 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 			new_globals.stats.column_stats.clear();
 		}
 		result += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 		if (delete_column_stats) {
 			result += DeleteTableColumnStatsSql(table_id);
 		}
@@ -1175,7 +1175,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		// update the global stats for this table based on the newly written data
 		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 		if (clear_column_stats) {
 			batch_query += DeleteTableColumnStatsSql(table_id);
 		}

@@ -594,7 +594,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			                              name);
 		}
 		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
-		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsEpochPartitionTransforms()) {
+		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsV1_1Metadata()) {
 			throw InvalidInputException("DuckLake 1.0 does not support the %s partition transform - attach with "
 			                            "AUTOMATIC_MIGRATION set to TRUE to migrate the catalog to a newer version",
 			                            name);
