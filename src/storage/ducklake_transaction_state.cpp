@@ -826,10 +826,12 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 					if (!row.IsNull(col_offset + 0)) {
 						col_stats.has_min = true;
 						col_stats.min = row.template GetValue<string>(col_offset + 0);
+						col_stats.min_is_exact = true;
 					}
 					if (!row.IsNull(col_offset + 1)) {
 						col_stats.has_max = true;
 						col_stats.max = row.template GetValue<string>(col_offset + 1);
+						col_stats.max_is_exact = true;
 					}
 				}
 				target.MergeStats(col.field_index, col_stats);
