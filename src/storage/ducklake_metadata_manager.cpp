@@ -116,8 +116,9 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
+	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsPrefixedInlinedColumns();
 	for (auto &col : columns.Logical()) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns)) {
 			return false;
 		}
 		if (col.Name().size() > max_identifier_length) {
@@ -132,8 +133,9 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
+	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsPrefixedInlinedColumns();
 	for (auto &col : columns) {
-		if (DuckLakeUtil::IsInlinedSystemColumn(col.name)) {
+		if (DuckLakeUtil::IsInlinedSystemColumn(col.name, prefixed_inlined_columns)) {
 			return false;
 		}
 		if (col.name.size() > max_identifier_length) {
@@ -432,7 +434,44 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 );
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
+	// rename first: a conflict aborts the migration while the catalog is still at v1.0
+	MigrateInlinedColumnNames(allow_failures);
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
+}
+
+void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
+	auto tables = Query("SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables");
+	if (tables->HasError()) {
+		if (allow_failures) {
+			return;
+		}
+		tables->GetErrorObject().Throw("Failed to list inlined-data tables while migrating to v1.1-dev1: ");
+	}
+	DuckLakeInlinedColNames old_names(false);
+	DuckLakeInlinedColNames new_names(true);
+	for (auto &row : *tables) {
+		auto table_name = row.GetValue<string>(0);
+		auto probe = Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", old_names.row_id,
+		                                      SQLIdentifier(table_name)));
+		if (probe->HasError()) {
+			// already renamed (or the table is gone) - nothing to do
+			continue;
+		}
+		auto result = Execute(StringUtil::Format(
+		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;"
+		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;"
+		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+		    SQLIdentifier(table_name), old_names.row_id, new_names.row_id, SQLIdentifier(table_name),
+		    old_names.begin_snapshot, new_names.begin_snapshot, SQLIdentifier(table_name), old_names.end_snapshot,
+		    new_names.end_snapshot));
+		if (result->HasError() && !allow_failures) {
+			result->GetErrorObject().Throw(
+			    StringUtil::Format("Failed to rename inlined-data metadata columns of \"%s\" while migrating to "
+			                       "v1.1-dev1 - if the table has a user column named \"%s\", \"%s\" or \"%s\", rename "
+			                       "it before migrating: ",
+			                       table_name, new_names.row_id, new_names.begin_snapshot, new_names.end_snapshot));
+		}
+	}
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -2728,7 +2767,7 @@ string DuckLakeMetadataManager::InlinedTableNameFor(idx_t table_id, idx_t schema
 }
 
 DuckLakeInlinedColNames DuckLakeMetadataManager::InlinedColNames() const {
-	return DuckLakeInlinedColNames();
+	return DuckLakeInlinedColNames(transaction.GetCatalog().SupportsPrefixedInlinedColumns());
 }
 
 string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, const string &column_defs,

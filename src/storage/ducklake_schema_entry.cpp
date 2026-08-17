@@ -74,10 +74,10 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	                          base_info.on_conflict)) {
 		return nullptr;
 	}
-	// reject columns with reserved DuckLake internal names when inlining is enabled
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	if (duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
-		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns);
+	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	if (prefixed_cols || duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
+		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns, prefixed_cols);
 	}
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());

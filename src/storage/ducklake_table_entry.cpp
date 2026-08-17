@@ -748,8 +748,14 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
                                                         RenameColumnInfo &info) {
 	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name.GetIdentifierName()) &&
-	    duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0) {
+	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name.GetIdentifierName(), prefixed_cols) &&
+	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
+		if (prefixed_cols) {
+			throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use: column names "
+			                       "starting with \"_ducklake_\" are not allowed.",
+			                       info.new_name.GetIdentifierName());
+		}
 		throw CatalogException(
 		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
 		    "you must use this column name, disable inlining by calling "
@@ -795,8 +801,14 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
                                                         AddColumnInfo &info) {
 	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name().GetIdentifierName()) &&
-	    duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0) {
+	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name().GetIdentifierName(), prefixed_cols) &&
+	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
+		if (prefixed_cols) {
+			throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use: column names "
+			                       "starting with \"_ducklake_\" are not allowed.",
+			                       info.new_column.Name().GetIdentifierName());
+		}
 		throw CatalogException(
 		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
 		    "you must use this column name, disable inlining by calling "

@@ -243,6 +243,10 @@ public:
 	bool SupportsEpochPartitionTransforms() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
 	}
+	//! Whether inlined-data tables use _ducklake_-prefixed metadata columns (renamed in 1.1-dev1)
+	bool SupportsPrefixedInlinedColumns() const {
+		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;
+	}
 
 	void OnDetach(ClientContext &context) override;
 

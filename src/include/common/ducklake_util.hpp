@@ -51,8 +51,10 @@ public:
 	//! single-quoted string literals and double-quoted identifiers.
 	static string ReplaceSkippingQuotes(const string &sql, const string &from, const string &to);
 
-	//! Returns true if the given column name conflicts with inlined data system columns
-	static bool IsInlinedSystemColumn(const string &name);
+	//! Returns true if the given column name conflicts with inlined data system columns.
+	//! With prefixed_inlined_columns (catalogs >= 1.1-dev1) the reserved namespace is the
+	//! _ducklake_ prefix, before that it is the fixed list of unprefixed names.
+	static bool IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns);
 
 	static string OptionalIdxOrNull(const optional_idx &v);
 
@@ -67,7 +69,8 @@ public:
 	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
 	                            idx_t row);
 	//! Throws if any column in the list conflicts with inlined data system columns
-	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name = "");
+	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, bool prefixed_inlined_columns,
+	                                           const string &table_name = "");
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.

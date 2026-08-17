@@ -359,28 +359,38 @@ shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const T
 	return nullptr;
 }
 
-bool DuckLakeUtil::IsInlinedSystemColumn(const string &name) {
+bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {
+	if (prefixed_inlined_columns) {
+		return StringUtil::StartsWith(StringUtil::Lower(name), "_ducklake_");
+	}
 	return StringUtil::CIEquals(name, "row_id") || StringUtil::CIEquals(name, "begin_snapshot") ||
 	       StringUtil::CIEquals(name, "end_snapshot") || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
 	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
 }
 
-void DuckLakeUtil::ValidateNoInlinedSystemColumns(const ColumnList &columns, const string &table_name) {
+void DuckLakeUtil::ValidateNoInlinedSystemColumns(const ColumnList &columns, bool prefixed_inlined_columns,
+                                                  const string &table_name) {
 	for (auto &col : columns.Logical()) {
-		if (IsInlinedSystemColumn(col.Name().GetIdentifierName())) {
-			if (table_name.empty()) {
-				throw BinderException(
-				    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-				    "you must use this column name, disable inlining by calling "
-				    "ducklake_set_option('data_inlining_row_limit', 0).",
-				    col.Name().GetIdentifierName());
-			}
+		if (!IsInlinedSystemColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns)) {
+			continue;
+		}
+		if (!table_name.empty()) {
 			throw BinderException(
 			    "Cannot enable data inlining for table \"%s\". Column \"%s\" conflicts with a reserved DuckLake "
 			    "internal column name used for inlining. To enable inlining for this table, rename or drop column "
 			    "\"%s\".",
 			    table_name, col.Name().GetIdentifierName(), col.Name().GetIdentifierName());
 		}
+		if (prefixed_inlined_columns) {
+			throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use: column names starting "
+			                      "with \"_ducklake_\" are not allowed.",
+			                      col.Name().GetIdentifierName());
+		}
+		throw BinderException(
+		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
+		    "you must use this column name, disable inlining by calling "
+		    "ducklake_set_option('data_inlining_row_limit', 0).",
+		    col.Name().GetIdentifierName());
 	}
 }
 

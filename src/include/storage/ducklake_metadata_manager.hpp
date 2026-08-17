@@ -47,6 +47,14 @@ enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
+	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
+		if (prefixed_inlined_columns) {
+			row_id = "_ducklake_row_id";
+			begin_snapshot = "_ducklake_begin_snapshot";
+			end_snapshot = "_ducklake_end_snapshot";
+		}
+	}
+
 	string row_id = "row_id";
 	string begin_snapshot = "begin_snapshot";
 	string end_snapshot = "end_snapshot";
@@ -416,6 +424,10 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
+	//! Renames row_id/begin_snapshot/end_snapshot to their _ducklake_ prefixed variants in every
+	//! registered inlined-data table. Probe-based: tables that are already renamed are skipped, so
+	//! this is safe to re-run on every in-place 1.1-dev1 evolution.
+	virtual void MigrateInlinedColumnNames(bool allow_failures);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
