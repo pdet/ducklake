@@ -1,5 +1,5 @@
 # name: test/sql/stats/stats_exactness_inlined.test
-# description: inlined data produces exact min/max stats, flushing demotes strings to the COPY path
+# description: inlined data produces exact min/max stats, flushing keeps exactness via RETURN_STATS
 # group: [stats]
 
 require ducklake
@@ -29,16 +29,15 @@ hello	world	true	true
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-# the flushed parquet file goes through the COPY path, which does not know string exactness yet
+# the flushed parquet file carries exactness through COPY RETURN_STATS
 query IIII
 SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY column_id
 ----
 1	2	true	true
-hello	world	false	false
+hello	world	true	true
 
-# merging the flushed file demotes the string bounds on a tie
 query IIII
 SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 1	2	true	true
-hello	world	false	false
+hello	world	true	true

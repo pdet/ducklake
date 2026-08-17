@@ -38,8 +38,7 @@ SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_c
 1	2	NULL	NULL
 hello	world	NULL	NULL
 
-# writes after the migration record exactness: value types are always exact, string exactness
-# is not known on the COPY path yet so it is conservatively false
+# writes after the migration record exactness
 statement ok
 INSERT INTO ducklake.test VALUES (3, 'apple'), (4, 'zebra');
 
@@ -49,13 +48,13 @@ SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_co
 1	2	NULL	NULL
 hello	world	NULL	NULL
 3	4	true	true
-apple	zebra	false	false
+apple	zebra	true	true
 
 query IIII
 SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 1	4	true	true
-apple	zebra	false	false
+apple	zebra	true	true
 
 # the flags survive a detach/re-attach round-trip through the global stats read path
 statement ok
@@ -71,9 +70,9 @@ query IIII
 SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 0	5	true	true
-apple	zebra	false	false
+apple	zebra	true	true
 
-# compaction recomputes global stats from the per-file flags (mixed NULL and false files stay false)
+# compaction recomputes global stats from the per-file flags
 statement ok
 CALL ducklake.merge_adjacent_files();
 
@@ -85,10 +84,10 @@ WHERE f.end_snapshot IS NULL
 ORDER BY column_id
 ----
 0	5	true	true
-apple	zebra	false	false
+apple	zebra	true	true
 
 query IIII
 SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 0	5	true	true
-apple	zebra	false	false
+apple	zebra	true	true
