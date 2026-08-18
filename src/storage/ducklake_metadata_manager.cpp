@@ -3382,15 +3382,23 @@ void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, con
 	if (!result.HasError()) {
 		return;
 	}
-	if (transaction.GetCatalog().SupportsV1_1Metadata() && !inlined_table_name.empty()) {
-		// unmigrated tables still lead with the legacy row_id metadata column
+	if (!inlined_table_name.empty()) {
+		// the leading metadata column reveals whether the table matches this session's catalog version
 		auto probe =
 		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(inlined_table_name)));
-		if (!probe->HasError() && !probe->GetNames().empty() &&
-		    StringUtil::CIEquals(probe->GetNames()[0].GetIdentifierName(), DuckLakeInlinedColNames(false).row_id)) {
-			result.GetErrorObject().Throw(
-			    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake version, "
-			    "reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+		if (!probe->HasError() && !probe->GetNames().empty()) {
+			auto &first_column = probe->GetNames()[0].GetIdentifierName();
+			bool prefixed_catalog = transaction.GetCatalog().SupportsV1_1Metadata();
+			if (prefixed_catalog && StringUtil::CIEquals(first_column, DuckLakeInlinedColNames(false).row_id)) {
+				result.GetErrorObject().Throw(
+				    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake "
+				    "version, reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+			}
+			if (!prefixed_catalog && StringUtil::CIEquals(first_column, DuckLakeInlinedColNames(true).row_id)) {
+				result.GetErrorObject().Throw(
+				    "Failed to read inlined data from DuckLake. The catalog was migrated by another connection, "
+				    "reattach to pick up the new version: ");
+			}
 		}
 	}
 	result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
@@ -3440,8 +3448,7 @@ FROM {METADATA_CATALOG}.%s inlined_data
 WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL)
 ORDER BY %s;)",
 	                                                 projection, inlined_table_name, col_names.begin_snapshot,
-	                                                 col_names.end_snapshot, col_names.end_snapshot,
-	                                                 col_names.row_id));
+	                                                 col_names.end_snapshot, col_names.end_snapshot, col_names.row_id));
 	return result;
 }
 
@@ -5657,9 +5664,8 @@ void DuckLakeMetadataManager::DeleteFlushedInlinedData(const DuckLakeInlinedTabl
 	}
 }
 
-string
-DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
-                                                          const DuckLakeInlinedColNames &col_names) {
+string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                                                 const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",

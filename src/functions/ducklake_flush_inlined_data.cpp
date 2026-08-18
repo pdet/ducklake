@@ -130,8 +130,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		// When the table has sort metadata, the file is written in sorted order.
 		// The ORDER BY must match the actual file order so delete positions are correct.
 		auto col_names = metadata_manager.InlinedColNames();
-		string order_by = StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id,
-		                                     col_names.begin_snapshot);
+		string order_by =
+		    StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
 		if (!sort_order_sql.empty()) {
 			order_by = sort_order_sql + ", " + order_by;
 		}
@@ -155,8 +155,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 			// Query deleted rows within this file's row range, filtered to its partition
 			string extra_filter = partition_filter.empty() ? "" : " AND " + partition_filter;
-			auto deleted_rows_result =
-			    metadata_manager.Query(snapshot, StringUtil::Format(R"(
+			auto deleted_rows_result = metadata_manager.Query(
+			    snapshot,
+			    StringUtil::Format(R"(
 				WITH all_rows AS (
 					SELECT %s AS end_snapshot, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS output_position
 					FROM {METADATA_CATALOG}.%s
@@ -166,10 +167,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 				FROM all_rows
 				WHERE end_snapshot IS NOT NULL
 				AND output_position >= %d AND output_position < %d;)",
-			                                                        col_names.end_snapshot, order_by,
-			                                                        inlined_table.table_name, col_names.begin_snapshot,
-			                                                        extra_filter, file_offset,
-			                                                        file_offset + file.row_count));
+			                       col_names.end_snapshot, order_by, inlined_table.table_name, col_names.begin_snapshot,
+			                       extra_filter, file_offset, file_offset + file.row_count));
 			metadata_manager.CheckInlinedDataReadError(*deleted_rows_result, inlined_table.table_name);
 
 			for (auto &row : *deleted_rows_result) {
