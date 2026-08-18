@@ -449,27 +449,46 @@ void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
 	}
 	DuckLakeInlinedColNames old_names(false);
 	DuckLakeInlinedColNames new_names(true);
+	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
+	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
+	                                          {old_names.end_snapshot, new_names.end_snapshot}};
 	for (auto &row : *tables) {
 		auto table_name = row.GetValue<string>(0);
-		auto probe = Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", old_names.row_id,
-		                                      SQLIdentifier(table_name)));
+		auto probe =
+		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		if (probe->HasError()) {
-			// already renamed (or the table is gone) - nothing to do
+			if (allow_failures) {
+				continue;
+			}
+			probe->GetErrorObject().Throw(StringUtil::Format(
+			    "Failed to read inlined-data table \"%s\" while migrating to v1.1-dev1: ", table_name));
+		}
+		case_insensitive_set_t columns;
+		for (auto &name : probe->GetNames()) {
+			columns.insert(name.GetIdentifierName());
+		}
+		string renames;
+		for (auto &entry : col_renames) {
+			bool has_old = columns.count(entry.first);
+			bool has_new = columns.count(entry.second);
+			if (has_old && has_new) {
+				throw InvalidInputException(
+				    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: the table "
+				    "has both a \"%s\" and a \"%s\" column - rename user column \"%s\" before migrating",
+				    table_name, entry.first, entry.second, entry.second);
+			}
+			if (has_old) {
+				renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+				                              SQLIdentifier(table_name), entry.first, entry.second);
+			}
+		}
+		if (renames.empty()) {
 			continue;
 		}
-		auto result = Execute(StringUtil::Format(
-		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;"
-		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;"
-		    "ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
-		    SQLIdentifier(table_name), old_names.row_id, new_names.row_id, SQLIdentifier(table_name),
-		    old_names.begin_snapshot, new_names.begin_snapshot, SQLIdentifier(table_name), old_names.end_snapshot,
-		    new_names.end_snapshot));
+		auto result = Execute(renames);
 		if (result->HasError() && !allow_failures) {
-			result->GetErrorObject().Throw(
-			    StringUtil::Format("Failed to rename inlined-data metadata columns of \"%s\" while migrating to "
-			                       "v1.1-dev1 - if the table has a user column named \"%s\", \"%s\" or \"%s\", rename "
-			                       "it before migrating: ",
-			                       table_name, new_names.row_id, new_names.begin_snapshot, new_names.end_snapshot));
+			result->GetErrorObject().Throw(StringUtil::Format(
+			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
 		}
 	}
 }
