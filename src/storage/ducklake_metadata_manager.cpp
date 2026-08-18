@@ -463,24 +463,41 @@ void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
 			probe->GetErrorObject().Throw(StringUtil::Format(
 			    "Failed to read inlined-data table \"%s\" while migrating to v1.1-dev1: ", table_name));
 		}
-		case_insensitive_set_t columns;
-		for (auto &name : probe->GetNames()) {
-			columns.insert(name.GetIdentifierName());
+		// the metadata columns are always the first three columns, user columns follow
+		auto &names = probe->GetNames();
+		case_insensitive_set_t user_columns;
+		for (idx_t i = col_renames.size(); i < names.size(); i++) {
+			user_columns.insert(names[i].GetIdentifierName());
 		}
 		string renames;
-		for (auto &entry : col_renames) {
-			bool has_old = columns.count(entry.first);
-			bool has_new = columns.count(entry.second);
-			if (has_old && has_new) {
+		bool unexpected_layout = names.size() < col_renames.size();
+		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
+			auto &entry = col_renames[i];
+			auto name = names[i].GetIdentifierName();
+			if (StringUtil::CIEquals(name, entry.second)) {
+				continue;
+			}
+			if (!StringUtil::CIEquals(name, entry.first)) {
+				unexpected_layout = true;
+				break;
+			}
+			if (user_columns.count(entry.second)) {
 				throw InvalidInputException(
-				    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: the table "
-				    "has both a \"%s\" and a \"%s\" column - rename user column \"%s\" before migrating",
-				    table_name, entry.first, entry.second, entry.second);
+				    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1: the table "
+				    "has a user column \"%s\" colliding with the renamed metadata column, rename it before migrating",
+				    table_name, entry.second);
 			}
-			if (has_old) {
-				renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
-				                              SQLIdentifier(table_name), entry.first, entry.second);
+			renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+			                              SQLIdentifier(table_name), entry.first, entry.second);
+		}
+		if (unexpected_layout) {
+			if (allow_failures) {
+				continue;
 			}
+			throw InvalidInputException(
+			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-: the table has "
+			    "an unexpected column layout",
+			    table_name);
 		}
 		if (renames.empty()) {
 			continue;
