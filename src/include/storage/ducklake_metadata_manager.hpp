@@ -47,13 +47,19 @@ enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
+	//! Column name prefix reserved for DuckLake internal use
+	static constexpr const char *PREFIX = "_ducklake_";
+
 	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
 		if (prefixed_inlined_columns) {
-			row_id = "_ducklake_row_id";
-			begin_snapshot = "_ducklake_begin_snapshot";
-			end_snapshot = "_ducklake_end_snapshot";
+			row_id = PREFIX + row_id;
+			begin_snapshot = PREFIX + begin_snapshot;
+			end_snapshot = PREFIX + end_snapshot;
 		}
 	}
+
+	//! Whether a user column name collides with the metadata columns written for inlining
+	bool ConflictsWith(const string &name) const;
 
 	string row_id = "row_id";
 	string begin_snapshot = "begin_snapshot";

@@ -25,7 +25,7 @@ DETACH dlc
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta', AUTOMATIC_MIGRATION TRUE)
 ----
-Failed to rename inlined-data metadata columns
+table "c" has a column "_ducklake_row_id" colliding with the renamed metadata column. Rename the column and call ducklake_flush_inlined_data() before migrating
 
 # the catalog is still at v1.0 and fully usable
 statement ok
