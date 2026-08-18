@@ -435,16 +435,13 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 	// rename first so a conflict aborts while the catalog is still at v1.0
-	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedColumnNames();
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
 }
 
-void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
+void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
 	auto tables = Query("SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables");
 	if (tables->HasError()) {
-		if (allow_failures) {
-			return;
-		}
 		tables->GetErrorObject().Throw("Failed to list inlined-data tables while migrating to v1.1-dev1: ");
 	}
 	DuckLakeInlinedColNames old_names(false);
@@ -457,9 +454,6 @@ void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
 		auto probe =
 		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		if (probe->HasError()) {
-			if (allow_failures) {
-				continue;
-			}
 			probe->GetErrorObject().Throw(StringUtil::Format(
 			    "Failed to read inlined-data table \"%s\" while migrating to v1.1-dev1: ", table_name));
 		}
@@ -491,9 +485,6 @@ void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
 			                              SQLIdentifier(table_name), entry.first, entry.second);
 		}
 		if (unexpected_layout) {
-			if (allow_failures) {
-				continue;
-			}
 			throw InvalidInputException(
 			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-: the table has "
 			    "an unexpected column layout",
@@ -503,7 +494,7 @@ void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool allow_failures) {
 			continue;
 		}
 		auto result = Execute(renames);
-		if (result->HasError() && !allow_failures) {
+		if (result->HasError()) {
 			result->GetErrorObject().Throw(StringUtil::Format(
 			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
 		}
@@ -3375,11 +3366,21 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	return string();
 }
 
+void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result) {
+	if (!result.HasError()) {
+		return;
+	}
+	if (transaction.GetCatalog().SupportsV1_1Metadata() && StringUtil::Contains(result.GetError(), "_ducklake_")) {
+		result.GetErrorObject().Throw(
+		    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake version, "
+		    "reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+	}
+	result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
+}
+
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
                                                                               const vector<LogicalType> &) {
-	if (result.HasError()) {
-		result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
-	}
+	CheckInlinedDataReadError(result);
 
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());

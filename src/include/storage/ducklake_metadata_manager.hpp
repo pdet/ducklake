@@ -395,6 +395,8 @@ public:
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id);
+	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
+	void CheckInlinedDataReadError(QueryResult &result);
 	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
 	                                                             const vector<LogicalType> &expected_types);
 
@@ -425,7 +427,7 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
-	virtual void MigrateInlinedColumnNames(bool allow_failures);
+	virtual void MigrateInlinedColumnNames();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
