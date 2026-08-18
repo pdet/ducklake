@@ -3377,21 +3377,28 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	return string();
 }
 
-void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result) {
+void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name) {
 	if (!result.HasError()) {
 		return;
 	}
-	if (transaction.GetCatalog().SupportsV1_1Metadata() && StringUtil::Contains(result.GetError(), "_ducklake_")) {
-		result.GetErrorObject().Throw(
-		    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake version, "
-		    "reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+	if (transaction.GetCatalog().SupportsV1_1Metadata() && !inlined_table_name.empty()) {
+		// unmigrated tables still lead with the legacy row_id metadata column
+		auto probe =
+		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(inlined_table_name)));
+		if (!probe->HasError() && !probe->GetNames().empty() &&
+		    StringUtil::CIEquals(probe->GetNames()[0].GetIdentifierName(), DuckLakeInlinedColNames(false).row_id)) {
+			result.GetErrorObject().Throw(
+			    "Failed to read inlined data from DuckLake. If this catalog was written by an older DuckLake version, "
+			    "reattach with AUTOMATIC_MIGRATION TRUE to rename the inlined metadata columns: ");
+		}
 	}
 	result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
-                                                                              const vector<LogicalType> &) {
-	CheckInlinedDataReadError(result);
+                                                                              const vector<LogicalType> &,
+                                                                              const string &inlined_table_name) {
+	CheckInlinedDataReadError(result, inlined_table_name);
 
 	auto context = transaction.context.lock();
 	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());

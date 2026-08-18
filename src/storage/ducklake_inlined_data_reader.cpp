@@ -126,7 +126,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		default:
 			throw InternalException("Unknown DuckLake scan type");
 		}
-		data = metadata_manager.TransformInlinedData(*query_result, expected_types);
+		data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
 			scan_chunk.Initialize(context, scan_types);

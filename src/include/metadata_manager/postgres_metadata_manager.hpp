@@ -31,7 +31,8 @@ public:
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                     const vector<LogicalType> &expected_types) override;
+	                                                     const vector<LogicalType> &expected_types,
+	                                                     const string &inlined_table_name) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
