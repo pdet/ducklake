@@ -746,22 +746,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         RenameColumnInfo &info) {
-	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
-	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name.GetIdentifierName(), prefixed_cols) &&
-	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
-		if (prefixed_cols) {
-			throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use: column names "
-			                       "starting with \"_ducklake_\" are not allowed.",
-			                       info.new_name.GetIdentifierName());
-		}
-		throw CatalogException(
-		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-		    "you must use this column name, disable inlining by calling "
-		    "ducklake_set_option('data_inlining_row_limit', 0).",
-		    info.new_name.GetIdentifierName());
-	}
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
+	                                          info.new_name.GetIdentifierName());
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.old_name)) {
@@ -799,22 +786,9 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         AddColumnInfo &info) {
-	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
-	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name().GetIdentifierName(), prefixed_cols) &&
-	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
-		if (prefixed_cols) {
-			throw CatalogException("Column name \"%s\" is reserved by DuckLake for internal use: column names "
-			                       "starting with \"_ducklake_\" are not allowed.",
-			                       info.new_column.Name().GetIdentifierName());
-		}
-		throw CatalogException(
-		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-		    "you must use this column name, disable inlining by calling "
-		    "ducklake_set_option('data_inlining_row_limit', 0).",
-		    info.new_column.Name().GetIdentifierName());
-	}
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
+	                                          info.new_column.Name().GetIdentifierName());
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (info.if_column_not_exists && ColumnExists(info.new_column.Name())) {

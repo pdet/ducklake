@@ -16,8 +16,10 @@
 #include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
+class ClientContext;
 class DataChunk;
 class ColumnList;
+class DuckLakeCatalog;
 class DuckLakeMetadataManager;
 class FileSystem;
 class TableFilter;
@@ -68,9 +70,14 @@ public:
 
 	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
 	                            idx_t row);
-	//! Throws if any column in the list conflicts with inlined data system columns
-	static void ValidateNoInlinedSystemColumns(const ColumnList &columns, bool prefixed_inlined_columns,
-	                                           const string &table_name = "");
+	//! DDL guards: throw if a column name is reserved for inlined-data metadata on this catalog
+	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
+	                                        TableIndex table_id, const string &name);
+	static void ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
+	                                           const ColumnList &columns);
+	//! Throws if a column conflicts with the inlined-data metadata columns when enabling inlining on table_name
+	static void ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
+	                                      const string &table_name);
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.

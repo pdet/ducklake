@@ -74,11 +74,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 	                          base_info.on_conflict)) {
 		return nullptr;
 	}
-	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
-	if (prefixed_cols || duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
-		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns, prefixed_cols);
-	}
+	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), transaction.GetContext(), schema_id,
+	                                             base_info.columns);
 	//! get a local table-id
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
