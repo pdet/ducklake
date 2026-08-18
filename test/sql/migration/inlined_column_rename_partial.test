@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_partial.test
-# description: a conflicting user column must not leave the inlined table half-renamed
+# description: a conflicting user column must not leave the inlined table partially renamed
 # group: [migration]
 
 require ducklake
@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta', DUCKLAKE_VERSION '1.0')
 
-# legal on v1.0: only row_id/begin_snapshot/end_snapshot were reserved
+# legal on v1.0 where only row_id, begin_snapshot and end_snapshot were reserved
 statement ok
 CREATE TABLE dlp.t(_ducklake_begin_snapshot INTEGER, _ducklake_end_snapshot INTEGER, v INTEGER);
 
@@ -34,7 +34,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_p
 ----
 Failed to rename inlined-data metadata columns
 
-# retrying fails the same way - the table was not left half-renamed
+# retrying fails the same way and the table was not partially renamed
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlp (DATA_PATH '{DATA_PATH}/inlined_partial_files', METADATA_CATALOG 'dlpmeta', AUTOMATIC_MIGRATION TRUE)
 ----

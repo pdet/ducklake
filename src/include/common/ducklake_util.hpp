@@ -53,9 +53,7 @@ public:
 	//! single-quoted string literals and double-quoted identifiers.
 	static string ReplaceSkippingQuotes(const string &sql, const string &from, const string &to);
 
-	//! Returns true if the given column name conflicts with inlined data system columns.
-	//! With prefixed_inlined_columns (catalogs >= 1.1-dev1) the reserved namespace is the
-	//! _ducklake_ prefix, before that it is the fixed list of unprefixed names.
+	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns);
 
 	static string OptionalIdxOrNull(const optional_idx &v);
@@ -70,12 +68,12 @@ public:
 
 	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
 	                            idx_t row);
-	//! DDL guards: throw if a column name is reserved for inlined-data metadata on this catalog
+	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
 	                                        TableIndex table_id, const string &name);
 	static void ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
 	                                           const ColumnList &columns);
-	//! Throws if a column conflicts with the inlined-data metadata columns when enabling inlining on table_name
+	//! Throws if a column conflicts with inlined data metadata columns when enabling inlining
 	static void ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
 	                                      const string &table_name);
 

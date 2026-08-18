@@ -434,7 +434,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 );
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
-	// rename first: a conflict aborts the migration while the catalog is still at v1.0
+	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
 }

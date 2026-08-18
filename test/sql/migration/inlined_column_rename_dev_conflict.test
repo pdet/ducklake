@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_dev_conflict.test
-# description: in-place dev migration of a legacy-named 1.1-dev1 catalog must not half-rename on a column conflict
+# description: dev migration must not partially rename the inlined table on a column conflict
 # group: [migration]
 
 require ducklake
@@ -18,7 +18,7 @@ INSERT INTO dl.t VALUES (999999, 999999, 42);
 statement ok
 DETACH dl
 
-# simulate a 1.1-dev1 catalog created before the rename: legacy columns, dev1 version string
+# simulate a dev1 catalog created before the rename with legacy columns
 statement ok
 ATTACH '{TEST_DIR}/dev1_conflict.db' AS meta;
 
@@ -28,7 +28,7 @@ UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 statement ok
 DETACH meta
 
-# the in-place dev migration must fail loudly instead of half-renaming the inlined table
+# the dev migration must fail loudly instead of partially renaming the inlined table
 statement error
 ATTACH 'ducklake:{TEST_DIR}/dev1_conflict.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_conflict_files', AUTOMATIC_MIGRATION TRUE)
 ----

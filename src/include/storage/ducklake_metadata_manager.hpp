@@ -424,9 +424,7 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
-	//! Renames row_id/begin_snapshot/end_snapshot to their _ducklake_ prefixed variants in every
-	//! registered inlined-data table. Probe-based: tables that are already renamed are skipped, so
-	//! this is safe to re-run on every in-place 1.1-dev1 evolution.
+	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool allow_failures);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);

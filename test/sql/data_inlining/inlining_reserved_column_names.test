@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/inlining_reserved_column_names.test
-# description: the _ducklake_ prefix is reserved; legacy reserved names (row_id, begin_snapshot, end_snapshot) are regular columns
+# description: the _ducklake_ prefix is reserved and the legacy reserved names are regular columns
 # group: [data_inlining]
 
 require ducklake
@@ -16,7 +16,7 @@ CREATE TABLE ducklake.t1(row_id INTEGER, begin_snapshot INTEGER, end_snapshot IN
 statement ok
 INSERT INTO ducklake.t1 VALUES (1, 10, 100), (2, 20, 200);
 
-# the data is inlined - no files written
+# the data is inlined and no files are written
 query I
 SELECT COUNT(*) FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
 ----
@@ -112,7 +112,7 @@ CREATE TABLE dl10.t1(row_id INTEGER, v INTEGER);
 ----
 Column name "row_id" is reserved by DuckLake for internal use when data inlining is enabled. If you must use this column name, disable inlining by calling ducklake_set_option('data_inlining_row_limit', 0).
 
-# a non-internal _ducklake_ name is not reserved on v1.0
+# other _ducklake_ names are not reserved on v1.0
 statement ok
 CREATE TABLE dl10.t3(_ducklake_free INTEGER);
 
@@ -145,7 +145,7 @@ CALL dl10.set_option('data_inlining_row_limit', 0);
 statement ok
 CREATE TABLE dl10.t1(row_id INTEGER, v INTEGER);
 
-# re-enabling inlining on a v1.0 table with legacy names is rejected
+# enabling inlining again on a v1.0 table with legacy names is rejected
 statement error
 CALL dl10.set_option('data_inlining_row_limit', 10, table_name => 't1');
 ----

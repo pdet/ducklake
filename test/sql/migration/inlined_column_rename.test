@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename.test
-# description: migrating a v1.0 catalog renames inlined-data metadata columns to the _ducklake_ prefix
+# description: migrating a v1.0 catalog renames inlined data metadata columns to the _ducklake_ prefix
 # group: [migration]
 
 require ducklake
@@ -26,7 +26,7 @@ SELECT row_id, begin_snapshot, end_snapshot FROM dlmeta.ducklake_inlined_data_1_
 statement ok
 DETACH dl
 
-# re-attaching without migration keeps the catalog readable at v1.0
+# reattaching without migration keeps the catalog readable at v1.0
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta')
 
@@ -42,7 +42,7 @@ INSERT INTO dl.t VALUES (5, 6);
 statement ok
 DETACH dl
 
-# migrating to 1.1-dev1 renames the metadata columns
+# migrating to v1.1 renames the metadata columns
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
 
@@ -78,7 +78,7 @@ SELECT i, j FROM dl.t ORDER BY i
 statement ok
 DETACH dl
 
-# re-running the in-place dev migration is a no-op
+# rerunning the dev migration changes nothing
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
 
