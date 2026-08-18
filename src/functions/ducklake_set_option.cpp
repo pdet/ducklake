@@ -19,7 +19,7 @@ static void ValidateTableScope(ClientContext &context, Catalog &catalog, const s
 	    context, Identifier(schema_name), Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 	DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(),
-	                                             catalog.Cast<DuckLakeCatalog>().SupportsPrefixedInlinedColumns(),
+	                                             catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata(),
 	                                             ducklake_table.name.GetIdentifierName());
 }
 
@@ -34,7 +34,7 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 			return;
 		}
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(ducklake_table.GetColumns(),
-		                                             duck_catalog.SupportsPrefixedInlinedColumns(),
+		                                             duck_catalog.SupportsV1_1Metadata(),
 		                                             ducklake_table.name.GetIdentifierName());
 	});
 }

@@ -116,7 +116,7 @@ bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColum
 
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
-	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsPrefixedInlinedColumns();
+	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsV1_1Metadata();
 	for (auto &col : columns.Logical()) {
 		if (DuckLakeUtil::IsInlinedSystemColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns)) {
 			return false;
@@ -133,7 +133,7 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
 	auto max_identifier_length = MaxIdentifierLength();
-	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsPrefixedInlinedColumns();
+	auto prefixed_inlined_columns = transaction.GetCatalog().SupportsV1_1Metadata();
 	for (auto &col : columns) {
 		if (DuckLakeUtil::IsInlinedSystemColumn(col.name, prefixed_inlined_columns)) {
 			return false;
@@ -756,7 +756,7 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator(), ducklake_catalog.SupportsViewColumnTags());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
@@ -2786,7 +2786,7 @@ string DuckLakeMetadataManager::InlinedTableNameFor(idx_t table_id, idx_t schema
 }
 
 DuckLakeInlinedColNames DuckLakeMetadataManager::InlinedColNames() const {
-	return DuckLakeInlinedColNames(transaction.GetCatalog().SupportsPrefixedInlinedColumns());
+	return DuckLakeInlinedColNames(transaction.GetCatalog().SupportsV1_1Metadata());
 }
 
 string DuckLakeMetadataManager::InlinedTableDdlSql(const string &table_name, const string &column_defs,
@@ -3866,7 +3866,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	Appender variant_stats_appender(connection, Identifier(db_name), schema_name,
 	                                Identifier("ducklake_file_variant_stats"));
 
-	bool write_row_group_count = catalog.SupportsRowGroupCount();
+	bool write_row_group_count = catalog.SupportsV1_1Metadata();
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
@@ -4103,7 +4103,7 @@ string DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot &commit_snaps
 	for (auto &file : new_files) {
 		resolved_paths.push_back(GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result));
 	}
-	return WriteNewDataFilesSqlBatch(new_files, resolved_paths, transaction.GetCatalog().SupportsRowGroupCount());
+	return WriteNewDataFilesSqlBatch(new_files, resolved_paths, transaction.GetCatalog().SupportsV1_1Metadata());
 }
 
 string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
@@ -5477,7 +5477,7 @@ WHERE table_id IN (%s);)",
 
 	// delete any views, schemas, macros, etc that are no longer referenced
 	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
-	if (transaction.GetCatalog().SupportsViewColumnTags()) {
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
 	}
 	for (auto &delete_tbl : tables_to_delete_from) {

@@ -594,7 +594,7 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			                              name);
 		}
 		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
-		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsEpochPartitionTransforms()) {
+		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsV1_1Metadata()) {
 			throw InvalidInputException("DuckLake 1.0 does not support the %s partition transform - attach with "
 			                            "AUTOMATIC_MIGRATION set to TRUE to migrate the catalog to a newer version",
 			                            name);
@@ -748,7 +748,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
                                                         RenameColumnInfo &info) {
 	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name.GetIdentifierName(), prefixed_cols) &&
 	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
 		if (prefixed_cols) {
@@ -801,7 +801,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
                                                         AddColumnInfo &info) {
 	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
 	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
 	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name().GetIdentifierName(), prefixed_cols) &&
 	    (prefixed_cols || duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0)) {
 		if (prefixed_cols) {

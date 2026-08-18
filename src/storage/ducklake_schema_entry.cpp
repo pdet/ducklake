@@ -75,7 +75,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableExtended(CatalogTrans
 		return nullptr;
 	}
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	bool prefixed_cols = duck_catalog.SupportsPrefixedInlinedColumns();
+	bool prefixed_cols = duck_catalog.SupportsV1_1Metadata();
 	if (prefixed_cols || duck_catalog.DataInliningRowLimit(transaction.GetContext(), schema_id, TableIndex()) > 0) {
 		DuckLakeUtil::ValidateNoInlinedSystemColumns(base_info.columns, prefixed_cols);
 	}
