@@ -364,9 +364,7 @@ bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlin
 	if (prefixed_inlined_columns) {
 		return StringUtil::CIStartsWith(name, DuckLakeInlinedColNames::PREFIX);
 	}
-	return StringUtil::CIEquals(name, "row_id") || StringUtil::CIEquals(name, "begin_snapshot") ||
-	       StringUtil::CIEquals(name, "end_snapshot") || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
-	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
+	return DuckLakeInlinedColNames(false).ConflictsWith(name);
 }
 
 static void ThrowReservedInlinedColumn(const string &name, bool prefixed_inlined_columns) {
@@ -395,8 +393,14 @@ void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientC
 
 void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context,
                                                   SchemaIndex schema_id, const ColumnList &columns) {
+	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
+	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, TableIndex()) == 0) {
+		return;
+	}
 	for (auto &col : columns.Logical()) {
-		ValidateInlinedSystemColumn(catalog, context, schema_id, TableIndex(), col.Name().GetIdentifierName());
+		if (IsInlinedSystemColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns)) {
+			ThrowReservedInlinedColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns);
+		}
 	}
 }
 

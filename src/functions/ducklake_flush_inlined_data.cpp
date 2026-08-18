@@ -170,6 +170,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 			                                                        inlined_table.table_name, col_names.begin_snapshot,
 			                                                        extra_filter, file_offset,
 			                                                        file_offset + file.row_count));
+			metadata_manager.CheckInlinedDataReadError(*deleted_rows_result, inlined_table.table_name);
 
 			for (auto &row : *deleted_rows_result) {
 				auto end_snap = row.GetValue<int64_t>(0);
