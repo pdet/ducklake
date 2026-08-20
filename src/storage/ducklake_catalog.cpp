@@ -803,7 +803,7 @@ unique_ptr<DuckLakeStats> DuckLakeCatalog::ConstructStatsMap(vector<DuckLakeGlob
 				// column that this field id references was deleted
 				continue;
 			}
-			auto column_stats = DuckLakeColumnStats::FromGlobalStats(field->Type(), col_stats);
+			auto column_stats = DuckLakeColumnStats::FromGlobalStats(field->Type(), col_stats, stats.record_count > 0);
 			table_stats->column_stats.insert(make_pair(col_stats.column_id, std::move(column_stats)));
 		}
 		lake_stats->table_stats.insert(make_pair(stats.table_id, std::move(table_stats)));
