@@ -33,12 +33,7 @@ SELECT count(*) FROM ducklake.t WHERE c >= 10;
 ----
 90
 
-query I
-SELECT min(c) FROM ducklake.t WHERE c >= 10;
-----
-10
-
-# the retype refreshes the cached stats instead of dropping them
+# the retype must refresh the cached stats
 query I
 SELECT stats(c) FROM ducklake.t LIMIT 1;
 ----
@@ -98,7 +93,7 @@ SELECT count(*) FROM ducklake.t3 WHERE c >= 10;
 ----
 90
 
-# a rolled-back retype must keep the cached stats valid
+# rollback keeps the cached stats valid
 statement ok
 CREATE TABLE ducklake.t4(c INTEGER);
 

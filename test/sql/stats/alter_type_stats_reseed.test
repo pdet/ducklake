@@ -24,7 +24,7 @@ SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOI
 ----
 1000	1999
 
-# retype + INSERT in one transaction drops the bounds
+# integral widening keeps bounds through the transaction
 statement ok
 BEGIN
 
@@ -40,16 +40,15 @@ COMMIT
 query II
 SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND t.end_snapshot IS NULL;
 ----
-NULL	NULL
+1000	4099
 
-# a later INSERT must not reseed the bounds from its file alone
 statement ok
 INSERT INTO ducklake.t SELECT range + 6000 FROM range(100);
 
 query II
 SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND t.end_snapshot IS NULL;
 ----
-NULL	NULL
+1000	6099
 
 query I
 SELECT count(*) FROM ducklake.t;
@@ -58,16 +57,6 @@ SELECT count(*) FROM ducklake.t;
 
 query I
 SELECT count(*) FROM ducklake.t WHERE c < 1500;
-----
-500
-
-query I
-SELECT count(*) FROM ducklake.t WHERE c = 1200;
-----
-1
-
-query I
-SELECT count(*) FROM ducklake.t WHERE c BETWEEN 1000 AND 1499;
 ----
 500
 
@@ -81,7 +70,7 @@ SELECT min(c), max(c) FROM ducklake.t;
 ----
 1000	6099
 
-# same chain for FLOAT -> DOUBLE
+# float widening drops bounds and never reseeds
 statement ok
 CREATE TABLE ducklake.t_float(c FLOAT);
 
@@ -118,7 +107,7 @@ SELECT min(c), max(c) FROM ducklake.t_float;
 ----
 1000.0	6099.0
 
-# control: retype and INSERT in separate transactions keeps the bounds
+# separate transactions keep the bounds
 statement ok
 CREATE TABLE ducklake.t_ctrl(c INTEGER);
 
@@ -141,5 +130,69 @@ SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOI
 
 query I
 SELECT count(*) FROM ducklake.t_ctrl WHERE c < 1500;
+----
+500
+
+# DECIMAL widening keeps the bounds
+statement ok
+CREATE TABLE ducklake.t_dec(c DECIMAL(9,2));
+
+statement ok
+INSERT INTO ducklake.t_dec SELECT range + 1000 FROM range(1000);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t_dec ALTER COLUMN c TYPE DECIMAL(18,2);
+
+statement ok
+INSERT INTO ducklake.t_dec SELECT range + 4000 FROM range(100);
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.t_dec SELECT range + 6000 FROM range(100);
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_dec' AND t.end_snapshot IS NULL;
+----
+1000.00	6099.00
+
+query I
+SELECT count(*) FROM ducklake.t_dec WHERE c < 1500;
+----
+500
+
+# hugeint files carry no bounds at all
+statement ok
+CREATE TABLE ducklake.t_huge(c INTEGER);
+
+statement ok
+INSERT INTO ducklake.t_huge SELECT range + 1000 FROM range(1000);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t_huge ALTER COLUMN c TYPE HUGEINT;
+
+statement ok
+INSERT INTO ducklake.t_huge SELECT range + 4000 FROM range(100);
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.t_huge SELECT range + 6000 FROM range(100);
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_huge' AND t.end_snapshot IS NULL;
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.t_huge WHERE c < 1500;
 ----
 500

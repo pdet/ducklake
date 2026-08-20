@@ -47,7 +47,7 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	explicit DuckLakeTableStatsCacheEntry(idx_t schema_version) : schema_version(schema_version), has_stats(false) {
 	}
 
-	//! Schema version the column stats types were stamped from.
+	//! Schema version that stamped the stats types
 	idx_t schema_version;
 	DuckLakeTableStats stats;
 	bool has_stats;
