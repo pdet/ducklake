@@ -251,13 +251,12 @@ string DuckLakeStagedCommit::EmitColumnStatsValues(const DuckLakeColumnStats &s)
 			extra_stats = serialized;
 		}
 	}
-	return StringUtil::Format("%llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s", s.column_size_bytes,
-	                          DuckLakeUtil::BoolLiteral(s.has_num_values), num_values,
-	                          DuckLakeUtil::BoolLiteral(s.has_null_count), null_count,
-	                          DuckLakeUtil::BoolLiteral(has_min_emit), min_val, DuckLakeUtil::BoolLiteral(has_max_emit),
-	                          max_val, DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan,
-	                          DuckLakeUtil::BoolLiteral(s.any_valid), extra_stats,
-	                          DuckLakeUtil::BoolLiteral(s.min_is_exact), DuckLakeUtil::BoolLiteral(s.max_is_exact));
+	return StringUtil::Format(
+	    "%llu, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s", s.column_size_bytes,
+	    DuckLakeUtil::BoolLiteral(s.has_num_values), num_values, DuckLakeUtil::BoolLiteral(s.has_null_count),
+	    null_count, DuckLakeUtil::BoolLiteral(has_min_emit), min_val, DuckLakeUtil::BoolLiteral(has_max_emit), max_val,
+	    DuckLakeUtil::BoolLiteral(s.has_contains_nan), contains_nan, DuckLakeUtil::BoolLiteral(s.any_valid),
+	    extra_stats, DuckLakeUtil::BoolLiteral(s.min_is_exact), DuckLakeUtil::BoolLiteral(s.max_is_exact));
 }
 
 void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex table_id, FieldIndex column_id,
