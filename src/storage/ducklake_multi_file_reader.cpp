@@ -109,10 +109,11 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 
 		// from here we'll try to cast and compare with the dynamic filter values
 		// if casts fail, just skip pruning
-		Value casted_constant;
-		if (!constant.DefaultTryCastAs(col_filter.column_type, casted_constant, nullptr)) {
+		auto cast_constant_opt = constant.DefaultTryCastAs(col_filter.column_type);
+		if (!cast_constant_opt) {
 			continue;
 		}
+		auto &cast_constant = *cast_constant_opt;
 
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_GREATERTHAN:
@@ -121,14 +122,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (max_str.empty()) {
 				continue;
 			}
-			Value file_max;
-			if (!Value(max_str).DefaultTryCastAs(col_filter.column_type, file_max, nullptr)) {
+			auto file_max = Value(max_str).DefaultTryCastAs(col_filter.column_type);
+			if (!file_max) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-				return !(file_max > casted_constant);
+				return !(*file_max > cast_constant);
 			}
-			return !(file_max >= casted_constant);
+			return !(*file_max >= cast_constant);
 		}
 		case ExpressionType::COMPARE_LESSTHAN:
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
@@ -136,14 +137,14 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileListEntry &file_ent
 			if (min_str.empty()) {
 				continue;
 			}
-			Value file_min;
-			if (!Value(min_str).DefaultTryCastAs(col_filter.column_type, file_min, nullptr)) {
+			auto file_min = Value(min_str).DefaultTryCastAs(col_filter.column_type);
+			if (!file_min) {
 				continue;
 			}
 			if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-				return !(file_min < casted_constant);
+				return !(*file_min < cast_constant);
 			}
-			return !(file_min <= casted_constant);
+			return !(*file_min <= cast_constant);
 		}
 		default:
 			// nothing to prune
