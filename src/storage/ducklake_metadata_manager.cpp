@@ -2427,28 +2427,24 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 		string inlined_candidates;
 		if (!inlined_deletion_table.empty()) {
 			inlined_candidates = StringUtil::Format(
-				R"(
+			    R"(
 					UNION
 					SELECT file_id AS data_file_id
 					FROM {METADATA_CATALOG}.%s
 					WHERE begin_snapshot <= %llu
 				)",
-				SQLIdentifier(inlined_deletion_table),
-				snapshot.snapshot_id
-			);
+			    SQLIdentifier(inlined_deletion_table), snapshot.snapshot_id);
 		}
 
 		candidate_files_cte = StringUtil::Format(
-			R"(
+		    R"(
 				candidate_files AS (
 					SELECT data_file_id
 					FROM {METADATA_CATALOG}.ducklake_delete_file
 					WHERE table_id=%d AND end_snapshot IS NULL%s
 				),
 			)",
-			table_id.index,
-			inlined_candidates
-		);
+		    table_id.index, inlined_candidates);
 
 		data_file_source = R"(candidate_files candidates
 JOIN {METADATA_CATALOG}.ducklake_data_file data USING (data_file_id))";
@@ -2494,8 +2490,8 @@ LEFT JOIN (
 WHERE data.table_id=%d %s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 	)",
-		candidate_files_cte, table_id.index, select_list, data_file_source, table_id.index, delete_file_filter,
-		partition_value_filter, table_id.index, file_filter_clause);
+	                                candidate_files_cte, table_id.index, select_list, data_file_source, table_id.index,
+	                                delete_file_filter, partition_value_filter, table_id.index, file_filter_clause);
 	auto result = Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
