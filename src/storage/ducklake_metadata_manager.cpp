@@ -2394,7 +2394,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string candidate_files_cte;
 	string data_file_source = "{METADATA_CATALOG}.ducklake_data_file data";
 	string delete_file_filter;
-	string file_filter_clause;
+	string file_filter_clause = " AND data.end_snapshot IS NULL";
 	string partition_value_filter;
 
 	map<idx_t, set<idx_t>> inlined_deletions;
@@ -2406,7 +2406,6 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
-		file_filter_clause += " AND data.end_snapshot IS NULL";
 		if (!options.newer_than.IsNull()) {
 			// only consider files written at or after this timestamp - the timestamp is mapped to the first
 			// snapshot created at or after it, and files are filtered on their begin_snapshot
@@ -2419,13 +2418,11 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			                       timestamp_filter);
 		}
 	} else if (type == CompactionType::REWRITE_DELETES) {
-		// REWRITE_DELETES only needs files with an active delete file or visible inlined deletions. Load the
-		// inlined row IDs up front so they can both drive candidate selection and be attached to the selected files.
-		string inlined_deletion_table = GetInlinedDeletionTableName(table_id, snapshot);
+		// Load inlined row IDs before selecting rewrite candidates.
 		inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);
 
 		string inlined_candidates;
-		if (!inlined_deletion_table.empty()) {
+		if (!inlined_deletions.empty()) {
 			inlined_candidates = StringUtil::Format(
 			    R"(
 					UNION
@@ -2433,7 +2430,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 					FROM {METADATA_CATALOG}.%s
 					WHERE begin_snapshot <= %llu
 				)",
-			    SQLIdentifier(inlined_deletion_table), snapshot.snapshot_id);
+			    InlinedFileDeletionTableName(table_id), snapshot.snapshot_id);
 		}
 
 		candidate_files_cte = StringUtil::Format(
@@ -2446,11 +2443,10 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			)",
 		    table_id.index, inlined_candidates);
 
-		data_file_source = R"(candidate_files candidates
+		data_file_source = R"(candidate_files
 JOIN {METADATA_CATALOG}.ducklake_data_file data USING (data_file_id))";
 		delete_file_filter = " AND end_snapshot IS NULL";
 		partition_value_filter = "\n\tWHERE data_file_id IN (SELECT data_file_id FROM candidate_files)";
-		file_filter_clause = " AND data.end_snapshot IS NULL";
 	}
 
 	auto query = StringUtil::Format(R"(
