@@ -1304,15 +1304,6 @@ static bool IsSimpleFilterSubject(const Expression &expr) {
 	       expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
 }
 
-string DuckLakeMetadataManager::GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
-                                                              unordered_set<string> &referenced_stats,
-                                                              const string &stats_alias) {
-	if (!filter.expr) {
-		return string();
-	}
-	return GenerateFilterFromExpression(*filter.expr, &type, referenced_stats, stats_alias);
-}
-
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 	if (val.type().id() != LogicalTypeId::FLOAT && val.type().id() != LogicalTypeId::DOUBLE) {
 		return true;
@@ -1621,7 +1612,7 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		}
 
 		if (!conditions.empty()) {
-			conditions += " AND ";
+			conditions += "\n  AND ";
 		}
 		// Files that have no stats entry for this column (i.e., written before the column was added) join to
 		// NULL and must NOT be pruned, we cannot determine filter satisfaction without stats.
@@ -1635,10 +1626,8 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 			                                 null_checks.c_str(), filter_condition.c_str());
 		}
 
-		// the stats are joined in once per column, however many conditions end up reading them
-		CTERequirement req(column_filter.column_field_index, referenced_stats);
-		req.reference_count = 1;
-		result.required_ctes.emplace(column_filter.column_field_index, std::move(req));
+		result.required_ctes.emplace(column_filter.column_field_index,
+		                             CTERequirement(column_filter.column_field_index, referenced_stats));
 	}
 
 	result.where_conditions = conditions;
@@ -1691,8 +1680,8 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		}
 		first_cte = false;
 
-		string materialized_hint = (req.reference_count > 1) ? " AS MATERIALIZED" : " AS NOT MATERIALIZED";
-		cte_section += StringUtil::Format("col_%d_stats%s (\n", req.column_field_index, materialized_hint.c_str());
+		// each CTE is joined exactly once, so DuckDB inlines it either way - no hint to give
+		cte_section += StringUtil::Format("col_%d_stats AS (\n", req.column_field_index);
 		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
 	}
@@ -1956,7 +1945,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	string order_by_clause;
 	for (auto &dfc : dynamic_filter_columns) {
 		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dfc.column_field_index));
-		stats_select_list += StringUtil::Format(", %s.min_value, %s.max_value", cte_name.c_str(), cte_name.c_str());
+		stats_select_list += ", " + StatsColumn(cte_name, "min_value") + ", " + StatsColumn(cte_name, "max_value");
 
 		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats
 		// so we find satisfying rows early and can skip remaining files via dynamic filter pruning.
@@ -1969,11 +1958,11 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			                                dfc.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 			if (seeking_high_values) {
 				// For DESC Top-N (seeking high values), order by max_value DESC so files with highest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".max_value", dfc.column_type);
+				auto cast_expr = CastStatsToTarget(StatsColumn(cte_name, "max_value"), dfc.column_type);
 				order_by_clause = StringUtil::Format("\nORDER BY %s DESC NULLS LAST", cast_expr);
 			} else if (seeking_low_values) {
 				// For ASC Top-N (seeking low values), order by min_value ASC so files with lowest values come first
-				auto cast_expr = CastStatsToTarget(cte_name + ".min_value", dfc.column_type);
+				auto cast_expr = CastStatsToTarget(StatsColumn(cte_name, "min_value"), dfc.column_type);
 				order_by_clause = StringUtil::Format("\nORDER BY %s ASC NULLS LAST", cast_expr);
 			}
 		}
@@ -1986,8 +1975,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	// Add base query
 	query += StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.ducklake_data_file data
-%s
+FROM {METADATA_CATALOG}.ducklake_data_file data%s
 LEFT JOIN (
     SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -2345,8 +2333,7 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 	// Add base query
 	query += StringUtil::Format(R"(
 SELECT data.data_file_id, del.delete_file_id, data.record_count, %s
-FROM {METADATA_CATALOG}.ducklake_data_file data
-%s
+FROM {METADATA_CATALOG}.ducklake_data_file data%s
 LEFT JOIN (
 	SELECT *
     FROM {METADATA_CATALOG}.ducklake_delete_file

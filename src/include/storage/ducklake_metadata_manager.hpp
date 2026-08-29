@@ -69,7 +69,6 @@ struct DuckLakeInlinedColNames {
 struct CTERequirement {
 	idx_t column_field_index;
 	unordered_set<string> referenced_stats;
-	idx_t reference_count = 1;
 
 	CTERequirement(idx_t col_idx, unordered_set<string> stats)
 	    : column_field_index(col_idx), referenced_stats(std::move(stats)) {
@@ -81,8 +80,6 @@ struct FilterSQLResult {
 	unordered_map<idx_t, CTERequirement> required_ctes;
 
 	FilterSQLResult() = default;
-	FilterSQLResult(string conditions) : where_conditions(std::move(conditions)) {
-	}
 };
 
 struct ColumnFilterInfo {
@@ -129,7 +126,6 @@ struct FilterPushdownQueryComponents {
 	string cte_section;
 	string join_clause;
 	string where_clause;
-	string order_by_clause;
 };
 
 //! The DuckLake metadata manger is the communication layer between the system and the metadata catalog
@@ -532,8 +528,6 @@ private:
 	                                                  TableIndex table_id);
 	//! Join in the stats of every column a filter reads, once per column
 	static string GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements);
-	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
-	                                             unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
