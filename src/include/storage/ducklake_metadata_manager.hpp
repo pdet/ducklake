@@ -127,6 +127,7 @@ struct FilterPushdownInfo {
 
 struct FilterPushdownQueryComponents {
 	string cte_section;
+	string join_clause;
 	string where_clause;
 	string order_by_clause;
 };
@@ -529,18 +530,23 @@ private:
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
+	//! Join in the stats of every column a filter reads, once per column
+	static string GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromTableFilter(const ExpressionFilter &filter, const LogicalType &type,
-	                                             unordered_set<string> &referenced_stats);
+	                                             unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats);
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
-	                                      const LogicalType &type, unordered_set<string> &referenced_stats);
+	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                      const string &stats_alias);
 	virtual string GenerateConstantFilterDouble(ExpressionType comparison_type, const Value &constant,
-	                                            const LogicalType &type, unordered_set<string> &referenced_stats);
-	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats);
+	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
+	                                            const string &stats_alias);
+	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
+	                                      const string &stats_alias);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
