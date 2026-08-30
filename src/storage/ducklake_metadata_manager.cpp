@@ -1294,6 +1294,11 @@ static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partia
 	file_entry.snapshot_filter_max = snapshot.snapshot_id;
 }
 
+//! The CTE a column's stats are read from - definition, join and conditions must agree
+static string StatsCteName(idx_t field_index) {
+	return StringUtil::Format("col_%d_stats", field_index);
+}
+
 //! Reference a stats column through the join that brought it in
 static string StatsColumn(const string &stats_alias, const string &stat) {
 	return stats_alias + "." + stat;
@@ -1591,7 +1596,7 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 	for (const auto &entry : filter_info.column_filters) {
 		const auto &column_filter = entry.second;
 
-		string cte_name = StringUtil::Format("col_%d_stats", column_filter.column_field_index);
+		auto cte_name = StatsCteName(column_filter.column_field_index);
 
 		unordered_set<string> referenced_stats;
 		auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, cte_name);
@@ -1648,6 +1653,7 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 string DuckLakeMetadataManager::GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements) {
 	// sorted so the generated query is stable across runs - the requirements live in a hash map
 	vector<idx_t> field_indexes;
+	field_indexes.reserve(requirements.size());
 	for (const auto &entry : requirements) {
 		field_indexes.push_back(entry.first);
 	}
@@ -1655,7 +1661,7 @@ string DuckLakeMetadataManager::GenerateStatsJoinList(const unordered_map<idx_t,
 
 	string result;
 	for (auto field_index : field_indexes) {
-		auto cte_name = StringUtil::Format("col_%d_stats", field_index);
+		auto cte_name = StatsCteName(field_index);
 		result += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
 		                             cte_name.c_str());
 	}
@@ -1681,7 +1687,7 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		first_cte = false;
 
 		// each CTE is joined exactly once, so DuckDB inlines it either way - no hint to give
-		cte_section += StringUtil::Format("col_%d_stats AS (\n", req.column_field_index);
+		cte_section += StatsCteName(req.column_field_index) + " AS (\n";
 		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
 	}
@@ -1944,7 +1950,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	string stats_select_list;
 	string order_by_clause;
 	for (auto &dfc : dynamic_filter_columns) {
-		auto cte_name = StringUtil::Format("col_%d_stats", NumericCast<int64_t>(dfc.column_field_index));
+		auto cte_name = StatsCteName(dfc.column_field_index);
 		stats_select_list += ", " + StatsColumn(cte_name, "min_value") + ", " + StatsColumn(cte_name, "max_value");
 
 		// Generate ORDER BY clause to optimize Top-N queries - order files by their min/max stats

@@ -526,7 +526,8 @@ private:
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
-	//! Join in the stats of every column a filter reads, once per column
+	//! Join each column's stats CTE once. Leading newline per join, empty when there are none, so it
+	//! concatenates straight onto the FROM line.
 	static string GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
