@@ -1,6 +1,4 @@
 #include "storage/ducklake_metadata_manager.hpp"
-
-#include <algorithm>
 #include "duckdb/common/file_system.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -1653,27 +1651,18 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 	                          select_list, req.column_field_index, table_id.index);
 }
 
-string DuckLakeMetadataManager::GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements) {
-	// sorted so the generated query is stable across runs - the requirements live in a hash map
-	vector<idx_t> field_indexes;
-	field_indexes.reserve(requirements.size());
-	for (const auto &entry : requirements) {
-		field_indexes.push_back(entry.first);
-	}
-	std::sort(field_indexes.begin(), field_indexes.end());
-
+string DuckLakeMetadataManager::GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements) {
 	string result;
-	for (auto field_index : field_indexes) {
-		auto cte_name = StatsCteName(field_index);
+	for (const auto &entry : requirements) {
+		auto cte_name = StatsCteName(entry.first);
 		result += StringUtil::Format("\nLEFT JOIN %s ON %s.data_file_id = data.data_file_id", cte_name.c_str(),
 		                             cte_name.c_str());
 	}
 	return result;
 }
 
-string
-DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
-                                                            TableIndex table_id) {
+string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
+                                                                   TableIndex table_id) {
 	if (requirements.empty()) {
 		return "";
 	}
@@ -1689,7 +1678,7 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		}
 		first_cte = false;
 
-		// each CTE is joined exactly once, so DuckDB inlines it either way - no hint to give
+		// each CTE is referenced by exactly one join, so there is nothing for a materialization hint to buy
 		cte_section += StatsCteName(req.column_field_index) + " AS (\n";
 		cte_section += GenerateFileColumnStatsCTEBody(req, table_id);
 		cte_section += ")";
@@ -1937,14 +1926,11 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	}
 
 	for (auto &dfc : dynamic_filter_columns) {
-		auto entry = filter_result.required_ctes.find(dfc.column_field_index);
-		if (entry == filter_result.required_ctes.end()) {
-			filter_result.required_ctes.emplace(dfc.column_field_index,
-			                                    CTERequirement(dfc.column_field_index, {"min_value", "max_value"}));
-		} else {
-			entry->second.referenced_stats.insert("min_value");
-			entry->second.referenced_stats.insert("max_value");
-		}
+		auto entry =
+		    filter_result.required_ctes.emplace(dfc.column_field_index, CTERequirement(dfc.column_field_index, {}))
+		        .first;
+		entry->second.referenced_stats.insert("min_value");
+		entry->second.referenced_stats.insert("max_value");
 	}
 	query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id);
 	// one join per column serves both the filter conditions and the Top-N stats below

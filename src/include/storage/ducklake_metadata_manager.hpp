@@ -77,7 +77,8 @@ struct CTERequirement {
 
 struct FilterSQLResult {
 	string where_conditions;
-	unordered_map<idx_t, CTERequirement> required_ctes;
+	//! Ordered by column field index so the generated SQL does not depend on hash iteration order
+	map<idx_t, CTERequirement> required_ctes;
 
 	FilterSQLResult() = default;
 };
@@ -524,11 +525,11 @@ private:
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
 	string BuildBucketPartitionPruningClause(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	virtual string GenerateCTESectionFromRequirements(const unordered_map<idx_t, CTERequirement> &requirements,
+	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
 	                                                  TableIndex table_id);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none, so it
 	//! concatenates straight onto the FROM line.
-	static string GenerateStatsJoinList(const unordered_map<idx_t, CTERequirement> &requirements);
+	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
