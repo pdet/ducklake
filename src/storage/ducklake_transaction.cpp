@@ -1619,7 +1619,13 @@ Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	auto &metadata_context = *connection->context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, Identifier(ducklake_catalog.MetadataDatabaseName()));
-	return metadb->GetCatalog().GetDefaultSchema();
+	auto default_schema = metadb->GetCatalog().GetDefaultSchema();
+	if (!default_schema) {
+		throw InvalidInputException("DuckLake metadata catalog \"%s\" has no default schema, set METADATA_SCHEMA "
+		                            "explicitly in ATTACH",
+		                            ducklake_catalog.MetadataDatabaseName());
+	}
+	return *default_schema;
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
