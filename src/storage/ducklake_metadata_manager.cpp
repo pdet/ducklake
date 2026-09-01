@@ -5668,6 +5668,7 @@ WHERE NOT EXISTS (
 			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
 		}
 	}
+	ClearCache();
 }
 
 void DuckLakeMetadataManager::DropEmptySupersededInlinedTables() {
