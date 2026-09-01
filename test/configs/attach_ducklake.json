@@ -166,9 +166,16 @@
     {
       "reason": "Locks DuckDB configuration (lock_configuration / allowed_configs), which prevents the DuckLake metadata catalog from operating and aborts its transaction. These tests exercise core config-locking, not DuckLake.",
       "paths": [
+        "test/sql/extensions/extension_repositories_lock.test",
         "test/sql/settings/allowed_configs.test",
         "test/sql/settings/lock_configuration_schema.test",
         "test/sql/settings/test_lock_configuration.test"
+      ]
+    },
+    {
+      "reason": "EXPORT/IMPORT DATABASE of a macro with a typed NULL default loses the NULL's type under DuckLake.",
+      "paths": [
+        "test/sql/export/export_typed_null.test"
       ]
     },
     {
@@ -752,6 +759,9 @@
         "test/optimizer/pushdown/join_filter_pushdown_cast_variant.test",
         "test/optimizer/pushdown/starts_with_pushdown.test",
         "test/optimizer/statistics/statistics_contains.test",
+        "test/optimizer/statistics/string_expression_filter_pruning.test",
+        "test/sql/join/inner/test_prefix_range_filter_pushdown_strinline.test",
+        "test/sql/optimizer/sum_aggregate_stats_propagation.test",
         "test/optimizer/statistics/statistics_string_length.test",
         "test/optimizer/statistics/statistics_suffix.test",
         "test/optimizer/string_prefix.test",
@@ -823,12 +833,23 @@
     {
       "reason": "DuckDB-native compression and storage-file internals (pragma_storage_info, native string statistics, corrupted duckdb files).",
       "paths": [
+        "test/sql/storage/compression/bitpacking/bitpacking_corrupt_count.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_corrupt_group_offset.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_corrupt_metadata_underflow.test",
+        "test/sql/storage/compression/bitpacking/bitpacking_corrupt_width.test",
         "test/sql/storage/compression/default_storage_dict_fsst.test",
         "test/sql/storage/compression/dict_fsst/dict_fsst_expression_filter.test",
         "test/sql/storage/compression/dict_fsst/repeated_string_stats.test",
         "test/sql/storage/compression/dictionary/total_string_length_dictionary.test",
         "test/sql/storage/compression/patas/patas_corrupted_file.test",
         "test/sql/storage/compression/rle/rle_corrupted_count_offset.test",
+        "test/sql/storage/compression/uncompressed/uncompressed_count.test",
+        "test/sql/storage/compression/uncompressed/uncompressed_count_boundary.test",
+        "test/sql/storage/compression/uncompressed/uncompressed_offset.test",
+        "test/sql/storage/compression/uncompressed/validity_corrupt_count.test",
+        "test/sql/storage/compression/uncompressed/validity_corrupt_count_boundary.test",
+        "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
+        "test/sql/storage/corrupt/row_group_count_mismatch.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test"
       ]
     },
