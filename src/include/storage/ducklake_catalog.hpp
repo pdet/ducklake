@@ -359,8 +359,7 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
-	//! Serializes metadata statements on the shared metadata connection; recursive because
-	//! executing a statement can start a nested DuckLake transaction on the same thread
+	//! Serializes metadata statements on the shared metadata connection
 	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;

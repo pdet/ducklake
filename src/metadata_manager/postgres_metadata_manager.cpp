@@ -11,8 +11,7 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
-//! postgres_execute prepares statements since duckdb-postgres 75d5ea8, and prepared
-//! statements cannot hold multiple commands - split batches outside quoted regions
+//! postgres_execute prepares statements; prepared statements reject batches
 static vector<string> SplitBatchStatements(const string &sql) {
 	vector<string> statements;
 	string current;
@@ -162,12 +161,14 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 
 	auto statements = SplitBatchStatements(query);
 	if (statements.size() <= 1) {
-		auto result = connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
+		auto result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(query)));
 		return std::move(result);
 	}
 	unique_ptr<QueryResult> result;
 	for (auto &statement : statements) {
-		result = connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(statement)));
+		result =
+		    connection.Query(StringUtil::Format("CALL %s(%s, %s)", command, catalog_literal, SQLString(statement)));
 		if (result->HasError()) {
 			return std::move(result);
 		}

@@ -48,7 +48,7 @@ class DuckLakeFieldId;
 class LocalTableChangeIterationHelper;
 class DuckLakeTransactionState;
 
-//! Marks connections DuckLake opens internally (e.g. to the metadata catalog)
+//! Marks connections DuckLake opens internally
 class DuckLakeInternalConnectionState : public ClientContextState {
 public:
 	static constexpr const char *KEY = "ducklake_internal_connection";
