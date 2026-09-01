@@ -799,6 +799,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
 		connection = make_uniq<Connection>(db);
+		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
+		    DuckLakeInternalConnectionState::KEY);
 		auto caller_context = context.lock();
 		if (caller_context) {
 			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
