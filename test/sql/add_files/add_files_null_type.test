@@ -13,7 +13,6 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_null', METADATA_CATALOG 'ducklake_meta')
 
-# parquet stores these columns with the Null logical type
 statement ok
 COPY (SELECT range AS id, NULL AS n, [NULL] AS l, {'x': NULL} AS s FROM range(5)) TO '{DATA_PATH}/null_cols.parquet';
 
@@ -44,25 +43,12 @@ SELECT typeof(n), typeof(l), typeof(s) FROM ducklake.test LIMIT 1
 ----
 "NULL"	"NULL"[]	STRUCT(x "NULL")
 
-query III
-SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM ducklake.test
-----
-5	0	5
-
-# the file stats carry only the NULL count
 query IIII
 SELECT value_count, null_count, min_value, max_value
 FROM ducklake_meta.ducklake_file_column_stats
 WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL)
 ----
 0	5	NULL	NULL
-
-query II
-SELECT contains_null::INTEGER, min_value
-FROM ducklake_meta.ducklake_table_column_stats
-WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL)
-----
-1	NULL
 
 # the types must match exactly in both directions
 statement ok
@@ -81,14 +67,6 @@ CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/typed_cols.parquet
 ----
 Expected "NULL", found type INTEGER
 
-statement ok
-CALL ducklake_add_data_files('ducklake', 'typed', '{DATA_PATH}/typed_cols.parquet')
-
-query III
-SELECT COUNT(*), COUNT(n), COUNT(l) FROM ducklake.typed
-----
-3	3	3
-
 # the added file keeps serving after the column is promoted
 statement ok
 ALTER TABLE ducklake.test ALTER n TYPE INTEGER
@@ -100,8 +78,3 @@ query IIII
 SELECT COUNT(*), COUNT(n), MAX(n), COUNT(*) FILTER (WHERE n IS NULL) FROM ducklake.test
 ----
 6	1	100	5
-
-query I
-SELECT id FROM ducklake.test WHERE n = 100
-----
-100

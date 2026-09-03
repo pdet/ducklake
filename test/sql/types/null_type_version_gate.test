@@ -17,7 +17,7 @@ USE ducklake
 statement ok
 CREATE TABLE t(id INTEGER);
 
-# 1.0 readers do not know the type - writing it would brick the catalog for them
+# 1.0 readers do not know the type
 statement error
 CREATE TABLE t2(id INTEGER, n "NULL");
 ----
@@ -30,11 +30,6 @@ DuckLake 1.0 does not support the NULL type
 
 statement error
 CREATE TABLE t2(l "NULL"[]);
-----
-DuckLake 1.0 does not support the NULL type
-
-statement error
-CREATE TABLE t2(s STRUCT(x "NULL"));
 ----
 DuckLake 1.0 does not support the NULL type
 

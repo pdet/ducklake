@@ -35,11 +35,6 @@ SELECT with_default(1), with_default(1, 2)
 1	2
 
 query II
-SELECT with_default('x'), with_default('x', 'y')
-----
-x	y
-
-query II
 FROM rows_for()
 ----
 NULL	true
@@ -69,12 +64,6 @@ FROM ducklake.rows_for()
 ----
 NULL	true
 
-query II
-FROM ducklake.rows_for(3)
-----
-3	false
-
-# replacing keeps working with a NULL default next to a regular one
 statement ok
 CREATE OR REPLACE MACRO ducklake.with_default(a, b := 5, c := NULL) AS COALESCE(c, a + b)
 

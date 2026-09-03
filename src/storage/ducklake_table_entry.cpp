@@ -95,10 +95,7 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
 void DuckLakeTableEntry::CheckSupportedTypes() {
-	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
-	for (auto &col : columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type(), version);
-	}
+	DuckLakeTypes::CheckSupportedTypes(columns, ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion());
 }
 
 DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info,
@@ -594,11 +591,11 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
 			                              name);
 		}
+		auto &ducklake_catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
 		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
-		    !table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsV1_1Metadata()) {
-			throw InvalidInputException("DuckLake 1.0 does not support the %s partition transform - attach with "
-			                            "AUTOMATIC_MIGRATION set to TRUE to migrate the catalog to a newer version",
-			                            name);
+		    !ducklake_catalog.SupportsV1_1Metadata()) {
+			ThrowUnsupportedByVersion(ducklake_catalog.GetDuckLakeVersion(),
+			                          StringUtil::Format("the %s partition transform", name));
 		}
 
 		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {

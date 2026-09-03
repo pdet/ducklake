@@ -154,13 +154,17 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 void DuckLakeTypes::CheckSupportedType(const LogicalType &type, DuckLakeVersion version) {
 	TypeVisitor::VisitReplace(type, [version](const LogicalType &type) {
 		if (type.id() == LogicalTypeId::SQLNULL && version < DuckLakeVersion::V1_1_DEV_1) {
-			throw InvalidInputException("DuckLake %s does not support the NULL type - attach with AUTOMATIC_MIGRATION "
-			                            "set to TRUE to migrate the catalog to a newer version",
-			                            DuckLakeVersionToString(version));
+			ThrowUnsupportedByVersion(version, "the NULL type");
 		}
 		DuckLakeTypes::ToString(type);
 		return type;
 	});
+}
+
+void DuckLakeTypes::CheckSupportedTypes(const ColumnList &columns, DuckLakeVersion version) {
+	for (auto &col : columns.Logical()) {
+		CheckSupportedType(col.Type(), version);
+	}
 }
 
 } // namespace duckdb

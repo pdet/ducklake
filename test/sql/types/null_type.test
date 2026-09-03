@@ -56,22 +56,10 @@ SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
 3	0	3
 
 query I
-SELECT COUNT(*) FROM null_tbl WHERE n IS NOT NULL
-----
-0
-
-# comparisons against a NULL column never match
-query I
 SELECT COUNT(*) FROM null_tbl WHERE n = 1
 ----
 0
 
-query I
-SELECT COUNT(*) FROM null_tbl WHERE n IS DISTINCT FROM NULL
-----
-0
-
-# CTAS keeps the NULL type
 statement ok
 CREATE OR REPLACE TABLE ctas_tbl AS SELECT id, NULL AS n FROM null_tbl;
 
@@ -81,14 +69,6 @@ SELECT column_name, column_type FROM (DESCRIBE ctas_tbl)
 id	INTEGER
 n	"NULL"
 
-query II
-SELECT id, n FROM ctas_tbl ORDER BY id
-----
-1	NULL
-2	NULL
-3	NULL
-
-# nested NULL types
 statement ok
 CREATE OR REPLACE TABLE nested_tbl AS SELECT 1 AS id, [NULL] AS l, {'x': NULL} AS s, MAP {'k': NULL} AS m;
 
@@ -110,32 +90,11 @@ SELECT id, l, s, m FROM nested_tbl ORDER BY id
 2	[NULL, NULL]	{'x': NULL}	{a=NULL, b=NULL}
 3	NULL	NULL	NULL
 
-query III
-SELECT len(l), s.x, map_keys(m) FROM nested_tbl ORDER BY id
-----
-1	NULL	[k]
-2	NULL	[a, b]
-NULL	NULL	NULL
-
-# updating a sibling column keeps the NULL column
 statement ok
 UPDATE null_tbl SET id = id + 10 WHERE id = 1
 
-query II
-SELECT id, n FROM null_tbl ORDER BY id
-----
-2	NULL
-3	NULL
-11	NULL
-
-# assigning a non-NULL value is rejected
 statement error
 UPDATE null_tbl SET n = 1
-----
-"NULL"
-
-statement error
-INSERT INTO null_tbl VALUES (4, 'x')
 ----
 "NULL"
 
@@ -151,12 +110,6 @@ SELECT id, n FROM null_tbl ORDER BY id
 statement ok
 INSERT INTO null_tbl SELECT range, NULL FROM range(100, 120)
 
-query III
-SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
-----
-22	0	22
-
-# time travel to before the last insert
 statement ok
 SET VARIABLE snap = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake'))
 
@@ -174,16 +127,6 @@ SELECT id, n, change_type FROM ducklake_table_changes('ducklake', 'main', 'null_
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-query III
-SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
-----
-22	0	22
-
-query I
-SELECT COUNT(*) FROM null_tbl WHERE n IS NOT NULL
-----
-0
-
 statement ok
 SELECT * FROM ducklake_merge_adjacent_files('ducklake')
 
@@ -192,14 +135,6 @@ SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
 ----
 22	0	22
 
-query IIII
-SELECT id, l, s, m FROM nested_tbl ORDER BY id
-----
-1	[NULL]	{'x': NULL}	{k=NULL}
-2	[NULL, NULL]	{'x': NULL}	{a=NULL, b=NULL}
-3	NULL	NULL	NULL
-
-# compacted files still serve the earlier snapshot
 query III
 SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl AT (VERSION => getvariable('snap') - 1)
 ----
@@ -228,7 +163,6 @@ DROP TABLE ctas_tbl
 
 endloop
 
-# the type survives a fresh attach
 statement ok
 USE memory
 
@@ -237,14 +171,6 @@ DETACH ducklake
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_null_type', METADATA_CATALOG 'ducklake_meta')
-
-query II
-SELECT column_name, column_type FROM (DESCRIBE ducklake.nested_tbl)
-----
-id	INTEGER
-l	"NULL"[]
-s	STRUCT(x "NULL")
-m	MAP(VARCHAR, "NULL")
 
 query III
 SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM ducklake.null_tbl

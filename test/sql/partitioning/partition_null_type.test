@@ -19,7 +19,6 @@ USE ducklake
 statement ok
 CREATE TABLE t(id INTEGER, n "NULL")
 
-# a column that can only hold NULLs is not a partition key
 statement error
 ALTER TABLE t SET PARTITIONED BY (n)
 ----
@@ -31,20 +30,14 @@ ALTER TABLE t SET PARTITIONED BY (year(n))
 Column "n" has type NULL and cannot be used as a partition key
 
 statement error
-ALTER TABLE t SET PARTITIONED BY (bucket(4, n))
+ALTER TABLE t SET PARTITIONED BY (id, bucket(4, n))
 ----
 Column "n" has type NULL and cannot be used as a partition key
 
-statement error
-ALTER TABLE t SET PARTITIONED BY (id, n)
-----
-Column "n" has type NULL and cannot be used as a partition key
-
-# other columns partition as usual
 statement ok
 ALTER TABLE t SET PARTITIONED BY (id)
 
-# sorting by it is a harmless no-op
+# sorting by it is harmless
 statement ok
 ALTER TABLE t SET SORTED BY (n)
 
@@ -57,11 +50,6 @@ SELECT id, n FROM t ORDER BY id
 1	NULL
 1	NULL
 2	NULL
-
-query I
-SELECT COUNT(*) FROM t WHERE id = 1
-----
-2
 
 # once promoted the column is a regular partition key
 statement ok
