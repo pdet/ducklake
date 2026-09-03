@@ -27,7 +27,9 @@
     {
       "reason": "The NULL column type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
       "paths": [
-        "test/sql/types/null_type.test"
+        "test/sql/types/null_type.test",
+        "test/sql/alter/promote_null_type.test",
+        "test/sql/partitioning/partition_null_type.test"
       ]
     },
     {

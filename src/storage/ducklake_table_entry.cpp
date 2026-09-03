@@ -618,6 +618,9 @@ DuckLakePartitionField GetPartitionField(DuckLakeTableEntry &table, ParsedExpres
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
 	}
 	auto &col = table.GetColumn(Identifier(column_name));
+	if (col.Type().id() == LogicalTypeId::SQLNULL) {
+		throw InvalidInputException("Column \"%s\" has type NULL and cannot be used as a partition key", column_name);
+	}
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = table.GetFieldData().GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
@@ -1043,6 +1046,11 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	if (!TypePromotionIsAllowed(source_type, target)) {
 		throw CatalogException(
 		    "Cannot change type of column %s from %s to %s - only widening type promotions are allowed",
+		    source_id.Name(), source_type, target);
+	}
+	if (target.IsNested()) {
+		throw CatalogException(
+		    "Cannot change type of column %s from %s to %s - promoting a NULL column to a nested type is not supported",
 		    source_id.Name(), source_type, target);
 	}
 	// field id is unchanged - but the column is changed
