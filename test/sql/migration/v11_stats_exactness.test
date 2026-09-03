@@ -27,13 +27,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/v11_
 
 # stats rows that existed before the migration have NULL exactness flags
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY column_id
 ----
 1	2	NULL	NULL
 hello	world	NULL	NULL
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 1	2	NULL	NULL
 hello	world	NULL	NULL
@@ -43,7 +43,7 @@ statement ok
 INSERT INTO ducklake.test VALUES (3, 'apple'), (4, 'zebra');
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_file_column_stats ORDER BY data_file_id, column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_file_column_stats ORDER BY data_file_id, column_id
 ----
 1	2	NULL	NULL
 hello	world	NULL	NULL
@@ -51,7 +51,7 @@ hello	world	NULL	NULL
 apple	zebra	true	true
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 1	4	true	true
 apple	zebra	true	true
@@ -67,7 +67,7 @@ statement ok
 INSERT INTO ducklake.test VALUES (0, 'melon'), (5, 'kiwi');
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 0	5	true	true
 apple	zebra	true	true
@@ -77,7 +77,7 @@ statement ok
 CALL ducklake.merge_adjacent_files();
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
 FROM dl.ducklake_file_column_stats stats
 JOIN dl.ducklake_data_file f USING (data_file_id)
 WHERE f.end_snapshot IS NULL
@@ -87,7 +87,7 @@ ORDER BY column_id
 apple	zebra	true	true
 
 query IIII
-SELECT min_value, max_value, min_is_exact, max_is_exact FROM dl.ducklake_table_column_stats ORDER BY column_id
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
 ----
 0	5	true	true
 apple	zebra	true	true

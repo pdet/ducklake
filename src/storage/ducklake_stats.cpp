@@ -298,13 +298,12 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateStringStats() const {
 		                    EffectiveMaxIsExact() ? StringStatsType::EXACT_STATS : StringStatsType::TRUNCATED_STATS);
 	}
 
-	// set null count
-	if (!has_null_count || null_count > 0) {
-		stats.SetHasNullFast();
+	if (has_null_count && null_count == 0) {
+		stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
 	}
-	if (!has_null_count || !has_num_values || null_count != num_values) {
-		//! Not *all* values are NULL, set HasNoNull
-		stats.SetHasNoNullFast();
+	if (has_null_count && has_num_values && null_count == num_values) {
+		//! All values are NULL
+		stats.Set(StatsInfo::CANNOT_HAVE_VALID_VALUES);
 	}
 	return stats.ToUnique();
 }
