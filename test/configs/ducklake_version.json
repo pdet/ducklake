@@ -30,7 +30,8 @@
         "test/sql/types/null_type.test",
         "test/sql/alter/promote_null_type.test",
         "test/sql/partitioning/partition_null_type.test",
-        "test/sql/data_inlining/data_inlining_null_type.test"
+        "test/sql/data_inlining/data_inlining_null_type.test",
+        "test/sql/add_files/add_files_null_type.test"
       ]
     },
     {
