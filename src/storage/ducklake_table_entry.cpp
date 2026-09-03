@@ -95,8 +95,9 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
 void DuckLakeTableEntry::CheckSupportedTypes() {
+	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
 	for (auto &col : columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type());
+		DuckLakeTypes::CheckSupportedType(col.Type(), version);
 	}
 }
 
