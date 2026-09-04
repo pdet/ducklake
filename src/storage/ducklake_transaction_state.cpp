@@ -92,6 +92,35 @@ void ConflictCheck(const string &source_name, const MAP &conflict_map, const cha
 	}
 }
 
+bool IsSchemaOrDescendant(const string &schema_key, const string &other_key) {
+	if (StringUtil::CIEquals(schema_key, other_key)) {
+		return true;
+	}
+	return StringUtil::StartsWith(StringUtil::Lower(other_key), StringUtil::Lower(schema_key) + ".");
+}
+
+template <class MAP>
+void SchemaSubtreeConflictCheck(const string &schema_key, const MAP &conflict_map, const char *conflict_action) {
+	for (auto &entry : conflict_map) {
+		if (IsSchemaOrDescendant(schema_key, entry.first)) {
+			throw TransactionException("Transaction conflict - attempting to drop schema with name %s"
+			                           " - but another transaction has %s",
+			                           schema_key, conflict_action);
+		}
+	}
+}
+
+void SchemaSubtreeConflictCheck(const string &schema_key, const case_insensitive_set_t &conflict_set,
+                                const char *conflict_action) {
+	for (auto &other_key : conflict_set) {
+		if (IsSchemaOrDescendant(schema_key, other_key)) {
+			throw TransactionException("Transaction conflict - attempting to drop schema with name %s"
+			                           " - but another transaction has %s",
+			                           schema_key, conflict_action);
+		}
+	}
+}
+
 string GetCatalogType(CatalogType type) {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:
@@ -117,7 +146,7 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 			auto &catalog_entry = catalog_ref.get();
 			auto &schema = catalog_entry.ParentSchema().Cast<DuckLakeSchemaEntry>();
 			auto entry_type = GetCatalogType(catalog_entry.type);
-			string action = StringUtil::Format("create %s \"%s\" in schema \"%s\"", entry_type,
+			string action = StringUtil::Format("create %s \"%s\" in schema %s", entry_type,
 			                                   catalog_entry.name.GetIdentifierName(), schema_name);
 			ConflictCheck(schema.GetSchemaId(), dropped_schemas, action.c_str(), "dropped this schema");
 
@@ -127,7 +156,7 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 				auto sub_entry = other_created_tables.find(catalog_entry.name.GetIdentifierName());
 				if (sub_entry != other_created_tables.end()) {
 					// a table with this name in this schema was already created
-					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema \"%s\" "
+					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema %s "
 					                           "- but this %s has been created by another transaction already",
 					                           entry_type, catalog_entry.name.GetIdentifierName(), schema_name,
 					                           sub_entry->second);
@@ -164,13 +193,22 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		auto dropped_idx = entry.first;
 		ConflictCheck(dropped_idx, other_changes.dropped_schemas, "drop schema", "dropped it already");
 
-		ConflictCheck(dropped_schema.name.GetIdentifierName(), other_changes.created_tables, "drop schema",
-		              "created an entry in this schema");
+		auto dropped_key = dropped_schema.PathKey();
+		SchemaSubtreeConflictCheck(dropped_key, other_changes.created_schemas, "created a schema inside this schema");
+		SchemaSubtreeConflictCheck(dropped_key, other_changes.created_tables, "created an entry in this schema");
+		SchemaSubtreeConflictCheck(dropped_key, other_changes.created_scalar_macros, "created an entry in this schema");
+		SchemaSubtreeConflictCheck(dropped_key, other_changes.created_table_macros, "created an entry in this schema");
 	}
 	// check if we are creating the same schema as another transaction
 	for (auto &created_schema : changes.created_schemas) {
-		ConflictCheck(created_schema, other_changes.created_schemas, "create schema",
+		ConflictCheck(created_schema.first, other_changes.created_schemas, "create schema",
 		              "created a schema with this name already");
+		auto parent = created_schema.second.get().ParentDuckLakeSchema();
+		while (parent) {
+			ConflictCheck(parent->GetSchemaId(), other_changes.dropped_schemas, "create nested schema",
+			              "dropped one of its parent schemas");
+			parent = parent->ParentDuckLakeSchema();
+		}
 	}
 	// check if we are creating the same macro as another transaction
 	ConflictCheck(changes.created_table_macros, other_changes.dropped_schemas, other_changes.created_table_macros);
@@ -185,7 +223,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 			auto entry_type = table.type == CatalogType::TABLE_ENTRY ? "table" : "view";
 
-			string action = StringUtil::Format("create %s \"%s\" in schema \"%s\"", entry_type,
+			string action = StringUtil::Format("create %s \"%s\" in schema %s", entry_type,
 			                                   table.name.GetIdentifierName(), schema_name);
 			ConflictCheck(schema.GetSchemaId(), other_changes.dropped_schemas, action.c_str(), "dropped this schema");
 
@@ -195,7 +233,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 				auto sub_entry = other_created_tables.find(table.name.GetIdentifierName());
 				if (sub_entry != other_created_tables.end()) {
 					// a table with this name in this schema was already created
-					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema \"%s\" "
+					throw TransactionException("Transaction conflict - attempting to create %s \"%s\" in schema %s "
 					                           "- but this %s has been created by another transaction already",
 					                           entry_type, table.name.GetIdentifierName(), schema_name,
 					                           sub_entry->second);
@@ -335,11 +373,10 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 			change_info.changes_made += ",";
 		}
 		change_info.changes_made += "created_schema:";
-		change_info.changes_made += DuckLakeUtil::SQLIdentifierToString(created_schema);
+		change_info.changes_made += created_schema.first;
 	}
 	for (auto &entry : changes.created_tables) {
-		auto &schema = entry.first;
-		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
+		auto schema_prefix = entry.first + ".";
 		for (auto &created_table : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
@@ -352,8 +389,7 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	}
 
 	for (auto &entry : changes.created_scalar_macros) {
-		auto &schema = entry.first;
-		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
+		auto schema_prefix = entry.first + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";
@@ -364,8 +400,7 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 		}
 	}
 	for (auto &entry : changes.created_table_macros) {
-		auto &schema = entry.first;
-		auto schema_prefix = DuckLakeUtil::SQLIdentifierToString(schema) + ".";
+		auto schema_prefix = entry.first + ".";
 		for (auto &created_macro : entry.second) {
 			if (!change_info.changes_made.empty()) {
 				change_info.changes_made += ",";

@@ -38,18 +38,15 @@ void DuckLakeSchemaEntry::SetParentSchema(DuckLakeSchemaEntry &parent) {
 }
 
 string DuckLakeSchemaEntry::PathKey() const {
-	string result;
+	vector<string> components;
 	for (auto &component : GetSchemaPath()) {
-		if (!result.empty()) {
-			result += ".";
-		}
-		result += DuckLakeUtil::SQLIdentifierToString(component.GetIdentifierName());
+		components.push_back(component.GetIdentifierName());
 	}
-	return result;
+	return DuckLakeUtil::ToQuotedList(components, '.');
 }
 
 string DuckLakeSchemaEntry::ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name) {
-	auto key = DuckLakeUtil::SQLIdentifierToString(name);
+	auto key = DuckLakeUtil::ToQuotedList({name}, '.');
 	if (!parent) {
 		return key;
 	}

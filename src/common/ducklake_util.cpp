@@ -70,18 +70,19 @@ vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_sepa
 	return result;
 }
 
+string ParsedCatalogEntry::SchemaKey() const {
+	return DuckLakeUtil::ToQuotedList(schema_path, '.');
+}
+
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
+	auto parts = ParseQuotedList(input, '.');
+	if (parts.size() < 2) {
+		throw InvalidInputException("Failed to parse catalog entry - expected a schema and a name");
+	}
 	ParsedCatalogEntry result_data;
-	idx_t pos = 0;
-	result_data.schema = DuckLakeUtil::ParseQuotedValue(input, pos);
-	if (pos >= input.size() || input[pos] != '.') {
-		throw InvalidInputException("Failed to parse catalog entry - expected a dot");
-	}
-	pos++;
-	result_data.name = DuckLakeUtil::ParseQuotedValue(input, pos);
-	if (pos < input.size()) {
-		throw InvalidInputException("Failed to parse catalog entry - trailing data after quoted value");
-	}
+	result_data.name = std::move(parts.back());
+	parts.pop_back();
+	result_data.schema_path = std::move(parts);
 	return result_data;
 }
 

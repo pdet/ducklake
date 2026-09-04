@@ -26,8 +26,10 @@ class TableFilter;
 struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
-	string schema;
+	vector<string> schema_path;
 	string name;
+
+	string SchemaKey() const;
 };
 
 class DuckLakeUtil {
