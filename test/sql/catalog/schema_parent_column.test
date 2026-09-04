@@ -1,0 +1,44 @@
+# name: test/sql/catalog/schema_parent_column.test
+# description: ducklake_schema carries a parent_schema_id column on 1.1-dev1 lakes
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement ok
+CREATE SCHEMA ducklake.s2;
+
+query II
+SELECT schema_name, parent_schema_id FROM ducklake_meta.ducklake_schema ORDER BY schema_id
+----
+main	NULL
+s1	NULL
+s2	NULL
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' ORDER BY schema_name
+----
+main	NULL
+s1	NULL
+s2	NULL
+
+statement ok
+DROP SCHEMA ducklake.s1;
+
+query II
+SELECT schema_name, end_snapshot IS NULL FROM ducklake_meta.ducklake_schema ORDER BY schema_id
+----
+main	true
+s1	false
+s2	true

@@ -519,6 +519,9 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	auto catalog = metadata_manager.GetCatalogForSnapshot(snapshot);
 	ducklake_entries_map_t schema_map;
 	for (auto &schema : catalog.schemas) {
+		if (schema.parent_id.IsValid()) {
+			throw NotImplementedException("Nested schemas are not supported in DuckLake yet");
+		}
 		CreateSchemaInfo schema_info;
 		schema_info.SetQualifiedName(QualifiedName(schema_info.GetQualifiedName().Catalog(), Identifier(schema.name),
 		                                           schema_info.GetQualifiedName().Name()));

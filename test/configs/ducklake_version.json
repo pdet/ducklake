@@ -62,6 +62,13 @@
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/update_partition_epoch.test"
       ]
+    },
+    {
+      "reason": "The ducklake_schema.parent_schema_id column was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/catalog/schema_parent_column.test",
+        "test/sql/migration/schema_parent_column_dev_migration.test"
+      ]
     }
   ]
 }

@@ -1634,7 +1634,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		for (auto &schema : new_schemas_result) {
 			resolved_schema_paths.push_back(GetRelativePath(schema.path));
 		}
-		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, resolved_schema_paths);
+		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, resolved_schema_paths,
+		                                                          context.supports_v1_1_metadata);
 	}
 
 	// write new tables

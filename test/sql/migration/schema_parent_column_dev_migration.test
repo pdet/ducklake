@@ -1,0 +1,82 @@
+# name: test/sql/migration/schema_parent_column_dev_migration.test
+# description: the in-place dev migration adds ducklake_schema.parent_schema_id to an older 1.1-dev1 lake
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_parent.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_parent_files', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE SCHEMA dl.s1;
+
+statement ok
+DETACH dl
+
+# simulate a dev1 catalog created before parent_schema_id existed by applying the rest of the static dev1 schema by hand
+statement ok
+ATTACH '{TEST_DIR}/dev1_parent.db' AS meta;
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN row_group_count BIGINT;
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN row_group_count BIGINT;
+
+statement ok
+CREATE TABLE meta.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);
+
+statement ok
+ALTER TABLE meta.ducklake_file_column_stats ADD COLUMN min_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_file_column_stats ADD COLUMN max_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN min_is_exact BOOLEAN DEFAULT NULL;
+
+statement ok
+ALTER TABLE meta.ducklake_table_column_stats ADD COLUMN max_is_exact BOOLEAN DEFAULT NULL;
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_schema' AND column_name = 'parent_schema_id'
+----
+0
+
+statement ok
+DETACH meta
+
+# without the migration the missing column is an error, not a silent fallback
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_parent.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_parent_files')
+
+statement error
+CREATE SCHEMA dl.s2;
+----
+parent_schema_id
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_parent.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_parent_files', AUTOMATIC_MIGRATION TRUE, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE SCHEMA dl.s2;
+
+query II
+SELECT schema_name, parent_schema_id FROM meta.ducklake_schema ORDER BY schema_id
+----
+main	NULL
+s1	NULL
+s2	NULL
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.1-dev1
