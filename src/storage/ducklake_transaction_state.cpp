@@ -225,6 +225,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
 		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
+	// a delete that matched no rows must still conflict with concurrent inserts to the same table
+	for (auto &table_id : changes.tables_delete_attempted) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
+		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
+	}
 	if (!changes.tables_deleted_from.empty()) {
 		bool check_for_matches = false;
 		for (auto &table_id : changes.tables_deleted_from) {
@@ -826,10 +831,12 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 					if (!row.IsNull(col_offset + 0)) {
 						col_stats.has_min = true;
 						col_stats.min = row.template GetValue<string>(col_offset + 0);
+						col_stats.min_is_exact = true;
 					}
 					if (!row.IsNull(col_offset + 1)) {
 						col_stats.has_max = true;
 						col_stats.max = row.template GetValue<string>(col_offset + 1);
+						col_stats.max_is_exact = true;
 					}
 				}
 				target.MergeStats(col.field_index, col_stats);
@@ -870,10 +877,11 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = context.query_metadata_with_snapshot(
-	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id));
+	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, context.supports_v1_1_metadata));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
 	}
+	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
 	bool have_file = false;
 	idx_t last_file_id = 0;
 	for (auto &row : *result) {
@@ -919,6 +927,10 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		}
 		if (!row.IsNull(9) && col_stats.extra_stats) {
 			col_stats.extra_stats->Deserialize(row.GetValue<string>(9));
+		}
+		if (has_exactness) {
+			col_stats.min_is_exact = !row.IsNull(10) && row.GetValue<bool>(10);
+			col_stats.max_is_exact = !row.IsNull(11) && row.GetValue<bool>(11);
 		}
 		new_stats.MergeStats(field_idx, col_stats);
 	}
@@ -977,7 +989,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	new_globals.initialized = true;
 	new_globals.stats = std::move(new_stats);
 	batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 }
 
 static idx_t SubtractDroppedFileStat(idx_t value, idx_t decrement) {
@@ -1064,7 +1076,7 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 			new_globals.stats.column_stats.clear();
 		}
 		result += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 		if (delete_column_stats) {
 			result += DeleteTableColumnStatsSql(table_id);
 		}
@@ -1175,7 +1187,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		// update the global stats for this table based on the newly written data
 		batch_query += DuckLakeMetadataManager::UpdateGlobalTableStatsSql(
-		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals));
+		    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 		if (clear_column_stats) {
 			batch_query += DeleteTableColumnStatsSql(table_id);
 		}
@@ -1899,13 +1911,13 @@ WHERE idt.schema_version < (
 	}
 }
 
-SnapshotAndStats
-DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
-                                            const TransactionChangeInformation &changes,
-                                            const std::function<unique_ptr<QueryResult>(string)> &executor) {
+SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(
+    DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &changes,
+    const std::function<unique_ptr<QueryResult>(string)> &executor, bool supports_v1_1_metadata) {
 	SnapshotAndStats snapshot_and_stats;
 	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor);
+	auto changes_made =
+	    DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(snapshot_and_stats, executor, supports_v1_1_metadata);
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -1931,7 +1943,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
 				commit_stats_snapshot =
-				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor);
+				    CheckForConflicts(transaction_snapshot, attempt_changes, context.conflict_query_executor,
+				                      context.supports_v1_1_metadata);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();

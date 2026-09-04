@@ -137,6 +137,8 @@ struct DuckLakeColumnStatsInfo {
 	string max_val;
 	string contains_nan;
 	string extra_stats;
+	string min_is_exact;
+	string max_is_exact;
 	vector<DuckLakeVariantStatsInfo> variant_stats;
 
 	static DuckLakeColumnStatsInfo FromColumnStats(FieldIndex field_id, const DuckLakeColumnStats &stats);
@@ -284,6 +286,9 @@ struct DuckLakeGlobalColumnStatsInfo {
 
 	string extra_stats;
 	bool has_extra_stats = false;
+
+	bool min_is_exact = false;
+	bool max_is_exact = false;
 };
 
 struct DuckLakeGlobalStatsInfo {
@@ -513,12 +518,16 @@ struct DuckLakeCompactedFileInfo {
 struct DuckLakeMergeAdjacentOptions {
 	optional_idx min_file_size;
 	optional_idx max_file_size;
+	//! If set, only files written at or after this timestamp are considered for compaction
+	Value newer_than;
 };
 
 struct DuckLakeFileSizeOptions {
 	optional_idx min_file_size;
 	optional_idx max_file_size;
 	idx_t target_file_size;
+	//! If set, only files written at or after this timestamp are considered for compaction
+	Value newer_than;
 };
 
 struct DuckLakeTableSizeInfo {
