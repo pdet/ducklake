@@ -1,0 +1,212 @@
+# name: test/sql/catalog/nested_schema/nested_transaction.test
+# description: Transaction-local nested schemas, rollback, commit and time travel
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_txn_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA ducklake.a;
+
+statement ok
+CREATE SCHEMA ducklake.a.b;
+
+statement ok
+CREATE TABLE ducklake.a.b.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.a.b.t VALUES (1);
+
+query I
+SELECT * FROM ducklake.a.b.t
+----
+1
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name IN ('a', 'b') ORDER BY schema_name
+----
+a	NULL
+b	a
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name IN ('a', 'b')
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA ducklake.a;
+
+statement ok
+CREATE SCHEMA ducklake.a.b;
+
+statement ok
+CREATE TABLE ducklake.a.b.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.a.b.t VALUES (1);
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM ducklake.a.b.t
+----
+1
+
+query II
+SELECT s.schema_name, p.schema_name FROM ducklake_meta.ducklake_schema s LEFT JOIN ducklake_meta.ducklake_schema p ON s.parent_schema_id = p.schema_id WHERE s.schema_name IN ('a', 'b') ORDER BY s.schema_name
+----
+a	NULL
+b	a
+
+# time travel
+query I
+SELECT * FROM ducklake.a.b.t AT (VERSION => 1)
+----
+1
+
+statement error
+SELECT * FROM ducklake.a.b.t AT (VERSION => 0)
+----
+<REGEX>:.*(not found|does not exist).*
+
+# the same leaf name under different parents within one transaction
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA ducklake.x;
+
+statement ok
+CREATE SCHEMA ducklake.a.x;
+
+statement ok
+CREATE TABLE ducklake.x.t(i INTEGER);
+
+statement ok
+CREATE TABLE ducklake.a.x.t(i VARCHAR);
+
+statement ok
+INSERT INTO ducklake.x.t VALUES (1);
+
+statement ok
+INSERT INTO ducklake.a.x.t VALUES ('hello');
+
+query I
+SELECT * FROM ducklake.x.t
+----
+1
+
+query I
+SELECT * FROM ducklake.a.x.t
+----
+hello
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM ducklake.x.t
+----
+1
+
+query I
+SELECT * FROM ducklake.a.x.t
+----
+hello
+
+# dropping a transaction-local parent with local children requires CASCADE
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA ducklake.p;
+
+statement ok
+CREATE SCHEMA ducklake.p.c;
+
+statement error
+DROP SCHEMA ducklake.p;
+----
+there are entries that depend on it
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA ducklake.p;
+
+statement ok
+CREATE SCHEMA ducklake.p.c;
+
+statement ok
+CREATE TABLE ducklake.p.c.t(i INTEGER);
+
+statement ok
+DROP SCHEMA ducklake.p CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name IN ('p', 'c')
+----
+0
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name IN ('p', 'c')
+----
+0
+
+# drop a committed child and recreate it in the same transaction
+statement ok
+BEGIN;
+
+statement ok
+DROP SCHEMA ducklake.a.b CASCADE;
+
+statement ok
+CREATE SCHEMA ducklake.a.b;
+
+statement ok
+CREATE TABLE ducklake.a.b.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.a.b.t VALUES (42);
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM ducklake.a.b.t
+----
+42
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' ORDER BY schema_name, parent_schema
+----
+a	NULL
+b	a
+main	NULL
+x	a
+x	NULL

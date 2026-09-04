@@ -798,15 +798,24 @@
       ]
     },
     {
-      "reason": "DuckLake does not support nested schemas.",
+      "reason": "Upstream nested-schema tests hard-code the 'memory' catalog name or DuckDB storage versions, which this config cannot satisfy",
       "paths": [
         "test/sql/catalog/nested_schema/create_nested_schema.test",
+        "test/sql/catalog/nested_schema/deeply_nested_entries.test",
         "test/sql/catalog/nested_schema/drop_nested_schema.test",
-        "test/sql/catalog/nested_schema/drop_nested_schema_persist.test",
+        "test/sql/catalog/nested_schema/nested_alter.test",
+        "test/sql/catalog/nested_schema/nested_constraints.test",
+        "test/sql/catalog/nested_schema/nested_entries.test",
+        "test/sql/catalog/nested_schema/nested_entries_persist.test",
+        "test/sql/catalog/nested_schema/nested_export.test",
+        "test/sql/catalog/nested_schema/nested_schema_limits.test",
         "test/sql/catalog/nested_schema/nested_schema_storage_version.test",
         "test/sql/catalog/nested_schema/nested_table.test",
+        "test/sql/catalog/nested_schema/nested_table_columnref.test",
+        "test/sql/catalog/nested_schema/nested_table_dml.test",
         "test/sql/catalog/nested_schema/nested_table_persist.test",
-        "test/sql/catalog/nested_schema/persist.test"
+        "test/sql/catalog/nested_schema/nested_wal_replay.test",
+        "test/sql/catalog/nested_schema/nested_wal_replay_index.test"
       ]
     },
     {
@@ -906,22 +915,6 @@
       "reason": "TIMETZ offsets with second precision are quantized by parquet storage.",
       "paths": [
         "test/sql/function/timetz/test_extract.test"
-      ]
-    },
-    {
-      "reason": "FIXME: NavigateNestedSchema unchecked cast breaks DuckLake nested schema DDL",
-      "paths": [
-        "test/sql/catalog/nested_schema/nested_alter.test",
-        "test/sql/catalog/nested_schema/nested_constraints.test",
-        "test/sql/catalog/nested_schema/nested_entries.test",
-        "test/sql/catalog/nested_schema/nested_entries_persist.test",
-        "test/sql/catalog/nested_schema/nested_export.test",
-        "test/sql/catalog/nested_schema/nested_schema_limits.test",
-        "test/sql/catalog/nested_schema/nested_table_columnref.test",
-        "test/sql/catalog/nested_schema/nested_table_dml.test",
-        "test/sql/catalog/nested_schema/nested_table_dml_persist.test",
-        "test/sql/catalog/nested_schema/nested_wal_replay.test",
-        "test/sql/catalog/nested_schema/nested_wal_replay_index.test"
       ]
     },
     {

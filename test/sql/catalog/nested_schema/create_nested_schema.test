@@ -1,0 +1,104 @@
+# name: test/sql/catalog/nested_schema/create_nested_schema.test
+# description: Create nested schemas in DuckLake
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_create_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child.grandchild;
+
+statement ok
+USE ducklake;
+
+statement ok
+CREATE SCHEMA s1.child2;
+
+query III
+SELECT schema_name, parent_schema, parent_schema_oid IS NULL FROM duckdb_schemas() WHERE database_name = 'ducklake' ORDER BY schema_name
+----
+child	s1	false
+child2	s1	false
+grandchild	child	false
+main	NULL	true
+s1	NULL	true
+
+query I
+SELECT p.oid = c.parent_schema_oid FROM duckdb_schemas() c, duckdb_schemas() p WHERE c.database_name = 'ducklake' AND p.database_name = 'ducklake' AND c.schema_name = 'grandchild' AND p.schema_name = 'child'
+----
+true
+
+query III
+SELECT s.schema_name, p.schema_name, s.path FROM ducklake_meta.ducklake_schema s LEFT JOIN ducklake_meta.ducklake_schema p ON s.parent_schema_id = p.schema_id ORDER BY s.schema_id
+----
+main	NULL	main/
+s1	NULL	s1/
+child	s1	s1/child/
+grandchild	child	s1/child/grandchild/
+child2	s1	s1/child2/
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS s1.child;
+
+statement error
+CREATE SCHEMA s1.child;
+----
+already exists
+
+statement error
+CREATE SCHEMA does_not_exist.child;
+----
+"does_not_exist" is not a catalog or schema
+
+statement error
+CREATE SCHEMA s1.missing.grandchild;
+----
+parent schema "missing" does not exist
+
+# the same leaf name can live under different parents
+statement ok
+CREATE SCHEMA s1.child.leaf;
+
+statement ok
+CREATE SCHEMA s1.child2.leaf;
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name = 'leaf' ORDER BY parent_schema
+----
+leaf	child
+leaf	child2
+
+statement error
+DROP SCHEMA s1.nope;
+----
+not found
+
+statement ok
+DROP SCHEMA IF EXISTS s1.nope;
+
+statement ok
+DROP SCHEMA s1.child2.leaf;
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name = 'leaf' ORDER BY parent_schema
+----
+leaf	child
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_schema WHERE schema_name = 'leaf' AND end_snapshot IS NOT NULL
+----
+1

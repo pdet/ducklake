@@ -64,10 +64,14 @@
       ]
     },
     {
-      "reason": "The ducklake_schema.parent_schema_id column was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "reason": "Nested schemas (ducklake_schema.parent_schema_id) were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/catalog/schema_parent_column.test",
-        "test/sql/migration/schema_parent_column_dev_migration.test"
+        "test/sql/migration/schema_parent_column_dev_migration.test",
+        "test/sql/catalog/nested_schema/create_nested_schema.test",
+        "test/sql/catalog/nested_schema/nested_table.test",
+        "test/sql/catalog/nested_schema/nested_transaction.test",
+        "test/sql/catalog/nested_schema/nested_schema_persist.test"
       ]
     }
   ]

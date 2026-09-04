@@ -1,0 +1,79 @@
+# name: test/sql/catalog/nested_schema/nested_schema_persist.test
+# description: Nested schemas survive a detach and re-attach
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_persist.db' AS dl (DATA_PATH '{TEST_DIR}/nested_persist_files')
+
+statement ok
+CREATE SCHEMA dl.s1;
+
+statement ok
+CREATE SCHEMA dl.s1.child;
+
+statement ok
+CREATE TABLE dl.s1.child.t(i INTEGER);
+
+statement ok
+INSERT INTO dl.s1.child.t VALUES (1), (2);
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_persist.db' AS dl (DATA_PATH '{TEST_DIR}/nested_persist_files')
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name IN ('s1', 'child') ORDER BY schema_name
+----
+child	s1
+s1	NULL
+
+query I
+SELECT * FROM dl.s1.child.t ORDER BY i
+----
+1
+2
+
+statement ok
+CREATE SCHEMA dl.s1.child.grandchild;
+
+statement ok
+CREATE TABLE dl.s1.child.grandchild.t(i INTEGER);
+
+statement ok
+INSERT INTO dl.s1.child.grandchild.t VALUES (3);
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_persist.db' AS dl (DATA_PATH '{TEST_DIR}/nested_persist_files')
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'grandchild'
+----
+grandchild	child
+
+query I
+SELECT * FROM dl.s1.child.grandchild.t
+----
+3
+
+statement ok
+DROP SCHEMA dl.s1 CASCADE;
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_persist.db' AS dl (DATA_PATH '{TEST_DIR}/nested_persist_files')
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'dl' ORDER BY ALL
+----
+main

@@ -1,0 +1,189 @@
+# name: test/sql/catalog/nested_schema/nested_table.test
+# description: Tables, views and macros inside nested DuckLake schemas
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_table_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child;
+
+statement ok
+CREATE TABLE ducklake.s1.child.t1(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.s1.child.t1 VALUES (1), (2), (3);
+
+query I
+SELECT * FROM ducklake.s1.child.t1 ORDER BY i
+----
+1
+2
+3
+
+statement ok
+UPDATE ducklake.s1.child.t1 SET i = i + 10 WHERE i = 2;
+
+statement ok
+DELETE FROM ducklake.s1.child.t1 WHERE i = 1;
+
+query I
+SELECT * FROM ducklake.s1.child.t1 ORDER BY i
+----
+3
+12
+
+query III
+SELECT database_name, schema_name, table_name FROM duckdb_tables() WHERE table_name = 't1'
+----
+ducklake	child	t1
+
+query I
+SELECT count(*) FROM duckdb_tables() t, duckdb_schemas() s WHERE t.table_name = 't1' AND t.schema_oid = s.oid AND s.parent_schema = 's1'
+----
+1
+
+statement ok
+CREATE VIEW ducklake.s1.child.v AS SELECT i * 10 AS x FROM ducklake.s1.child.t1;
+
+query I
+SELECT * FROM ducklake.s1.child.v ORDER BY x
+----
+30
+120
+
+statement ok
+CREATE MACRO ducklake.s1.child.double(a) AS a * 2;
+
+query I
+SELECT ducklake.s1.child.double(21)
+----
+42
+
+# data files land under the nested schema folder
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I
+SELECT count(*) > 0 FROM glob('{DATA_PATH}/nested_table_files/s1/child/t1/*.parquet')
+----
+true
+
+query I
+SELECT path FROM ducklake_meta.ducklake_table WHERE table_name = 't1'
+----
+t1/
+
+statement ok
+ALTER TABLE ducklake.s1.child.t1 ADD COLUMN j INTEGER DEFAULT 7;
+
+query II
+SELECT * FROM ducklake.s1.child.t1 ORDER BY i
+----
+3	7
+12	7
+
+statement ok
+ALTER TABLE ducklake.s1.child.t1 RENAME TO t2;
+
+query I
+SELECT count(*) FROM ducklake.s1.child.t2
+----
+2
+
+statement error
+SELECT * FROM ducklake.s1.child.t1
+----
+does not exist
+
+statement ok
+DROP VIEW ducklake.s1.child.v;
+
+statement ok
+DROP TABLE ducklake.s1.child.t2;
+
+statement error
+DROP TABLE ducklake.s1.child.nope;
+----
+does not exist
+
+statement ok
+DROP TABLE IF EXISTS ducklake.s1.child.nope;
+
+statement ok
+DROP TABLE IF EXISTS ducklake.s1.missing.nope;
+
+statement ok
+CREATE TABLE ducklake.s1.child.t3(i INTEGER);
+
+statement error
+DROP SCHEMA ducklake.s1.child;
+----
+there are entries that depend on it
+
+statement error
+DROP SCHEMA ducklake.s1;
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.s1.child CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE table_name = 't3'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name = 'child'
+----
+0
+
+statement ok
+CREATE SCHEMA ducklake.s1.child;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child.grandchild;
+
+statement ok
+CREATE TABLE ducklake.s1.child.grandchild.t4(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.s1.child.grandchild.t4 VALUES (1);
+
+statement error
+DROP SCHEMA ducklake.s1;
+----
+there are entries that depend on it
+
+statement ok
+DROP SCHEMA ducklake.s1 CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'ducklake' AND schema_name IN ('s1', 'child', 'grandchild')
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'ducklake'
+----
+0
+
+statement error
+DROP SCHEMA ducklake.s1.child;
+----
+not found
+
+statement ok
+DROP SCHEMA IF EXISTS ducklake.s1.child;

@@ -10,24 +10,41 @@ DuckLakeCatalogSet::DuckLakeCatalogSet() {
 DuckLakeCatalogSet::DuckLakeCatalogSet(ducklake_entries_map_t catalog_entries_p)
     : catalog_entries(std::move(catalog_entries_p)) {
 	for (auto &entry : catalog_entries) {
-		auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
-		schema_entry_map.insert(make_pair(schema_entry.GetSchemaId(), reference<DuckLakeSchemaEntry>(schema_entry)));
+		RegisterSchema(entry.second->Cast<DuckLakeSchemaEntry>());
 	}
+}
+
+void DuckLakeCatalogSet::RegisterSchema(DuckLakeSchemaEntry &schema_entry) {
+	schema_entry_map.insert(make_pair(schema_entry.GetSchemaId(), reference<DuckLakeSchemaEntry>(schema_entry)));
+	schema_entry.Scan(CatalogType::SCHEMA_ENTRY,
+	                  [&](CatalogEntry &child) { RegisterSchema(child.Cast<DuckLakeSchemaEntry>()); });
 }
 
 void DuckLakeCatalogSet::CreateEntry(unique_ptr<CatalogEntry> catalog_entry) {
 	auto name = catalog_entry->name.GetIdentifierName();
-	auto entry = catalog_entries.find(name);
+	CreateEntry(name, std::move(catalog_entry));
+}
+
+void DuckLakeCatalogSet::CreateEntry(const string &key, unique_ptr<CatalogEntry> catalog_entry) {
+	auto entry = catalog_entries.find(key);
 	if (entry != catalog_entries.end()) {
 		catalog_entry->SetChild(std::move(entry->second));
 	}
-	catalog_entries[name] = std::move(catalog_entry);
+	if (catalog_entry->type == CatalogType::SCHEMA_ENTRY) {
+		auto &schema_entry = catalog_entry->Cast<DuckLakeSchemaEntry>();
+		schema_entry_map.erase(schema_entry.GetSchemaId());
+		schema_entry_map.insert(make_pair(schema_entry.GetSchemaId(), reference<DuckLakeSchemaEntry>(schema_entry)));
+	}
+	catalog_entries[key] = std::move(catalog_entry);
 }
 
 unique_ptr<CatalogEntry> DuckLakeCatalogSet::DropEntry(const string &name) {
 	auto entry = catalog_entries.find(name);
 	auto catalog_entry = std::move(entry->second);
 	catalog_entries.erase(entry);
+	if (catalog_entry->type == CatalogType::SCHEMA_ENTRY) {
+		schema_entry_map.erase(catalog_entry->Cast<DuckLakeSchemaEntry>().GetSchemaId());
+	}
 	return catalog_entry;
 }
 
