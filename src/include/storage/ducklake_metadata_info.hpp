@@ -137,6 +137,8 @@ struct DuckLakeColumnStatsInfo {
 	string max_val;
 	string contains_nan;
 	string extra_stats;
+	string min_is_exact;
+	string max_is_exact;
 	vector<DuckLakeVariantStatsInfo> variant_stats;
 
 	static DuckLakeColumnStatsInfo FromColumnStats(FieldIndex field_id, const DuckLakeColumnStats &stats);
@@ -284,6 +286,9 @@ struct DuckLakeGlobalColumnStatsInfo {
 
 	string extra_stats;
 	bool has_extra_stats = false;
+
+	bool min_is_exact = false;
+	bool max_is_exact = false;
 };
 
 struct DuckLakeGlobalStatsInfo {
