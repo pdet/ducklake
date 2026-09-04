@@ -55,6 +55,23 @@ SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl
 ----
 3	0	3
 
+# statistics fold IS NULL on NULL typed columns
+statement ok
+PRAGMA explain_output = OPTIMIZED_ONLY
+
+query II
+EXPLAIN SELECT n IS NULL FROM null_tbl
+----
+logical_opt	<!REGEX>:.*IS NULL.*
+
+query II
+EXPLAIN SELECT n IS NOT NULL FROM null_tbl
+----
+logical_opt	<!REGEX>:.*IS NOT NULL.*
+
+statement ok
+PRAGMA explain_output = PHYSICAL_ONLY
+
 query I
 SELECT COUNT(*) FROM null_tbl WHERE n = 1
 ----
