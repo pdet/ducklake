@@ -87,6 +87,34 @@ ORDER BY row_group_id
 0	2048
 1	952
 
+# Resolve nested sort expressions over multiple columns with different types.
+statement ok
+CREATE TABLE expression_ctas SORTED BY (abs(b) + a, lower(label)) AS
+SELECT label, b, a FROM (VALUES ('z', -3, 1), ('B', -2, 2), ('a', -1, 3), ('x', 0, 0)) t(label, b, a)
+
+query III
+SELECT label, b, a FROM read_parquet('{DATA_PATH}/inline_ctas_sort_verify/main/expression_ctas/*.parquet')
+----
+x	0	0
+a	-1	3
+B	-2	2
+z	-3	1
+
+# INSERT resolves the same expressions after projecting an explicit column list.
+statement ok
+CREATE TABLE expression_insert (label VARCHAR, b INTEGER, a INTEGER) SORTED BY (abs(b) + a, lower(label))
+
+statement ok
+INSERT INTO expression_insert (a, label, b) VALUES (1, 'z', -3), (2, 'B', -2), (3, 'a', -1), (0, 'x', 0)
+
+query III
+SELECT label, b, a FROM read_parquet('{DATA_PATH}/inline_ctas_sort_verify/main/expression_insert/*.parquet')
+----
+x	0	0
+a	-1	3
+B	-2	2
+z	-3	1
+
 # sort_on_insert off with inlining on must still sort the Parquet bound overflow rows, as INSERT does
 statement ok
 CALL ducklake.set_option('data_inlining_row_limit', 2)

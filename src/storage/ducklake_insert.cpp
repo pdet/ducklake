@@ -18,13 +18,14 @@
 #include "functions/ducklake_compaction_functions.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/execution/column_binding_resolver.hpp"
+#include "duckdb/execution/operator/join/physical_join.hpp"
 #include "duckdb/execution/operator/order/physical_order.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_binder.hpp"
-#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -768,15 +769,13 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
-static void ResolveColumnRefs(unique_ptr<Expression> &expr) {
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &col_ref = expr->Cast<BoundColumnRefExpression>();
-		expr = make_uniq<BoundReferenceExpression>(col_ref.GetReturnType(),
-		                                           NumericCast<storage_t>(col_ref.Binding().column_index.GetIndex()));
-		return;
+class DuckLakeInsertColumnBindingResolver : public ColumnBindingResolver {
+public:
+	DuckLakeInsertColumnBindingResolver(TableIndex table_index, const vector<LogicalType> &input_types) {
+		bindings = LogicalOperator::GenerateColumnBindings(table_index, input_types.size());
+		types = input_types;
 	}
-	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { ResolveColumnRefs(child); });
-}
+};
 
 //! Wrap the plan in an ORDER BY on the sort keys, usable before the table entry exists (CTAS)
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -793,14 +792,12 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index, pre_bound_orders);
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
+	DuckLakeInsertColumnBindingResolver resolver(table_index, plan.GetTypes());
 	for (auto &order : orders) {
-		ResolveColumnRefs(order.expression);
+		resolver.VisitExpression(&order.expression);
 	}
 
-	vector<idx_t> projection_map;
-	for (idx_t i = 0; i < plan.types.size(); i++) {
-		projection_map.push_back(i);
-	}
+	auto projection_map = PhysicalJoin::FillProjectionMap(plan, {});
 	auto &order_op = planner.Make<PhysicalOrder>(plan.types, std::move(orders), std::move(projection_map),
 	                                             plan.estimated_cardinality);
 	order_op.children.push_back(plan);
@@ -882,8 +879,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	auto &duck_schema = op.schema.Cast<DuckLakeSchemaEntry>();
 
 	// The table entry doesn't exist yet; build field/partition/sort specs now so the physical write can use them.
-	idx_t column_id = 1;
-	auto field_data = DuckLakeFieldData::FromColumns(columns, column_id);
+	auto field_data = DuckLakeFieldData::FromColumns(columns);
 	unique_ptr<DuckLakePartition> partition_data;
 	if (!create_info.partition_keys.empty()) {
 		partition_data =
