@@ -138,6 +138,7 @@ public:
 		return separator;
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
+	void SetSchemaParent(SchemaIndex schema_id, SchemaIndex parent_id);
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
 	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
@@ -331,6 +332,7 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	map<SchemaIndex, SchemaIndex> schema_parents;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

@@ -1,0 +1,163 @@
+# name: test/sql/catalog/nested_schema/nested_functions.test
+# description: DuckLake table functions, built-in macros and options with nested schemas
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_functions_files', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE SCHEMA ducklake.s1;
+
+statement ok
+CREATE SCHEMA ducklake.s1.child;
+
+statement ok
+CREATE TABLE ducklake.s1.child.t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.s1.child.t VALUES (1), (2), (3);
+
+# change feed functions with a dotted schema argument
+query I
+SELECT count(*) FROM ducklake_table_insertions('ducklake', 's1.child', 't', 3, 4)
+----
+3
+
+query I
+SELECT count(*) FROM ducklake_table_changes('ducklake', 's1.child', 't', 3, 4)
+----
+3
+
+# built-in per-schema macros resolve to the nested schema
+query I
+SELECT count(*) FROM ducklake.s1.child.table_insertions('t', 3, 4)
+----
+3
+
+query I
+SELECT count(*) FROM ducklake.s1.child.table_changes('t', 3, 4)
+----
+3
+
+statement error
+SELECT count(*) FROM ducklake_table_insertions('ducklake', 's1.nope', 't', 3, 4)
+----
+does not exist
+
+# flushing inlined data for a nested schema
+query III
+CALL ducklake_flush_inlined_data('ducklake', schema_name => 's1.child')
+----
+s1.child	t	3
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't', schema => 's1.child')
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/nested_functions_files/s1/child/t/*.parquet')
+----
+1
+
+# adding files to a table in a nested schema
+statement ok
+COPY (SELECT 5 AS i) TO '{DATA_PATH}/nested_functions_add.parquet';
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/nested_functions_add.parquet');
+----
+does not exist
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/nested_functions_add.parquet', schema => 's1.child');
+
+query I
+SELECT * FROM ducklake.s1.child.t ORDER BY i
+----
+1
+2
+3
+5
+
+# compaction functions
+query IIII
+SELECT schema_name, table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't', schema => 's1.child')
+----
+s1.child	t	2	1
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't', schema => 's1.child')
+----
+1
+
+# options scoped to a nested schema and to a table inside it
+statement ok
+CALL ducklake_set_option('ducklake', 'parquet_compression', 'lz4', schema => 's1.child');
+
+statement ok
+CALL ducklake_set_option('ducklake', 'parquet_compression', 'gzip', table_name => 't', schema => 's1.child');
+
+query III
+SELECT value, scope, scope_entry FROM ducklake.options() WHERE option_name = 'parquet_compression' ORDER BY scope
+----
+lz4	SCHEMA	s1.child
+gzip	TABLE	s1.child.t
+
+# schema-scoped options are inherited by nested schemas
+statement ok
+CALL ducklake_set_option('ducklake', 'data_inlining_row_limit', '0', schema => 's1');
+
+statement ok
+CREATE TABLE ducklake.s1.child.t2(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.s1.child.t2 VALUES (1);
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't2', schema => 's1.child')
+----
+1
+
+# a schema name containing a dot must be quoted in the argument
+statement ok
+CREATE SCHEMA ducklake."x.y";
+
+statement ok
+CREATE TABLE ducklake."x.y".t(i INTEGER);
+
+statement ok
+INSERT INTO ducklake."x.y".t VALUES (7);
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake')
+----
+12
+
+statement error
+SELECT count(*) FROM ducklake_list_files('ducklake', 't', schema => 'x.y')
+----
+does not exist
+
+query I
+SELECT count(*) FROM ducklake_table_insertions('ducklake', '"x.y"', 't', 11, 12)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake."x.y".table_insertions('t', 11, 12)
+----
+1
+
+query III
+CALL ducklake_flush_inlined_data('ducklake', schema_name => '"x.y"')
+----
+"x.y"	t	1

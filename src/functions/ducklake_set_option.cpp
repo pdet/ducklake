@@ -16,7 +16,7 @@ namespace duckdb {
 static void ValidateTableScope(ClientContext &context, Catalog &catalog, const string &schema_name,
                                const string &table_name) {
 	auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-	    context, Identifier(schema_name), Identifier(table_name), OnEntryNotFound::THROW_EXCEPTION);
+	    context, DuckLakeUtil::QualifiedEntryName(catalog, schema_name, table_name), OnEntryNotFound::THROW_EXCEPTION);
 	auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 	DuckLakeUtil::ValidateCanEnableInlining(ducklake_table.GetColumns(),
 	                                        catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata(),
@@ -36,12 +36,15 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 		DuckLakeUtil::ValidateCanEnableInlining(ducklake_table.GetColumns(), duck_catalog.SupportsV1_1Metadata(),
 		                                        ducklake_table.name.GetIdentifierName());
 	});
+	schema_entry.Scan(context, CatalogType::SCHEMA_ENTRY, [&](CatalogEntry &entry) {
+		ValidateTablesInSchema(context, duck_catalog, entry.Cast<DuckLakeSchemaEntry>(), override_scope_id);
+	});
 }
 
 static void ValidateSchemaScope(ClientContext &context, Catalog &catalog, const string &schema_name) {
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
-	auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema_name), OnEntryNotFound::THROW_EXCEPTION);
-	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry->Cast<DuckLakeSchemaEntry>(), SchemaIndex());
+	auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema_name);
+	ValidateTablesInSchema(context, duck_catalog, schema_catalog_entry.Cast<DuckLakeSchemaEntry>(), SchemaIndex());
 }
 
 static void ValidateGlobalScope(ClientContext &context, Catalog &catalog) {
@@ -190,8 +193,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	if (!table.empty()) {
 		// find the scope
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
-		    context, QualifiedName(catalog.GetName(), Identifier(schema), Identifier(table)),
-		    OnEntryNotFound::THROW_EXCEPTION);
+		    context, DuckLakeUtil::QualifiedEntryName(catalog, schema, table), OnEntryNotFound::THROW_EXCEPTION);
 		auto &ducklake_table = table_catalog_entry->Cast<DuckLakeTableEntry>();
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
@@ -199,8 +201,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		}
 	} else if (!schema.empty()) {
 		// find the scope
-		auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
-		auto &ducklake_schema = schema_catalog_entry->Cast<DuckLakeSchemaEntry>();
+		auto &schema_catalog_entry = DuckLakeUtil::GetSchema(context, catalog, schema);
+		auto &ducklake_schema = schema_catalog_entry.Cast<DuckLakeSchemaEntry>();
 		config_option.schema_id = ducklake_schema.GetSchemaId();
 		if (config_option.schema_id.IsTransactionLocal()) {
 			throw NotImplementedException("Settings cannot be set for transaction-local schemas");

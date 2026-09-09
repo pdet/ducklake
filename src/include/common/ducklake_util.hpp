@@ -14,8 +14,11 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
+class Catalog;
+class SchemaCatalogEntry;
 class ClientContext;
 class DataChunk;
 class ColumnList;
@@ -44,6 +47,10 @@ public:
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
+	static vector<Identifier> ParseSchemaPath(const string &schema_arg);
+	static QualifiedName QualifiedEntryName(Catalog &catalog, const string &schema_arg, const string &entry_name);
+	static SchemaCatalogEntry &GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg);
+	static string SchemaDisplayName(const SchemaCatalogEntry &schema);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 
 	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);

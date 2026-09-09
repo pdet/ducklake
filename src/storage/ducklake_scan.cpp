@@ -20,6 +20,7 @@
 #include "duckdb/main/query_profiler.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 
 namespace duckdb {
 
@@ -295,6 +296,11 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 		serializer.WriteObject(106, "start_snapshot",
 		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
 	}
+	vector<string> schema_path;
+	for (auto &component : func_info.table.ParentSchema().GetSchemaPath()) {
+		schema_path.push_back(component.GetIdentifierName());
+	}
+	serializer.WriteProperty(107, "schema_path", schema_path);
 }
 
 unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
@@ -313,6 +319,10 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 		deserializer.ReadObject(106, "start_snapshot",
 		                        [&](Deserializer &obj) { *start_snapshot = DuckLakeSnapshot::Deserialize(obj); });
 	}
+	auto schema_path = deserializer.ReadPropertyWithExplicitDefault<vector<string>>(107, "schema_path", {});
+	if (schema_path.empty()) {
+		schema_path.push_back(schema_name);
+	}
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
@@ -326,9 +336,14 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, Identifier(catalog_name), Identifier(schema_name),
-	                                                         Identifier(table_name))
-	                        .Cast<DuckLakeTableEntry>();
+	vector<Identifier> table_path;
+	table_path.emplace_back(catalog_name);
+	for (auto &component : schema_path) {
+		table_path.emplace_back(component);
+	}
+	auto &table_entry =
+	    Catalog::GetEntry<TableCatalogEntry>(context, QualifiedName(std::move(table_path), Identifier(table_name)))
+	        .Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();

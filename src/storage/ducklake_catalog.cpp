@@ -337,6 +337,9 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	    base_path + DuckLakeCatalog::GeneratePathFromName(schema_uuid, schema_name.GetIdentifierName());
 	auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid),
 	                                                   std::move(schema_data_path), parent);
+	if (parent) {
+		SetSchemaParent(schema_id, parent->GetSchemaId());
+	}
 	auto result = schema_entry.get();
 	duck_transaction.CreateEntry(std::move(schema_entry));
 	return result;
@@ -587,6 +590,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			                            schema.name);
 		}
 		schema_entry->SetParentSchema(parent->second.get());
+		SetSchemaParent(schema.id, schema.parent_id);
 		parent->second.get().AddEntry(CatalogType::SCHEMA_ENTRY, std::move(schema_entry));
 	}
 
@@ -1074,8 +1078,8 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 			}
 		}
 	}
-	// schema scope
-	if (schema_id.IsValid()) {
+	// schema scope, walking up the parent chain
+	while (schema_id.IsValid()) {
 		auto schema_entry = options.schema_options.find(schema_id);
 		if (schema_entry != options.schema_options.end()) {
 			auto schema_options_entry = schema_entry->second.find(option);
@@ -1084,8 +1088,15 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 				return true;
 			}
 		}
+		auto parent_entry = schema_parents.find(schema_id);
+		schema_id = parent_entry == schema_parents.end() ? SchemaIndex() : parent_entry->second;
 	}
 	return false;
+}
+
+void DuckLakeCatalog::SetSchemaParent(SchemaIndex schema_id, SchemaIndex parent_id) {
+	lock_guard<mutex> guard(config_lock);
+	schema_parents[schema_id] = parent_id;
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,

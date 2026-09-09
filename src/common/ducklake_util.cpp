@@ -13,6 +13,9 @@
 #include "duckdb/main/client_context.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/entry_lookup_info.hpp"
 
 #include <cmath>
 
@@ -72,6 +75,74 @@ vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_sepa
 
 string ParsedCatalogEntry::SchemaKey() const {
 	return DuckLakeUtil::ToQuotedList(schema_path, '.');
+}
+
+vector<Identifier> DuckLakeUtil::ParseSchemaPath(const string &schema_arg) {
+	vector<Identifier> result;
+	string current;
+	bool in_quotes = false;
+	for (idx_t i = 0; i < schema_arg.size(); i++) {
+		auto c = schema_arg[i];
+		if (in_quotes) {
+			if (c != '"') {
+				current += c;
+				continue;
+			}
+			if (i + 1 < schema_arg.size() && schema_arg[i + 1] == '"') {
+				current += '"';
+				i++;
+				continue;
+			}
+			in_quotes = false;
+			continue;
+		}
+		if (c == '"') {
+			in_quotes = true;
+			continue;
+		}
+		if (c == '.') {
+			result.emplace_back(current);
+			current.clear();
+			continue;
+		}
+		current += c;
+	}
+	if (in_quotes) {
+		throw InvalidInputException("Failed to parse schema path \"%s\" - unterminated quote", schema_arg);
+	}
+	result.emplace_back(current);
+	return result;
+}
+
+QualifiedName DuckLakeUtil::QualifiedEntryName(Catalog &catalog, const string &schema_arg, const string &entry_name) {
+	if (schema_arg.empty()) {
+		return QualifiedName(catalog.GetName(), Identifier(), Identifier(entry_name));
+	}
+	auto path = ParseSchemaPath(schema_arg);
+	path.insert(path.begin(), catalog.GetName());
+	return QualifiedName(std::move(path), Identifier(entry_name));
+}
+
+SchemaCatalogEntry &DuckLakeUtil::GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg) {
+	auto path = ParseSchemaPath(schema_arg);
+	auto schema_name = std::move(path.back());
+	path.pop_back();
+	path.insert(path.begin(), catalog.GetName());
+	EntryLookupInfo schema_lookup(CatalogType::SCHEMA_ENTRY, QualifiedName(std::move(path), std::move(schema_name)));
+	return catalog.GetSchema(context, schema_lookup);
+}
+
+string DuckLakeUtil::SchemaDisplayName(const SchemaCatalogEntry &schema) {
+	string result;
+	for (auto &component : schema.GetSchemaPath()) {
+		if (!result.empty()) {
+			result += ".";
+		}
+		auto &name = component.GetIdentifierName();
+		bool needs_quotes = name.find('.') != string::npos || name.find('"') != string::npos;
+		result += needs_quotes ? SQLIdentifierToString(name) : name;
+	}
+	return result;
 }
 
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {

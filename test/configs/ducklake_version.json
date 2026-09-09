@@ -73,7 +73,9 @@
         "test/sql/catalog/nested_schema/nested_transaction.test",
         "test/sql/catalog/nested_schema/nested_schema_persist.test",
         "test/sql/catalog/nested_schema/nested_snapshot_changes.test",
-        "test/sql/catalog/nested_schema/nested_conflicts.test"
+        "test/sql/catalog/nested_schema/nested_conflicts.test",
+        "test/sql/catalog/nested_schema/nested_functions.test",
+        "test/sql/catalog/nested_schema/nested_scan_serialization.test"
       ]
     }
   ]
