@@ -861,6 +861,12 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      LogicalCreateTable &op, PhysicalOperator &plan) {
+	// CTAS creates the table from the sink and never passes through Catalog::CreateTable, so the create-table
+	// feature gate (e.g. rejecting WITH (...)) has to be applied here explicitly.
+	auto supports_create_table = SupportsCreateTable(*op.info);
+	if (supports_create_table.HasError()) {
+		supports_create_table.Throw();
+	}
 	auto &create_info = op.info->Base();
 	auto &columns = create_info.columns;
 	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
@@ -895,6 +901,14 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	if (data_inlining_row_limit > 0 && metadata_manager.CanInlineColumns(columns)) {
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
+		// Mirror PlanInsert: with sort_on_insert=false only the Parquet-bound overflow rows are sorted, after inlining.
+		if (sort_data && !sort_on_insert) {
+			auto sorted_plan = PlanInsertSortFromColumns(context, planner, root.get(), columns,
+			                                             create_info.GetTableName(), sort_data.get());
+			if (sorted_plan) {
+				root = *sorted_plan;
+			}
+		}
 	}
 	DuckLakeTypes::CheckSupportedTypes(columns, GetDuckLakeVersion());
 	auto table_uuid = duck_transaction.GenerateUUID();

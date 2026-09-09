@@ -86,3 +86,49 @@ ORDER BY row_group_id
 ----
 0	2048
 1	952
+
+# ----------------------------------------------------------------------------------------------------------------------
+# sort_on_insert=false with data inlining enabled: INSERT sorts only the Parquet-bound overflow rows (the sort is
+# placed after the inline-data operator). CTAS must behave the same way - otherwise the on-disk order of a SORTED BY
+# table depends on whether the rows arrived through CTAS or INSERT. Sort key is the inverse of the SELECT order.
+# ----------------------------------------------------------------------------------------------------------------------
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 2)
+
+statement ok
+CALL ducklake.set_option('sort_on_insert', 'false')
+
+statement ok
+CREATE TABLE overflow_sorted SORTED BY (v) AS
+SELECT (10 - range) AS v FROM range(6)
+
+# 6 rows exceed the inlining limit, so they all land in Parquet - and must be in v ASC order there
+query I
+SELECT list(v) FROM read_parquet('{DATA_PATH}/inline_ctas_sort_verify/main/overflow_sorted/*.parquet')
+----
+[5, 6, 7, 8, 9, 10]
+
+# reference: the same rows through INSERT
+statement ok
+CREATE TABLE overflow_sorted_ins (v BIGINT) SORTED BY (v)
+
+statement ok
+INSERT INTO overflow_sorted_ins SELECT (10 - range) AS v FROM range(6)
+
+query I
+SELECT list(v) FROM read_parquet('{DATA_PATH}/inline_ctas_sort_verify/main/overflow_sorted_ins/*.parquet')
+----
+[5, 6, 7, 8, 9, 10]
+
+# logical results are unaffected either way
+query I
+SELECT list(v ORDER BY v) FROM overflow_sorted
+----
+[5, 6, 7, 8, 9, 10]
+
+statement ok
+CALL ducklake.set_option('sort_on_insert', 'true')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
