@@ -231,9 +231,9 @@ SELECT count(*), max(i) FROM ducklake.concurrent_b
 7	6
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Test 6: Same-transaction inline CTAS + ALTER SET PARTITIONED BY + COMMIT. Last writer wins (the
-# metadata-layer dedup collapses by table_id; final on-disk state references the ALTER's partition column).
-# This is regression coverage for the chain-walk behavior change in this branch.
+# Test 6: Same-transaction inline CTAS + ALTER SET PARTITIONED BY + COMMIT. Last writer wins: only the ALTER's
+# partition spec stays open. The inline CREATE's spec is kept as a closed row (begin_snapshot = end_snapshot)
+# because the CTAS data files were written under it and still reference its partition_id.
 # ----------------------------------------------------------------------------------------------------------------------
 
 statement ok
@@ -255,13 +255,23 @@ COMMIT
 statement ok
 SET VARIABLE chain_winner_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
 
-# exactly one partition_info row (the last ALTER's) and one sort_info row (the last ALTER's)
-query I
-SELECT count(*) FROM ducklake_meta.ducklake_partition_info
+# two partition_info rows: the inline CREATE's spec (closed, begin = end) and the last ALTER's (open)
+query III
+SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), count(*) FILTER (WHERE begin_snapshot = end_snapshot)
+FROM ducklake_meta.ducklake_partition_info
 WHERE table_id = getvariable('chain_winner_id')
 ----
-1
+2	1	1
 
+# every CTAS data file references a partition_id present in partition_info (the closed row keeps them resolvable)
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file f
+WHERE f.table_id = getvariable('chain_winner_id') AND f.partition_id IS NOT NULL
+  AND f.partition_id NOT IN (SELECT partition_id FROM ducklake_meta.ducklake_partition_info WHERE table_id = f.table_id)
+----
+0
+
+# exactly one sort_info row (the last ALTER's)
 query I
 SELECT count(*) FROM ducklake_meta.ducklake_sort_info
 WHERE table_id = getvariable('chain_winner_id')

@@ -1,4 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -116,8 +118,8 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(table.schema.name));
-	chunk.data[1].Append(Value(table.name));
+	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	chunk.SetChildCardinality(1);
@@ -289,6 +291,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	filter_options.min_file_size = options.min_file_size;
 	filter_options.max_file_size = options.max_file_size;
 	filter_options.target_file_size = target_file_size;
+	filter_options.newer_than = options.newer_than;
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
@@ -494,6 +497,30 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	return std::move(projected);
 }
 
+optional_ptr<DuckLakeTableEntry>
+DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const DuckLakeCompactionFileEntry &source_file,
+                                             idx_t partition_id) {
+	auto partition_data = table.GetPartitionData();
+	if (partition_data && partition_data->partition_id == partition_id) {
+		return &table;
+	}
+	if (!source_file.partition_snapshot_id.IsValid() || !source_file.partition_schema_version.IsValid()) {
+		return nullptr;
+	}
+	DuckLakeSnapshot partition_snapshot(source_file.partition_snapshot_id.GetIndex(),
+	                                    source_file.partition_schema_version.GetIndex(), 0, 0);
+	auto partition_entry = catalog.GetEntryById(transaction, partition_snapshot, table_id);
+	if (!partition_entry) {
+		throw InternalException("DuckLakeCompactor: failed to find table entry for partition schema");
+	}
+	auto &partition_table = partition_entry->Cast<DuckLakeTableEntry>();
+	partition_data = partition_table.GetPartitionData();
+	if (!partition_data || partition_data->partition_id != partition_id) {
+		throw InternalException("DuckLakeCompactor: failed to find partition spec");
+	}
+	return &partition_table;
+}
+
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
@@ -575,7 +602,23 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto &columns = table.GetColumns();
 	string data_path;
 	if (partition_id.IsValid()) {
-		data_path = DuckLakePartitionUtils::BuildHivePartitionPath(table, partition_values, catalog.Separator());
+		auto partition_table = ResolvePartitionSpecTable(table, source_files[0], partition_id.GetIndex());
+		if (partition_table) {
+			data_path =
+			    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
+		} else {
+			auto &file_path = source_files[0].file.data.path;
+			auto &table_path = table.DataPath();
+			if (!StringUtil::StartsWith(file_path, table_path)) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			auto relative_path = file_path.substr(table_path.size());
+			auto separator_pos = relative_path.rfind(catalog.Separator());
+			if (separator_pos == string::npos) {
+				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			}
+			data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+		}
 	}
 
 	bool write_row_id = false;
@@ -614,7 +657,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto virtual_columns = table.GetVirtualColumns();
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          StringsToIdentifiers(copy_options.names), std::move(virtual_columns));
+	                          copy_options.names, std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -663,7 +706,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info));
+	                                         std::move(copy_options.info), binder.GenerateTableIndex());
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (write_row_id) {
@@ -689,7 +732,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->write_partition_columns = copy_options.write_partition_columns;
 	copy->write_empty_file = false;
 	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = StringsToIdentifiers(copy_options.names);
+	copy->names = copy_options.names;
 	copy->expected_types = std::move(copy_options.expected_types);
 	copy->children.push_back(std::move(root));
 
@@ -742,12 +785,13 @@ static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &tran
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
                                uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
-                               vector<unique_ptr<LogicalOperator>> &compactions) {
+                               const Value &newer_than, vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
 		DuckLakeMergeAdjacentOptions options;
 		options.min_file_size = min_file_size;
 		options.max_file_size = max_file_size;
+		options.newer_than = newer_than;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
 		                            max_files, options);
 		compactor.GenerateCompactions(cur_table, compactions);
@@ -829,6 +873,15 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
+	Value newer_than;
+	auto newer_than_entry = input.named_parameters.find("newer_than");
+	if (newer_than_entry != input.named_parameters.end()) {
+		if (newer_than_entry->second.IsNull()) {
+			throw BinderException("The newer_than option must be a non-null timestamp.");
+		}
+		newer_than = newer_than_entry->second;
+	}
+
 	if (input.inputs.size() == 1) {
 		// No default schema/table, we will perform rewrites on deletes in the whole database
 		auto schemas = ducklake_catalog.GetSchemas(context);
@@ -841,7 +894,8 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, compactions);
+						                   delete_threshold, max_files, min_file_size, max_file_size, newer_than,
+						                   compactions);
 					}
 				}
 			});
@@ -876,14 +930,14 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, compactions);
+		                   max_files, min_file_size, max_file_size, newer_than, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
 }
 
 static unique_ptr<LogicalOperator> MergeAdjacentFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          TableIndex bind_index, vector<string> &return_names) {
+                                                          TableIndex bind_index, vector<Identifier> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");
@@ -900,6 +954,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["min_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
+		function.named_parameters["newer_than"] = LogicalType::TIMESTAMP_TZ;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}
@@ -909,7 +964,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 }
 
 static unique_ptr<LogicalOperator> RewriteFilesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    TableIndex bind_index, vector<string> &return_names) {
+                                                    TableIndex bind_index, vector<Identifier> &return_names) {
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
 	return_names.push_back("files_processed");

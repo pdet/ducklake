@@ -1,4 +1,7 @@
 #include "common/ducklake_types.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -92,9 +95,7 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 constexpr column_t DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID;
 
 void DuckLakeTableEntry::CheckSupportedTypes() {
-	for (auto &col : columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type());
-	}
+	DuckLakeTypes::CheckSupportedTypes(columns, ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion());
 }
 
 DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info,
@@ -245,16 +246,17 @@ optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::GetFieldId(FieldIndex fi
 	return field_data->GetByFieldIndex(field_index);
 }
 
-const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(const vector<string> &column_names,
+const DuckLakeFieldId &DuckLakeTableEntry::GetFieldId(const vector<Identifier> &column_names,
                                                       optional_ptr<optional_idx> name_offset) const {
 	auto result = TryGetFieldId(column_names, name_offset);
 	if (!result) {
-		throw BinderException("Column \"%s\" does not exist", StringUtil::Join(column_names, "."));
+		throw BinderException("Column \"%s\" does not exist",
+		                      StringUtil::Join(IdentifiersToStrings(column_names), "."));
 	}
 	return *result;
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::TryGetFieldId(const vector<string> &column_names,
+optional_ptr<const DuckLakeFieldId> DuckLakeTableEntry::TryGetFieldId(const vector<Identifier> &column_names,
                                                                       optional_ptr<optional_idx> name_offset) const {
 	if (!columns.ColumnExists(Identifier(column_names[0]))) {
 		return nullptr;
@@ -277,6 +279,10 @@ unique_ptr<BaseStatistics> GetColumnStats(const DuckLakeFieldId &field_id, const
 		// non-nested type - lookup the field id in the stats map
 		auto entry = table_stats.column_stats.find(field_id.GetFieldIndex());
 		if (entry == table_stats.column_stats.end()) {
+			return nullptr;
+		}
+		if (entry->second.type != field_id.Type()) {
+			// don't serve stale stats from before a retype
 			return nullptr;
 		}
 		return entry->second.ToStats();
@@ -342,14 +348,14 @@ unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &cont
 	vector<Value> inputs {Value("")};
 	named_parameter_map_t param_map;
 	vector<LogicalType> return_types;
-	vector<string> names;
 	vector<Identifier> input_table_names;
 	TableFunctionRef empty_ref;
 
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, input_table_names, nullptr, nullptr, function,
 	                                  empty_ref);
 
-	return function.bind(context, bind_input, return_types, names);
+	vector<Identifier> bind_names;
+	return function.bind(context, bind_input, return_types, bind_names);
 }
 
 TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
@@ -432,7 +438,7 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 		auto &col = GetColumnByFieldId(field.field_id);
 		auto col_name = SQLIdentifier::ToString(col.GetName().GetIdentifierName());
 		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
-		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name));
+		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name, col.GetType()));
 	}
 	return result;
 }
@@ -477,12 +483,12 @@ idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	table_info.table = info.new_table_name;
+	table_info.SetTableName(info.new_table_name);
 	// create a complete copy of this table with only the name changed
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::RENAMED);
 }
 
-string GetPartitionColumnName(ColumnRefExpression &colref) {
+string GetPartitionColumnName(const ColumnRefExpression &colref) {
 	if (colref.IsQualified()) {
 		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
 	}
@@ -520,8 +526,8 @@ void DuckLakeTableEntry::ValidateSortExpressionColumns(const ColumnList &columns
 	}
 }
 
-DuckLakePartitionField GetPartitionField(const ColumnList &columns, DuckLakeFieldData &field_data,
-                                         ParsedExpression &expr) {
+DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog, const ColumnList &columns,
+                                         DuckLakeFieldData &field_data, ParsedExpression &expr) {
 	string column_name;
 	DuckLakePartitionField field;
 
@@ -551,11 +557,11 @@ DuckLakePartitionField GetPartitionField(const ColumnList &columns, DuckLakeFiel
 			}
 
 			auto &bucket_expr = args[0].GetExpressionMutable()->Cast<ConstantExpression>();
-			auto bucket_value = bucket_expr.GetValue();
-			if (!bucket_value.DefaultTryCastAs(LogicalType::BIGINT)) {
+			auto bucket_value = bucket_expr.GetValue().DefaultTryCastAs(LogicalType::BIGINT);
+			if (!bucket_value) {
 				throw InvalidInputException("Bucket count must be an integer");
 			}
-			auto bucket_count = bucket_value.GetValue<int64_t>();
+			auto bucket_count = bucket_value->GetValue<int64_t>();
 			if (bucket_count <= 0) {
 				throw InvalidInputException("Bucket count must be positive");
 			}
@@ -577,9 +583,23 @@ DuckLakePartitionField GetPartitionField(const ColumnList &columns, DuckLakeFiel
 			field.transform.type = DuckLakeTransformType::DAY;
 		} else if (name == "hour") {
 			field.transform.type = DuckLakeTransformType::HOUR;
+		} else if (name == "epoch_year") {
+			field.transform.type = DuckLakeTransformType::EPOCH_YEAR;
+		} else if (name == "epoch_month") {
+			field.transform.type = DuckLakeTransformType::EPOCH_MONTH;
+		} else if (name == "epoch_day") {
+			field.transform.type = DuckLakeTransformType::EPOCH_DAY;
+		} else if (name == "epoch_hour") {
+			field.transform.type = DuckLakeTransformType::EPOCH_HOUR;
 		} else {
-			throw NotImplementedException(
-			    "Unsupported partition function %s - only year, month, day, hour, and bucket are supported", name);
+			throw NotImplementedException("Unsupported partition function %s - only year, month, day, hour, "
+			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
+			                              name);
+		}
+		if (DuckLakePartitionUtils::IsEpochTransform(field.transform.type) &&
+		    !ducklake_catalog.SupportsV1_1Metadata()) {
+			ThrowUnsupportedByVersion(ducklake_catalog.GetDuckLakeVersion(),
+			                          StringUtil::Format("the %s partition transform", name));
 		}
 
 		if (args.size() != 1 || args[0].GetExpressionMutable()->GetExpressionType() != ExpressionType::COLUMN_REF) {
@@ -590,14 +610,18 @@ DuckLakePartitionField GetPartitionField(const ColumnList &columns, DuckLakeFiel
 		break;
 	}
 	default:
-		throw NotImplementedException(
-		    "Unsupported partition key %s - only identity columns and year/month/day/hour/bucket are supported",
-		    expr.ToString());
+		throw NotImplementedException("Unsupported partition key %s - only identity columns and "
+		                              "year/month/day/hour/epoch_year/epoch_month/epoch_day/epoch_hour/bucket are "
+		                              "supported",
+		                              expr.ToString());
 	}
 	if (!columns.ColumnExists(Identifier(column_name))) {
 		throw CatalogException("Unexpected partition key - column \"%s\" does not exist", column_name);
 	}
 	auto &col = columns.GetColumn(Identifier(column_name));
+	if (col.Type().id() == LogicalTypeId::SQLNULL) {
+		throw InvalidInputException("Column \"%s\" has type NULL and cannot be used as a partition key", column_name);
+	}
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = field_data.GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
@@ -630,7 +654,7 @@ DuckLakeTableEntry::BuildPartitionData(DuckLakeTransaction &transaction, const C
 	partition_data->local_partition_id = partition_data->partition_id;
 	for (idx_t expr_idx = 0; expr_idx < partition_keys.size(); expr_idx++) {
 		auto &expr = *partition_keys[expr_idx];
-		auto partition_field = GetPartitionField(columns, field_data, expr);
+		auto partition_field = GetPartitionField(transaction.GetCatalog(), columns, field_data, expr);
 		// Reject duplicate keys: same (field_id, transform). (year(ts), month(ts)) is fine, (a, a) is not.
 		for (auto &existing : partition_data->fields) {
 			if (existing.field_id == partition_field.field_id && existing.transform == partition_field.transform) {
@@ -742,16 +766,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         RenameColumnInfo &info) {
-	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
-	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_name.GetIdentifierName()) &&
-	    duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0) {
-		throw CatalogException(
-		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-		    "you must use this column name, disable inlining by calling "
-		    "ducklake_set_option('data_inlining_row_limit', 0).",
-		    info.new_name.GetIdentifierName());
-	}
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
+	                                          info.new_name.GetIdentifierName());
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!table_info.columns.ColumnExists(info.old_name)) {
@@ -789,16 +806,9 @@ void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         AddColumnInfo &info) {
-	auto &duck_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
-	auto &duck_schema = ParentSchema().Cast<DuckLakeSchemaEntry>();
-	if (DuckLakeUtil::IsInlinedSystemColumn(info.new_column.Name().GetIdentifierName()) &&
-	    duck_catalog.DataInliningRowLimit(context, duck_schema.GetSchemaId(), GetTableId()) > 0) {
-		throw CatalogException(
-		    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-		    "you must use this column name, disable inlining by calling "
-		    "ducklake_set_option('data_inlining_row_limit', 0).",
-		    info.new_column.Name().GetIdentifierName());
-	}
+	DuckLakeUtil::ValidateInlinedSystemColumn(ParentCatalog().Cast<DuckLakeCatalog>(), context,
+	                                          ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), GetTableId(),
+	                                          info.new_column.Name().GetIdentifierName());
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (info.if_column_not_exists && ColumnExists(info.new_column.Name())) {
@@ -847,8 +857,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		if (info.if_column_exists) {
 			return nullptr;
 		}
-		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name.GetIdentifierName(),
-		                      info.removed_column.GetIdentifierName());
+		throw BinderException("Table %s does not have a column with name %s", name, info.removed_column);
 	}
 
 	auto &col = table_info.columns.GetColumn(info.removed_column);
@@ -1054,6 +1063,11 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 		    "Cannot change type of column %s from %s to %s - only widening type promotions are allowed",
 		    source_id.Name(), source_type, target);
 	}
+	if (target.IsNested()) {
+		throw CatalogException(
+		    "Cannot change type of column %s from %s to %s - promoting a NULL column to a nested type is not supported",
+		    source_id.Name(), source_type, target);
+	}
 	// field id is unchanged - but the column is changed
 	// we need to drop and recreate the column
 	// drop the field
@@ -1082,8 +1096,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name.GetIdentifierName(),
-		                      info.column_name.GetIdentifierName());
+		throw BinderException("Table %s does not have a column with name %s", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumn(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
@@ -1163,7 +1176,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto change_info = make_uniq<ColumnChangeInfo>();
 	RequireNextColumnId(transaction);
 
-	auto &parent_id = GetFieldId(IdentifiersToStrings(info.column_path));
+	auto &parent_id = GetFieldId(info.column_path);
 	if (parent_id.Type().id() != LogicalTypeId::STRUCT) {
 		throw CatalogException("Fields can only be added to structs - %s is a %s", parent_id.Name(), parent_id.Type());
 	}
@@ -1192,7 +1205,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (child_field_id && field_id->Name() == info.column_path[0]) {
-			auto new_field_id = field_id->AddField(IdentifiersToStrings(info.column_path), std::move(child_field_id));
+			auto new_field_id = field_id->AddField(info.column_path, std::move(child_field_id));
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));
@@ -1225,9 +1238,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	optional_ptr<const DuckLakeFieldId> removed_id_ptr;
 	if (info.if_column_exists) {
-		removed_id_ptr = TryGetFieldId(IdentifiersToStrings(info.column_path));
+		removed_id_ptr = TryGetFieldId(info.column_path);
 	} else {
-		removed_id_ptr = GetFieldId(IdentifiersToStrings(info.column_path));
+		removed_id_ptr = GetFieldId(info.column_path);
 	}
 	if (!removed_id_ptr) {
 		return nullptr;
@@ -1244,7 +1257,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (field_id->Name() == info.column_path[0]) {
-			auto new_field_id = field_id->RemoveField(IdentifiersToStrings(info.column_path));
+			auto new_field_id = field_id->RemoveField(info.column_path);
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));
@@ -1275,8 +1288,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 
-	auto &renamed_id = GetFieldId(IdentifiersToStrings(info.column_path));
-	auto parent_path = IdentifiersToStrings(info.column_path);
+	auto &renamed_id = GetFieldId(info.column_path);
+	auto parent_path = info.column_path;
 	parent_path.pop_back();
 	auto &parent_id = GetFieldId(parent_path);
 	if (parent_id.Type().id() != LogicalTypeId::STRUCT) {
@@ -1287,7 +1300,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			throw CatalogException(
 			    "Failed to rename field \"%s\" to \"%s\" - field with this name already exists in column \"%s\"",
 			    info.column_path.back().GetIdentifierName(), info.new_name.GetIdentifierName(),
-			    StringUtil::Join(parent_path, "."));
+			    StringUtil::Join(IdentifiersToStrings(parent_path), "."));
 		}
 	}
 
@@ -1301,8 +1314,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	for (idx_t col_idx = 0; col_idx < current_field_ids.size(); col_idx++) {
 		auto &field_id = current_field_ids[col_idx];
 		if (field_id->Name() == info.column_path[0]) {
-			auto new_field_id =
-			    field_id->RenameField(IdentifiersToStrings(info.column_path), info.new_name.GetIdentifierName());
+			auto new_field_id = field_id->RenameField(info.column_path, info.new_name.GetIdentifierName());
 			auto &col = table_info.columns.GetColumnMutable(PhysicalIndex(col_idx));
 			col.SetType(new_field_id->Type());
 			new_field_ids->Add(std::move(new_field_id));
@@ -1320,14 +1332,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 	if (!ColumnExists(info.column_name)) {
-		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name.GetIdentifierName(),
-		                      info.column_name.GetIdentifierName());
+		throw BinderException("Table %s does not have a column with name %s", name, info.column_name);
 	}
 	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
-	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(table_info.table.GetIdentifierName(),
-	                                                                             col.GetName().GetIdentifierName());
+	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(
+	    table_info.GetTableName().GetIdentifierName(), col.GetName().GetIdentifierName());
 
 	auto new_entry = make_uniq<DuckLakeTableEntry>(
 	    *this, table_info, SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));

@@ -1,4 +1,10 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -107,6 +113,10 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
+		} else if (stats_name == "min_is_exact") {
+			column_stats.min_is_exact = StringValue::Get(stats_children[1]) == "true";
+		} else if (stats_name == "max_is_exact") {
+			column_stats.max_is_exact = StringValue::Get(stats_children[1]) == "true";
 		} else if (column_stats.extra_stats && column_stats.extra_stats->ParseStats(stats_name, stats_children)) {
 			// handled by extra stats
 			continue;
@@ -178,7 +188,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 
 			optional_idx name_offset;
-			auto &field_id = table.GetFieldId(column_names, &name_offset);
+			auto &field_id = table.GetFieldId(StringsToIdentifiers(column_names), &name_offset);
 			if (name_offset.IsValid()) {
 				if (field_id.Type().id() != LogicalTypeId::VARIANT) {
 					throw InternalException("name_offset can only be set for variant columns");
@@ -201,7 +211,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
 				if (global_state.not_null_fields.count(column_names[0])) {
-					throw ConstraintException("NOT NULL constraint failed: %s.%s", table.name, column_names[0]);
+					throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
+					                          SQLIdentifier(column_names[0]));
 				}
 			}
 
@@ -278,14 +289,14 @@ string DuckLakeInsert::GetName() const {
 
 InsertionOrderPreservingMap<string> DuckLakeInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table Name"] = (table ? table->name : info->Base().table).GetIdentifierName();
+	result["Table Name"] = (table ? table->name : info->Base().GetTableName()).GetIdentifierName();
 	return result;
 }
 
 //===--------------------------------------------------------------------===//
 // Plan
 //===--------------------------------------------------------------------===//
-CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &context, const string &name) {
+CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &context, const Identifier &name) {
 	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
 	// name), but that do not offer enough control
 	auto &db = *context.db;
@@ -298,11 +309,12 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	D_ASSERT(!name.empty());
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 
-	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(name),
-	                                                               OnEntryNotFound::RETURN_NULL);
+	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), name),
+	    OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(
-		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension", name, name);
+		    "Could not load the copy function for %s. Try explicitly loading the %s extension", name, name);
 	}
 	return *entry;
 }
@@ -479,8 +491,8 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	case_insensitive_set_t names;
 	for (auto &field : copy_input.partition_data->fields) {
 		auto expr = GetPartitionExpression(context, copy_input, field);
-		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
-		names.insert(copy_options.names.back());
+		copy_options.names.push_back(Identifier(GetPartitionExpressionName(copy_input, field, names)));
+		names.insert(copy_options.names.back().GetIdentifierName());
 		copy_options.expected_types.push_back(expr->GetReturnType());
 		copy_options.projection_list.push_back(std::move(expr));
 	}
@@ -589,7 +601,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	result.per_thread_output = per_thread_output;
 	result.write_partition_columns = true;
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-	result.names = names_to_write;
+	result.names = StringsToIdentifiers(names_to_write);
 	result.expected_types = types_to_write;
 
 	if (copy_input.partition_data) {
@@ -713,7 +725,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.write_partition_columns = copy_options.write_partition_columns;
 	physical_copy.write_empty_file = copy_options.write_empty_file;
 	physical_copy.partition_columns = std::move(copy_options.partition_columns);
-	physical_copy.names = StringsToIdentifiers(copy_options.names);
+	physical_copy.names = copy_options.names;
 	physical_copy.expected_types = std::move(copy_options.expected_types);
 	physical_copy.parallel = true;
 	physical_copy.hive_file_pattern =
@@ -870,8 +882,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	bool sort_on_insert =
 	    GetConfigOption<string>("sort_on_insert", duck_schema.GetSchemaId(), TableIndex(), "true") == "true";
 	if (sort_data && sort_on_insert) {
-		auto sorted_plan =
-		    PlanInsertSortFromColumns(context, planner, root.get(), columns, create_info.table, sort_data.get());
+		auto sorted_plan = PlanInsertSortFromColumns(context, planner, root.get(), columns, create_info.GetTableName(),
+		                                             sort_data.get());
 		if (sorted_plan) {
 			root = *sorted_plan;
 		}
@@ -884,12 +896,10 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		root = planner.Make<DuckLakeInlineData>(root.get(), data_inlining_row_limit);
 		inline_data = root.get().Cast<DuckLakeInlineData>();
 	}
-	for (auto &col : columns.Logical()) {
-		DuckLakeTypes::CheckSupportedType(col.Type());
-	}
+	DuckLakeTypes::CheckSupportedTypes(columns, GetDuckLakeVersion());
 	auto table_uuid = duck_transaction.GenerateUUID();
-	auto table_data_path = duck_schema.DataPath() +
-	                       DuckLakeCatalog::GeneratePathFromName(table_uuid, create_info.table.GetIdentifierName());
+	auto table_data_path = duck_schema.DataPath() + DuckLakeCatalog::GeneratePathFromName(
+	                                                    table_uuid, create_info.GetTableName().GetIdentifierName());
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path, *field_data, partition_data.get());
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, root.get());
