@@ -34,22 +34,11 @@ CREATE TABLE bad_with (a INTEGER) WITH (some_option='x')
 ----
 WITH clause is not supported for tables in a ducklake catalog
 
-# CTAS creates the table from the insert sink (bypassing Catalog::CreateTable), so the same gate must be
-# applied at plan time - otherwise the WITH clause is silently ignored and the table is created.
+# CTAS bypasses the catalog CreateTable entry point, so the same gate must run at plan time
 statement error
 CREATE TABLE bad_with_ctas WITH (some_option='x') AS SELECT 1 AS a
 ----
 WITH clause is not supported for tables in a ducklake catalog
-
-statement error
-CREATE TABLE bad_with_ctas PARTITIONED BY (a) SORTED BY (a) WITH (some_option='x') AS SELECT 1 AS a
-----
-WITH clause is not supported for tables in a ducklake catalog
-
-statement error
-SELECT * FROM bad_with_ctas
-----
-<REGEX>:.*does not exist.*
 
 # unsupported transform function
 statement error

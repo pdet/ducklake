@@ -42,6 +42,8 @@ public:
 	                                               string table_uuid, string table_data_path,
 	                                               unique_ptr<DuckLakePartition> prebuilt_partition_data = nullptr,
 	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr);
+	//! Data path for a new table in this schema, derived from the schema path, table name and uuid
+	string GenerateTableDataPath(const string &table_uuid, const string &table_name) const;
 	unique_ptr<CreateInfo> GetInfo() const override;
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;

@@ -279,8 +279,7 @@ SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getva
 ----
 0
 
-# Test 10: same-transaction CREATE-inline + ALTER-set. Only the latest (ALTER) spec stays open; the inline
-# CREATE's spec is kept as a closed row (begin_snapshot = end_snapshot) so files written under it stay resolvable.
+# Test 10, CREATE with inline spec then ALTER in one txn, the ALTER spec stays open and the CREATE spec is closed
 statement ok
 BEGIN
 
@@ -299,7 +298,7 @@ COMMIT
 statement ok
 SET VARIABLE t_create_then_alter_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_create_then_alter')
 
-# two partition_info rows: the inline CREATE's spec (closed, begin = end) and the ALTER's (open)
+# two partition_info rows, the closed CREATE spec (begin = end) and the open ALTER spec
 query III
 SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), count(*) FILTER (WHERE begin_snapshot = end_snapshot)
 FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_create_then_alter_id')
@@ -340,7 +339,7 @@ SELECT DISTINCT regexp_extract(path, '.*(b=[0-9]+)[/\\].*', 1) FROM ducklake_met
 b=100
 b=200
 
-# none of the files should be under an a=N directory (regression guard: the open spec is the ALTER's)
+# none of the files should be under an a=N directory since the open spec is the ALTER's
 query I
 SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = getvariable('t_create_then_alter_id') AND regexp_matches(path, 'a=[0-9]+/')
 ----

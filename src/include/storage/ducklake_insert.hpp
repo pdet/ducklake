@@ -53,7 +53,7 @@ public:
 	DuckLakeInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, SchemaCatalogEntry &schema,
 	               unique_ptr<BoundCreateTableInfo> info, string table_uuid, string table_data_path,
 	               unique_ptr<DuckLakePartition> ctas_partition_data, unique_ptr<DuckLakeSort> ctas_sort_data,
-	               optional_idx partition_id, string encryption_key);
+	               string encryption_key);
 
 	//! The table to insert into (only set for INSERT INTO; nullptr for CTAS until GetGlobalSinkState resolves)
 	optional_ptr<DuckLakeTableEntry> table;

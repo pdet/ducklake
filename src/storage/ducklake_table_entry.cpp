@@ -488,7 +488,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::RENAMED);
 }
 
-string GetPartitionColumnName(const ColumnRefExpression &colref) {
+//! Column name of an unqualified column reference (partition keys and sort keys only accept those)
+static string GetUnqualifiedColumnName(const ColumnRefExpression &colref) {
 	if (colref.IsQualified()) {
 		throw InvalidInputException("Unexpected qualified column reference - only unqualified columns are supported");
 	}
@@ -500,29 +501,19 @@ void DuckLakeTableEntry::ValidateSortExpressionColumns(const ColumnList &columns
 	for (auto &order : orders) {
 		ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
 		    *order.expression, [&](const ColumnRefExpression &colref) {
-			    if (colref.IsQualified()) {
-				    throw InvalidInputException(
-				        "Unexpected qualified column reference - only unqualified columns are supported");
+			    auto column_name = GetUnqualifiedColumnName(colref);
+			    if (columns.ColumnExists(Identifier(column_name))) {
+				    return;
 			    }
-			    string column_name = colref.GetColumnName().GetIdentifierName();
-			    if (!columns.ColumnExists(Identifier(column_name))) {
-				    if (std::find(missing_columns.begin(), missing_columns.end(), column_name) ==
-				        missing_columns.end()) {
-					    missing_columns.push_back(column_name);
-				    }
+			    if (std::find(missing_columns.begin(), missing_columns.end(), column_name) == missing_columns.end()) {
+				    missing_columns.push_back(column_name);
 			    }
 		    });
 	}
 	if (!missing_columns.empty()) {
-		string error_string =
-		    "Columns in the SET SORTED BY statement were not found in the DuckLake table. Unmatched columns were: ";
-		for (idx_t i = 0; i < missing_columns.size(); i++) {
-			if (i > 0) {
-				error_string += ", ";
-			}
-			error_string += missing_columns[i];
-		}
-		throw BinderException(error_string);
+		throw BinderException("Columns in the SET SORTED BY statement were not found in the DuckLake table. "
+		                      "Unmatched columns were: %s",
+		                      StringUtil::Join(missing_columns, ", "));
 	}
 }
 
@@ -534,7 +525,7 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 	switch (expr.GetExpressionType()) {
 	case ExpressionType::COLUMN_REF: {
 		auto &colref = expr.Cast<ColumnRefExpression>();
-		column_name = GetPartitionColumnName(colref);
+		column_name = GetUnqualifiedColumnName(colref);
 		field.transform.type = DuckLakeTransformType::IDENTITY;
 		break;
 	}
@@ -570,7 +561,7 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 			}
 
 			field.transform.bucket_count = bucket_count;
-			column_name = GetPartitionColumnName(args[1].GetExpressionMutable()->Cast<ColumnRefExpression>());
+			column_name = GetUnqualifiedColumnName(args[1].GetExpressionMutable()->Cast<ColumnRefExpression>());
 			break;
 		}
 
@@ -606,7 +597,7 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 			throw NotImplementedException("Expected %s(column), but got %s", name, expr.ToString());
 		}
 
-		column_name = GetPartitionColumnName(args[0].GetExpressionMutable()->Cast<ColumnRefExpression>());
+		column_name = GetUnqualifiedColumnName(args[0].GetExpressionMutable()->Cast<ColumnRefExpression>());
 		break;
 	}
 	default:
