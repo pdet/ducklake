@@ -396,17 +396,29 @@ unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expressio
 	return std::move(result);
 }
 
-bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
+//! Resolve which child of the input struct a struct_extract reads, rejecting a position the type cannot hold
+static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return false;
 	}
 	auto &func = expr.Cast<BoundFunctionExpression>();
-	// stats are stored against a named field, so an unnamed struct (TUPLE) has nothing to resolve against
-	if (func.GetChildren().empty() || func.GetChildren()[0]->GetReturnType().id() != LogicalTypeId::STRUCT) {
+	if (func.GetChildren().empty()) {
 		return false;
 	}
+	// stats are stored against a named field, so an unnamed struct (TUPLE) has nothing to resolve against
+	auto &input_type = func.GetChildren()[0]->GetReturnType();
+	if (input_type.id() != LogicalTypeId::STRUCT) {
+		return false;
+	}
+	if (!TryGetStructExtractChildIndex(func, position)) {
+		return false;
+	}
+	return position < StructType::GetChildCount(input_type);
+}
+
+bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 	idx_t position;
-	return TryGetStructExtractChildIndex(func, position);
+	return TryResolveStructExtractChild(expr, position);
 }
 
 //! Walk to the sub-expressions a filter reads a column through, without descending into them
@@ -436,12 +448,11 @@ optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &
 
 const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, vector<string> &path) {
 	reference<const Expression> current = subject;
-	while (IsStructExtract(current.get())) {
+	idx_t position;
+	while (TryResolveStructExtractChild(current.get(), position)) {
 		auto &func = current.get().Cast<BoundFunctionExpression>();
 		auto &input_type = func.GetChildren()[0]->GetReturnType();
 		// the key is matched case-insensitively at bind time, so take the name from the struct type
-		idx_t position;
-		TryGetStructExtractChildIndex(func, position);
 		path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
 		current = *func.GetChildren()[0];
 	}
