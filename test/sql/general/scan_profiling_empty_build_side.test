@@ -32,10 +32,8 @@ statement ok
 SET threads=32;
 
 # Bound the scan read-ahead to avoid running into fd limit
-statement maybe
+statement ok
 SET read_ahead_depth=8;
-----
-unrecognized configuration parameter
 
 query I
 SELECT count(*) FROM ducklake.t
