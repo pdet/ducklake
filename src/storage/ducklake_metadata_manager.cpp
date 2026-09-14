@@ -1594,7 +1594,14 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			if (!result.empty()) {
 				result += conjunction_type == ExpressionType::CONJUNCTION_OR ? " OR " : " AND ";
 			}
-			result += "(" + child_str + ")";
+			// AND and OR are associative, so a same-type child can be spliced in rather than nested.
+			// DuckDB hands these to us as left-deep chains, and the parser recurses over the parens.
+			if (child->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+			    child->GetExpressionType() == conjunction_type) {
+				result += child_str;
+			} else {
+				result += "(" + child_str + ")";
+			}
 		}
 		return result;
 	}
@@ -1682,7 +1689,8 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	return condition;
 }
 
-string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result) {
+string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
+                                                            bool splice_into_parent) {
 	if (node.type == DuckLakeFilterNodeType::MATCH_NONE) {
 		return "1=0";
 	}
@@ -1692,7 +1700,7 @@ string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilter
 	const bool is_or = node.type == DuckLakeFilterNodeType::CONJUNCTION_OR;
 	string condition;
 	for (const auto &child : node.children) {
-		auto child_condition = GenerateFilterTreeCondition(*child, result);
+		auto child_condition = GenerateFilterTreeCondition(*child, result, child->type == node.type);
 		if (child_condition.empty()) {
 			// a branch we cannot express prunes nothing, so the whole disjunction prunes nothing
 			if (is_or) {
@@ -1708,7 +1716,7 @@ string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilter
 	if (condition.empty()) {
 		return string();
 	}
-	return "(" + condition + ")";
+	return splice_into_parent ? condition : "(" + condition + ")";
 }
 
 FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {

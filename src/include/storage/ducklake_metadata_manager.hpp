@@ -598,8 +598,10 @@ protected:
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	//! Emit the condition for a single-column filter, registering the stats its CTE must project
 	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
-	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves
-	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result);
+	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves.
+	//! A node under a parent of the same conjunction type is spliced in without parens of its own.
+	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
+	                                   bool splice_into_parent = false);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
