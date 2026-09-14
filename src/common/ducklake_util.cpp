@@ -180,6 +180,10 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return ToSQLString(metadata_manager, val);
 	}
 	case LogicalTypeId::STRUCT: {
+		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
+			// Stored as VARCHAR text - use ToString() which produces parseable format
+			return value.ToString();
+		}
 		auto &child_types = StructType::GetChildTypes(value.type());
 		auto &struct_values = StructValue::GetChildren(value);
 		if (struct_values.empty()) {
