@@ -1,4 +1,6 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -526,6 +528,30 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 		}
 		to.config.user_settings.SetUserSetting(setting_index, value);
 	}
+}
+
+bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &result) {
+	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		result = expr.Cast<ConstantExpression>().GetLiteral().ToValue();
+		return true;
+	}
+	if (expr.GetExpressionType() != ExpressionType::OPERATOR_CAST) {
+		return false;
+	}
+	auto &cast = expr.Cast<CastExpression>();
+	if (cast.IsTryCast() || cast.Child().GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		return false;
+	}
+	auto target_type = UnboundType::TryDefaultBind(cast.TargetType());
+	if (target_type.id() == LogicalTypeId::INVALID || target_type.id() == LogicalTypeId::UNBOUND) {
+		return false;
+	}
+	auto value = cast.Child().Cast<ConstantExpression>().GetLiteral().ToValue().DefaultTryCastAs(target_type);
+	if (!value) {
+		return false;
+	}
+	result = std::move(*value);
+	return true;
 }
 
 } // namespace duckdb
