@@ -102,9 +102,10 @@ DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &sch
                                        TableIndex table_id, string table_uuid_p, string data_path_p,
                                        shared_ptr<DuckLakeFieldData> field_data_p, optional_idx next_column_id_p,
                                        vector<DuckLakeInlinedTableInfo> inlined_data_tables_p, LocalChange local_change)
-    : TableCatalogEntry(catalog, schema, info), table_id(table_id), table_uuid(std::move(table_uuid_p)),
-      data_path(std::move(data_path_p)), field_data(std::move(field_data_p)), next_column_id(next_column_id_p),
-      inlined_data_tables(std::move(inlined_data_tables_p)), local_change(local_change) {
+    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), table_id(table_id),
+      table_uuid(std::move(table_uuid_p)), data_path(std::move(data_path_p)), field_data(std::move(field_data_p)),
+      next_column_id(next_column_id_p), inlined_data_tables(std::move(inlined_data_tables_p)),
+      local_change(local_change) {
 	CheckSupportedTypes();
 	for (auto &col : columns.Logical()) {
 		if (col.Generated()) {
@@ -128,6 +129,10 @@ DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &sch
 			throw NotImplementedException("Unsupported constraint in DuckLake");
 		}
 	}
+}
+
+const ColumnList &DuckLakeTableEntry::GetColumns() const {
+	return columns;
 }
 
 // ALTER TABLE RENAME/SET COMMENT/ADD COLUMN/DROP COLUMN
@@ -548,7 +553,7 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 			}
 
 			auto &bucket_expr = args[0].GetExpressionMutable()->Cast<ConstantExpression>();
-			auto bucket_value = bucket_expr.GetValue().DefaultTryCastAs(LogicalType::BIGINT);
+			auto bucket_value = bucket_expr.GetLiteral().ToValue().DefaultTryCastAs(LogicalType::BIGINT);
 			if (!bucket_value) {
 				throw InvalidInputException("Bucket count must be an integer");
 			}
@@ -822,9 +827,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		Value default_value;
 		if (info.new_column.HasDefaultValue()) {
 			auto &default_expr = info.new_column.DefaultValue();
-			if (default_expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
-				auto &constant_expr = default_expr.Cast<ConstantExpression>();
-				default_value = constant_expr.GetValue().DefaultCastAs(new_col.Type());
+			Value literal_value;
+			if (DuckLakeUtil::TryGetLiteralValue(default_expr, literal_value)) {
+				default_value = literal_value.DefaultCastAs(new_col.Type());
 			}
 		}
 
@@ -1131,9 +1136,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
 	info.initial_default = col_data.initial_default;
 	if (col_data.default_value) {
-		if (col_data.default_value->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
-			auto &constant_value = col_data.default_value->Cast<ConstantExpression>();
-			info.default_value = constant_value.GetValue();
+		Value literal_value;
+		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
+			info.default_value = std::move(literal_value);
 			info.default_value_type = "literal";
 		} else {
 			info.default_value = col_data.default_value->ToString();

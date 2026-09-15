@@ -511,9 +511,13 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
 			auto default_it = impl->default_parameters.find(Identifier(parameter.parameter_name));
 			if (default_it != impl->default_parameters.end()) {
-				auto &const_expr = default_it->second->Cast<ConstantExpression>();
-				parameter.default_value = const_expr.GetValue().ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(const_expr.GetValue().type());
+				Value default_value;
+				if (!DuckLakeUtil::TryGetLiteralValue(*default_it->second, default_value)) {
+					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
+					                              parameter.parameter_name);
+				}
+				parameter.default_value = default_value.ToString();
+				parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
 			} else {
 				parameter.default_value_type = "unknown";
 			}
