@@ -1594,7 +1594,14 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			if (!result.empty()) {
 				result += conjunction_type == ExpressionType::CONJUNCTION_OR ? " OR " : " AND ";
 			}
-			result += "(" + child_str + ")";
+			// AND and OR are associative, so a same-type child can be spliced in rather than nested.
+			// DuckDB hands these to us as left-deep chains, and the parser recurses over the parens.
+			if (child->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+			    child->GetExpressionType() == conjunction_type) {
+				result += child_str;
+			} else {
+				result += "(" + child_str + ")";
+			}
 		}
 		return result;
 	}
@@ -1628,53 +1635,114 @@ string DuckLakeMetadataManager::GenerateFilterPushdown(const ExpressionFilter &f
 	return GenerateFilterFromExpression(*filter.expr, nullptr, referenced_stats, stats_alias);
 }
 
+//! Register the stats a column CTE must project - a tree may reference the same column from several
+//! leaves, each asking for its own stats
+static void AddCTERequirement(map<idx_t, CTERequirement> &requirements, idx_t column_field_index,
+                              const unordered_set<string> &referenced_stats) {
+	auto entry = requirements.find(column_field_index);
+	if (entry == requirements.end()) {
+		requirements.emplace(column_field_index, CTERequirement(column_field_index, referenced_stats));
+		return;
+	}
+	entry->second.referenced_stats.insert(referenced_stats.begin(), referenced_stats.end());
+}
+
+string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter,
+                                                              FilterSQLResult &result) {
+	auto cte_name = StatsCteName(column_filter.column_field_index);
+
+	unordered_set<string> referenced_stats;
+	auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, cte_name);
+
+	if (filter_condition.empty()) {
+		return string();
+	}
+
+	string null_checks;
+	for (const auto &stat : referenced_stats) {
+		null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
+	}
+
+	// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
+	// min/max are absent - only a purely value-based filter may use the guard
+	const bool matches_null_rows = referenced_stats.count("null_count") > 0;
+	const bool needs_value_count_guard =
+	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
+	if (needs_value_count_guard) {
+		referenced_stats.insert("value_count");
+	}
+
+	string condition;
+	// Files that have no stats entry for this column (i.e., written before the column was added) join to
+	// NULL and must NOT be pruned, we cannot determine filter satisfaction without stats.
+	if (needs_value_count_guard) {
+		auto value_count = StatsColumn(cte_name, "value_count");
+		condition =
+		    StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s))))", cte_name.c_str(),
+		                       value_count.c_str(), value_count.c_str(), null_checks.c_str(), filter_condition.c_str());
+	} else {
+		condition = StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)))", cte_name.c_str(), null_checks.c_str(),
+		                               filter_condition.c_str());
+	}
+
+	AddCTERequirement(result.required_ctes, column_filter.column_field_index, referenced_stats);
+	return condition;
+}
+
+string DuckLakeMetadataManager::GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
+                                                            bool splice_into_parent) {
+	if (node.type == DuckLakeFilterNodeType::MATCH_NONE) {
+		return "1=0";
+	}
+	if (node.type == DuckLakeFilterNodeType::COLUMN_FILTER) {
+		return GenerateColumnFilterCondition(*node.column_filter, result);
+	}
+	const bool is_or = node.type == DuckLakeFilterNodeType::CONJUNCTION_OR;
+	string condition;
+	for (const auto &child : node.children) {
+		auto child_condition = GenerateFilterTreeCondition(*child, result, child->type == node.type);
+		if (child_condition.empty()) {
+			// a branch we cannot express prunes nothing, so the whole disjunction prunes nothing
+			if (is_or) {
+				return string();
+			}
+			continue;
+		}
+		if (!condition.empty()) {
+			condition += is_or ? " OR " : " AND ";
+		}
+		condition += child_condition;
+	}
+	if (condition.empty()) {
+		return string();
+	}
+	return splice_into_parent ? condition : "(" + condition + ")";
+}
+
 FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info) {
 	FilterSQLResult result;
 	string conditions;
 
 	for (const auto &entry : filter_info.column_filters) {
-		const auto &column_filter = entry.second;
-
-		auto cte_name = StatsCteName(column_filter.column_field_index);
-
-		unordered_set<string> referenced_stats;
-		auto filter_condition = GenerateFilterPushdown(*column_filter.table_filter, referenced_stats, cte_name);
-
-		if (filter_condition.empty()) {
+		auto condition = GenerateColumnFilterCondition(entry.second, result);
+		if (condition.empty()) {
 			continue;
 		}
-
-		string null_checks;
-		for (const auto &stat : referenced_stats) {
-			null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
-		}
-
-		// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
-		// min/max are absent - only a purely value-based filter may use the guard
-		const bool matches_null_rows = referenced_stats.count("null_count") > 0;
-		const bool needs_value_count_guard =
-		    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
-		if (needs_value_count_guard) {
-			referenced_stats.insert("value_count");
-		}
-
 		if (!conditions.empty()) {
 			conditions += "\n  AND ";
 		}
-		// Files that have no stats entry for this column (i.e., written before the column was added) join to
-		// NULL and must NOT be pruned, we cannot determine filter satisfaction without stats.
-		if (needs_value_count_guard) {
-			auto value_count = StatsColumn(cte_name, "value_count");
-			conditions += StringUtil::Format("(%s.data_file_id IS NULL OR ((%s IS NULL OR %s > 0) AND (%s(%s))))",
-			                                 cte_name.c_str(), value_count.c_str(), value_count.c_str(),
-			                                 null_checks.c_str(), filter_condition.c_str());
-		} else {
-			conditions += StringUtil::Format("(%s.data_file_id IS NULL OR (%s(%s)))", cte_name.c_str(),
-			                                 null_checks.c_str(), filter_condition.c_str());
-		}
+		conditions += condition;
+	}
 
-		result.required_ctes.emplace(column_filter.column_field_index,
-		                             CTERequirement(column_filter.column_field_index, referenced_stats));
+	for (const auto &tree : filter_info.filter_trees) {
+		auto condition = GenerateFilterTreeCondition(*tree.root, result);
+		if (condition.empty()) {
+			continue;
+		}
+		if (!conditions.empty()) {
+			conditions += " AND ";
+		}
+		conditions += condition;
 	}
 
 	result.where_conditions = conditions;
@@ -1920,7 +1988,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		};
 	}
 	FilterSQLResult filter_result;
-	if (filter_info && !filter_info->column_filters.empty()) {
+	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
 		if (table.GetPartitionData()) {
 			auto partition_value_table = metadata_table_prefix + ".ducklake_file_partition_value";
