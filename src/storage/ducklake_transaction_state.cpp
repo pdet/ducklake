@@ -511,9 +511,13 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
 			auto default_it = impl->default_parameters.find(Identifier(parameter.parameter_name));
 			if (default_it != impl->default_parameters.end()) {
-				auto &const_expr = default_it->second->Cast<ConstantExpression>();
-				parameter.default_value = const_expr.GetValue().ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(const_expr.GetValue().type());
+				Value default_value;
+				if (!DuckLakeUtil::TryGetLiteralValue(*default_it->second, default_value)) {
+					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
+					                              parameter.parameter_name);
+				}
+				parameter.default_value = default_value.ToString();
+				parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
 			} else {
 				parameter.default_value_type = "unknown";
 			}
@@ -1403,6 +1407,18 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			inlined_entry.uuid = latest_table.GetTableUUID();
 			inlined_entry.columns = latest_table.GetTableColumns();
 			result.new_inlined_data_tables.push_back(std::move(inlined_entry));
+
+			// CREATE TABLE ... PARTITIONED BY / SORTED BY
+			if (local_change.type == LocalChangeType::CREATED) {
+				if (table.GetPartitionData()) {
+					auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+					result.new_partition_keys.push_back(std::move(partition_key));
+				}
+				if (table.GetSortData()) {
+					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
+					result.new_sort_keys.push_back(std::move(sort_key));
+				}
+			}
 			break;
 		}
 		default:
@@ -1978,7 +1994,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.try_rollback();
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			bool retry_on_error =
-			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
+			    can_retry && (retryable_metadata_error || DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
