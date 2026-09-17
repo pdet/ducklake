@@ -768,7 +768,9 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	}
 	// generate an encryption key using the cryptographic RNG - RandomEngine is a non-cryptographic
 	// PRNG and must not be used for key material
-	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 16;
+	// 32 bytes = AES-256; generation only, existing keys are read back at whatever length they were
+	// written, so no migration is implied
+	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 32;
 	auto &db = DatabaseInstance::GetDatabase(context);
 	auto metadata =
 	    make_uniq<EncryptionStateMetadata>(EncryptionTypes::GCM, ENCRYPTION_KEY_SIZE, EncryptionTypes::V0_1);
