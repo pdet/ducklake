@@ -5,6 +5,9 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/common/encryption_state.hpp"
+#include "duckdb/common/encryption_types.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -763,13 +766,15 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 		// not encrypted
 		return string();
 	}
-	// generate an encryption key
-	auto &engine = RandomEngine::Get(context);
+	// generate an encryption key using the cryptographic RNG - RandomEngine is a non-cryptographic
+	// PRNG and must not be used for key material
 	static constexpr const idx_t ENCRYPTION_KEY_SIZE = 16;
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto metadata =
+	    make_uniq<EncryptionStateMetadata>(EncryptionTypes::GCM, ENCRYPTION_KEY_SIZE, EncryptionTypes::V0_1);
+	auto encryption_state = db.GetEncryptionUtil(false)->CreateEncryptionState(std::move(metadata));
 	data_t bytes[ENCRYPTION_KEY_SIZE];
-	for (idx_t i = 0; i < ENCRYPTION_KEY_SIZE; i += 4) {
-		*reinterpret_cast<uint32_t *>(bytes + i) = engine.NextRandomInteger();
-	}
+	encryption_state->GenerateRandomData(bytes, ENCRYPTION_KEY_SIZE);
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
