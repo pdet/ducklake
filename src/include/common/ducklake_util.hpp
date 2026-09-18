@@ -101,27 +101,19 @@ public:
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 
-	//! Whether the type is, or contains, a VARIANT
-	static bool ContainsVariant(const LogicalType &type);
-	//! The type an inlined column takes on backends without native VARIANT support: every VARIANT (at any nesting
-	//! level) is replaced by a BLOB holding the Parquet Variant binary encoding (metadata followed by value)
+	//! Replace VARIANT fields with BLOB storage
 	static LogicalType VariantToBlobType(const LogicalType &type);
-	//! SQL expression that turns a value of VariantToBlobType(type) (given by expr) back into the original type
+	//! Decode inlined blobs into their original VARIANT fields
 	static string DecodeInlinedVariantExpression(const string &expr, const LogicalType &type, idx_t depth = 0);
 };
 
-//! Rewrites the VARIANT columns of an inlined data chunk (including VARIANTs nested inside STRUCT/LIST/MAP columns)
-//! into the Parquet Variant binary encoding (the metadata blob immediately followed by the value blob) as BLOB
-//! columns, see DuckLakeUtil::VariantToBlobType. Used for metadata backends that cannot store VARIANT natively; the
-//! DuckDB backend keeps the VARIANT columns as-is. The read path decodes the blobs again with
-//! DuckLakeUtil::DecodeInlinedVariantExpression.
+//! Store VARIANT fields as Parquet metadata followed by value bytes when the catalog lacks native support
 class DuckLakeInlinedChunkEncoder {
 public:
 	DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
 	                            const vector<LogicalType> &types);
 	~DuckLakeInlinedChunkEncoder();
 
-	//! Returns the chunk whose rows should be formatted: the input itself when no column needs encoding
 	DataChunk &Encode(DataChunk &chunk);
 
 private:
@@ -129,16 +121,13 @@ private:
 	void EncodeVariant(Vector &input, idx_t count, Vector &result);
 
 private:
-	//! Indexes of the columns that contain a VARIANT and are encoded, in ascending order
 	vector<idx_t> encoded_columns;
-	//! variant_to_parquet_variant(#0) - referenced by the executor, so kept alive here
 	vector<unique_ptr<Expression>> expressions;
 	unique_ptr<ExpressionExecutor> executor;
-	//! Single VARIANT column fed to the executor
+	unique_ptr<ExpressionExecutor> concat_executor;
 	DataChunk variant_chunk;
-	//! STRUCT(metadata BLOB, value BLOB) produced by the executor
 	DataChunk parquet_variant_chunk;
-	//! The input chunk with every encoded column replaced by its VariantToBlobType
+	DataChunk concat_chunk;
 	DataChunk encoded_chunk;
 };
 

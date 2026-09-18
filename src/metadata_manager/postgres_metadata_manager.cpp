@@ -195,7 +195,6 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::BLOB:
 	// Postgres cannot store null bytes in VARCHAR/TEXT columns
 	case LogicalTypeId::VARCHAR:
-	// Variant is inlined as the Parquet Variant binary encoding (metadata followed by value) in a BYTEA column
 	case LogicalTypeId::VARIANT:
 	// If we knew that the Postgres installation has PostGIS installed, we could support GEOMETRY in the future.
 	case LogicalTypeId::GEOMETRY:

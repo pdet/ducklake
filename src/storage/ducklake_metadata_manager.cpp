@@ -1374,9 +1374,7 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	if (!TypeIsNativelySupported(LogicalType::VARIANT()) && DuckLakeUtil::ContainsVariant(type)) {
-		// VARIANTs are inlined as Parquet Variant blobs (see DuckLakeInlinedChunkEncoder) - decode them again.
-		// The projection is evaluated by DuckDB, so the parquet extension's decoder is available here.
+	if (!TypeIsNativelySupported(LogicalType::VARIANT()) && TypeVisitor::Contains(type, LogicalTypeId::VARIANT)) {
 		auto storage_type = DuckLakeUtil::VariantToBlobType(type);
 		auto cast = "CAST(" + column + " AS " + storage_type.ToString() + ")";
 		return DuckLakeUtil::DecodeInlinedVariantExpression(cast, type);
@@ -2912,7 +2910,7 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
-		// VARIANT counts as nested but is stored as a single binary column (see DuckLakeInlinedChunkEncoder)
+		// VARIANT uses scalar storage
 		if (!column_type.IsNested() || column_type.id() == LogicalTypeId::VARIANT) {
 			return GetColumnTypeInternal(column_type);
 		}

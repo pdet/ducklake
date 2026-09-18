@@ -51,7 +51,6 @@ SELECT s.v = 42 FROM ducklake.nested WHERE id = 1
 ----
 true
 
-# a list child larger than one vector, and many rows
 statement ok
 CREATE TABLE ducklake.big(id INTEGER, l VARIANT[]);
 
@@ -76,7 +75,6 @@ SELECT COUNT(*), SUM(l[1]::INTEGER), COUNT(*) FILTER (WHERE variant_typeof(l[2])
 ----
 2998	4498499	2998
 
-# update and delete rows holding nested variants
 statement ok
 UPDATE ducklake.nested SET s = {'v': 'updated', 'n': 8}, l = ['u'::VARIANT] WHERE id = 1
 
@@ -108,3 +106,48 @@ requires a transform
 query IIII nosort nested_state
 SELECT id, s, l, m FROM ducklake.nested ORDER BY id
 ----
+
+statement ok
+CREATE TABLE memory.edge_reference(s STRUCT("a'b" VARIANT, "sp ace" VARIANT[][]), m MAP(VARIANT, VARIANT), v VARIANT);
+
+statement ok
+INSERT INTO memory.edge_reference VALUES
+    ({'a''b': 1::TINYINT::VARIANT, 'sp ace': [[NULL::VARIANT, 1.5::FLOAT::VARIANT], NULL, ['two'::VARIANT], []]},
+     map([1::TINYINT::VARIANT, '1'::VARIANT], [NULL::VARIANT, 'hi'::VARIANT]),
+     {'numbers': [1::TINYINT, 2::TINYINT], 'text': 'a' || chr(0) || 'b', 'float': 1.5::FLOAT}),
+    (NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE ducklake.edges AS FROM memory.edge_reference;
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'edges')
+----
+0
+
+query IIIII rowsort edge_values
+SELECT s, m, v.float, v.numbers, v.text FROM memory.edge_reference
+----
+
+query IIIII rowsort edge_values
+SELECT s, m, v.float, v.numbers, v.text FROM ducklake.edges
+----
+
+query IIIII
+SELECT variant_typeof(s."a'b"), variant_typeof(s."sp ace"[1][2]), variant_typeof(map_keys(m)[1]), variant_typeof(v.numbers[1]), variant_typeof(v.float) FROM ducklake.edges WHERE s IS NOT NULL
+----
+INT8	FLOAT	INT8	INT8	FLOAT
+
+statement ok
+CREATE TABLE ducklake.null_lists AS
+SELECT list_transform(range(5000), lambda i: CASE WHEN i % 3 = 0 THEN NULL ELSE ('s' || i)::VARIANT END) AS l;
+
+query IIIIII
+SELECT len(l), l[1], l[2048], l[2049], l[4097], l[5000] FROM ducklake.null_lists
+----
+5000	NULL	s2047	s2048	s4096	s4999
+
+query I
+SELECT COUNT(*) FROM ducklake.null_lists, UNNEST(l) t(v) WHERE v IS NULL
+----
+1667

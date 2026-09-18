@@ -21,7 +21,6 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	// Variant is inlined as the Parquet Variant binary encoding (metadata followed by value) in a BLOB column
 	case LogicalTypeId::VARIANT:
 		return false;
 	default:
