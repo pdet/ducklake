@@ -22,6 +22,8 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -193,8 +195,9 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 			                        "inlined in this catalog type");
 		}
 		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
-		// variant can just be stored as a variant
-		return ToSQLString(metadata_manager, val);
+		// store the variant's value as a typed literal - the explicit cast keeps e.g. a VARIANT[] holding
+		// [1, 'x'] from being bound as an INT32 list
+		return "CAST(" + ToSQLString(metadata_manager, val) + " AS VARIANT)";
 	}
 	case LogicalTypeId::STRUCT: {
 		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
@@ -636,6 +639,85 @@ string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, Cl
 }
 
 //===--------------------------------------------------------------------===//
+// Inlined VARIANT encoding
+//===--------------------------------------------------------------------===//
+bool DuckLakeUtil::ContainsVariant(const LogicalType &type) {
+	return TypeVisitor::Contains(type, [](const LogicalType &t) { return t.id() == LogicalTypeId::VARIANT; });
+}
+
+LogicalType DuckLakeUtil::VariantToBlobType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT:
+		return LogicalType::BLOB;
+	case LogicalTypeId::STRUCT: {
+		child_list_t<LogicalType> children;
+		for (auto &child : StructType::GetChildTypes(type)) {
+			children.emplace_back(child.first, VariantToBlobType(child.second));
+		}
+		return LogicalType::STRUCT(std::move(children));
+	}
+	case LogicalTypeId::LIST:
+		return LogicalType::LIST(VariantToBlobType(ListType::GetChildType(type)));
+	case LogicalTypeId::MAP:
+		return LogicalType::MAP(VariantToBlobType(MapType::KeyType(type)), VariantToBlobType(MapType::ValueType(type)));
+	default:
+		if (ContainsVariant(type)) {
+			throw NotImplementedException("Cannot inline a VARIANT nested inside a %s column in this catalog type",
+			                              type.ToString());
+		}
+		return type;
+	}
+}
+
+string DuckLakeUtil::DecodeInlinedVariantExpression(const string &expr, const LogicalType &type, idx_t depth) {
+	if (!ContainsVariant(type)) {
+		return expr;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT:
+		return "variant_bytes_to_variant(" + expr + ")";
+	case LogicalTypeId::STRUCT: {
+		// rebuild the struct with the VARIANT fields decoded; a NULL struct has to stay NULL
+		auto &children = StructType::GetChildTypes(type);
+		bool unnamed = StructType::IsUnnamed(type);
+		string fields;
+		for (idx_t i = 0; i < children.size(); i++) {
+			if (i > 0) {
+				fields += ", ";
+			}
+			auto &child = children[i];
+			string child_expr = unnamed ? StringUtil::Format("struct_extract(%s, %d)", expr, i + 1)
+			                            : StringUtil::Format("struct_extract(%s, %s)", expr,
+			                                                 SQLLiteralToString(child.first.GetIdentifierName()));
+			child_expr = DecodeInlinedVariantExpression(child_expr, child.second, depth);
+			if (unnamed) {
+				fields += child_expr;
+			} else {
+				fields += SQLLiteralToString(child.first.GetIdentifierName()) + ": " + child_expr;
+			}
+		}
+		string rebuilt = unnamed ? "row(" + fields + ")" : "{" + fields + "}";
+		return StringUtil::Format("CASE WHEN (%s) IS NULL THEN NULL ELSE %s END", expr, rebuilt);
+	}
+	case LogicalTypeId::LIST: {
+		auto element = StringUtil::Format("__ducklake_variant_%d", depth);
+		auto element_expr = DecodeInlinedVariantExpression(element, ListType::GetChildType(type), depth + 1);
+		return StringUtil::Format("list_transform(%s, lambda %s: %s)", expr, element, element_expr);
+	}
+	case LogicalTypeId::MAP: {
+		auto keys =
+		    DecodeInlinedVariantExpression("map_keys(" + expr + ")", LogicalType::LIST(MapType::KeyType(type)), depth);
+		auto values = DecodeInlinedVariantExpression("map_values(" + expr + ")",
+		                                             LogicalType::LIST(MapType::ValueType(type)), depth);
+		return StringUtil::Format("CASE WHEN (%s) IS NULL THEN NULL ELSE map(%s, %s) END", expr, keys, values);
+	}
+	default:
+		throw NotImplementedException("Cannot read an inlined VARIANT nested inside a %s column in this catalog type",
+		                              type.ToString());
+	}
+}
+
+//===--------------------------------------------------------------------===//
 // DuckLakeInlinedChunkEncoder
 //===--------------------------------------------------------------------===//
 static ScalarFunctionCatalogEntry &GetFunctionEntry(ClientContext &context, const string &name) {
@@ -658,32 +740,32 @@ DuckLakeInlinedChunkEncoder::DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager
 		return;
 	}
 	vector<LogicalType> encoded_types;
-	vector<LogicalType> parquet_variant_types;
 	for (idx_t c = 0; c < types.size(); c++) {
-		if (types[c].id() != LogicalTypeId::VARIANT) {
+		if (!DuckLakeUtil::ContainsVariant(types[c])) {
 			encoded_types.push_back(types[c]);
 			continue;
 		}
-		// bind variant_to_parquet_variant(col) - provided by the parquet extension. This runs at commit time,
-		// outside of a client transaction, so look the function up through the system catalog directly.
-		auto &function_entry = GetFunctionEntry(context, "variant_to_parquet_variant");
-		vector<unique_ptr<Expression>> children;
-		children.push_back(make_uniq<BoundReferenceExpression>(types[c], c));
-		ErrorData error;
-		FunctionBinder binder(context);
-		auto function = binder.BindScalarFunction(function_entry, std::move(children), error, false);
-		if (!function) {
-			error.Throw();
-		}
-		parquet_variant_types.push_back(function->GetReturnType());
-		expressions.push_back(std::move(function));
-		variant_columns.push_back(c);
-		encoded_types.push_back(LogicalType::BLOB);
+		encoded_columns.push_back(c);
+		encoded_types.push_back(DuckLakeUtil::VariantToBlobType(types[c]));
 	}
-	if (variant_columns.empty()) {
+	if (encoded_columns.empty()) {
 		return;
 	}
+	// bind variant_to_parquet_variant(#0) - provided by the parquet extension. This runs at commit time, outside of
+	// a client transaction, so look the function up through the system catalog directly.
+	auto &function_entry = GetFunctionEntry(context, "variant_to_parquet_variant");
+	vector<unique_ptr<Expression>> children;
+	children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::VARIANT(), 0));
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function = binder.BindScalarFunction(function_entry, std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	vector<LogicalType> parquet_variant_types {function->GetReturnType()};
+	expressions.push_back(std::move(function));
 	executor = make_uniq<ExpressionExecutor>(context, expressions);
+	variant_chunk.InitializeEmpty({LogicalType::VARIANT()});
 	parquet_variant_chunk.Initialize(context, parquet_variant_types);
 	encoded_chunk.Initialize(context, encoded_types);
 }
@@ -691,8 +773,10 @@ DuckLakeInlinedChunkEncoder::DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager
 DuckLakeInlinedChunkEncoder::~DuckLakeInlinedChunkEncoder() {
 }
 
-//! Concatenate the metadata and value blobs of each row into a single BLOB; rows that are NULL stay NULL
-static void ConcatenateParquetVariant(Vector &input, Vector &parquet_variant, Vector &result, idx_t count) {
+//! Concatenate the metadata and value blobs of each row into a single BLOB at result[result_offset + row]; rows that
+//! are NULL stay NULL
+static void ConcatenateParquetVariant(Vector &input, Vector &parquet_variant, idx_t count, Vector &result,
+                                      idx_t result_offset) {
 	UnifiedVectorFormat input_format;
 	input.ToUnifiedFormat(input_format);
 
@@ -707,16 +791,16 @@ static void ConcatenateParquetVariant(Vector &input, Vector &parquet_variant, Ve
 	auto metadata_data = UnifiedVectorFormat::GetData<string_t>(metadata_format);
 	auto value_data = UnifiedVectorFormat::GetData<string_t>(value_format);
 
-	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 	auto &result_validity = FlatVector::ValidityMutable(result);
 	for (idx_t row = 0; row < count; row++) {
+		auto result_idx = result_offset + row;
 		auto input_idx = input_format.sel->get_index(row);
 		auto metadata_idx = metadata_format.sel->get_index(row);
 		auto value_idx = value_format.sel->get_index(row);
 		if (!input_format.validity.RowIsValid(input_idx) || !struct_validity.RowIsValid(row) ||
 		    !metadata_format.validity.RowIsValid(metadata_idx) || !value_format.validity.RowIsValid(value_idx)) {
-			result_validity.SetInvalid(row);
+			result_validity.SetInvalid(result_idx);
 			continue;
 		}
 		auto &metadata = metadata_data[metadata_idx];
@@ -726,7 +810,63 @@ static void ConcatenateParquetVariant(Vector &input, Vector &parquet_variant, Ve
 		memcpy(target_data, metadata.GetData(), metadata.GetSize());
 		memcpy(target_data + metadata.GetSize(), value.GetData(), value.GetSize());
 		target.Finalize();
-		result_data[row] = target;
+		result_data[result_idx] = target;
+	}
+}
+
+void DuckLakeInlinedChunkEncoder::EncodeVariant(Vector &input, idx_t count, Vector &result) {
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	// nested VARIANT vectors (list children) can hold more rows than the executor handles at once - slice them
+	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
+		auto batch = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - offset);
+		Vector batch_input(input.GetType());
+		batch_input.Slice(input, offset, offset + batch);
+		variant_chunk.Reset();
+		variant_chunk.data[0].Reference(batch_input);
+		variant_chunk.SetChildCardinality(batch);
+		parquet_variant_chunk.Reset();
+		executor->Execute(variant_chunk, parquet_variant_chunk);
+		ConcatenateParquetVariant(batch_input, parquet_variant_chunk.data[0], batch, result, offset);
+	}
+}
+
+void DuckLakeInlinedChunkEncoder::EncodeVector(Vector &input, idx_t count, Vector &result) {
+	auto &type = input.GetType();
+	if (type.id() == LogicalTypeId::VARIANT) {
+		EncodeVariant(input, count, result);
+		return;
+	}
+	if (!DuckLakeUtil::ContainsVariant(type)) {
+		result.Reference(input);
+		return;
+	}
+	input.Flatten();
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	FlatVector::SetValidity(result, FlatVector::Validity(input));
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		auto &input_entries = StructVector::GetEntries(input);
+		auto &result_entries = StructVector::GetEntries(result);
+		D_ASSERT(input_entries.size() == result_entries.size());
+		for (idx_t i = 0; i < input_entries.size(); i++) {
+			EncodeVector(input_entries[i], count, result_entries[i]);
+		}
+		break;
+	}
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP: {
+		// a MAP is physically a LIST of STRUCT(key, value)
+		auto input_entries = FlatVector::GetData<list_entry_t>(input);
+		auto result_entries = FlatVector::GetDataMutable<list_entry_t>(result);
+		memcpy(result_entries, input_entries, count * sizeof(list_entry_t));
+		auto list_size = ListVector::GetListSize(input);
+		ListVector::Reserve(result, list_size);
+		EncodeVector(ListVector::GetChildMutable(input), list_size, ListVector::GetChildMutable(result));
+		ListVector::SetListSize(result, list_size);
+		break;
+	}
+	default:
+		throw InternalException("DuckLakeInlinedChunkEncoder: unsupported nested type %s", type.ToString());
 	}
 }
 
@@ -735,16 +875,12 @@ DataChunk &DuckLakeInlinedChunkEncoder::Encode(DataChunk &chunk) {
 		return chunk;
 	}
 	auto count = chunk.size();
-	parquet_variant_chunk.Reset();
-	executor->Execute(chunk, parquet_variant_chunk);
-
 	encoded_chunk.Reset();
-	idx_t variant_idx = 0;
+	idx_t encoded_idx = 0;
 	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-		if (variant_idx < variant_columns.size() && variant_columns[variant_idx] == c) {
-			ConcatenateParquetVariant(chunk.data[c], parquet_variant_chunk.data[variant_idx], encoded_chunk.data[c],
-			                          count);
-			variant_idx++;
+		if (encoded_idx < encoded_columns.size() && encoded_columns[encoded_idx] == c) {
+			EncodeVector(chunk.data[c], count, encoded_chunk.data[c]);
+			encoded_idx++;
 		} else {
 			encoded_chunk.data[c].Reference(chunk.data[c]);
 		}

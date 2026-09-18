@@ -1374,10 +1374,12 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	if (type.id() == LogicalTypeId::VARIANT && !TypeIsNativelySupported(type)) {
-		// inlined as the Parquet Variant binary encoding (see DuckLakeInlinedChunkEncoder) - decode it again.
+	if (!TypeIsNativelySupported(LogicalType::VARIANT()) && DuckLakeUtil::ContainsVariant(type)) {
+		// VARIANTs are inlined as Parquet Variant blobs (see DuckLakeInlinedChunkEncoder) - decode them again.
 		// The projection is evaluated by DuckDB, so the parquet extension's decoder is available here.
-		return "variant_bytes_to_variant(CAST(" + column + " AS BLOB))";
+		auto storage_type = DuckLakeUtil::VariantToBlobType(type);
+		auto cast = "CAST(" + column + " AS " + storage_type.ToString() + ")";
+		return DuckLakeUtil::DecodeInlinedVariantExpression(cast, type);
 	}
 	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
 	return "CAST(" + column + " AS " + type.ToString() + ")";
