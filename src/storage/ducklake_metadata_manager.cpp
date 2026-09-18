@@ -100,6 +100,11 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	if (type.id() == LogicalTypeId::GEOMETRY) {
 		return false;
 	}
+	if (type.id() == LogicalTypeId::VARIANT && !TypeIsNativelySupported(type) &&
+	    !transaction.GetCatalog().SupportsV1_1Metadata()) {
+		// storing VARIANT as Parquet Variant blobs in the metadata catalog is a DuckLake 1.1 feature
+		return false;
+	}
 	return true;
 }
 
@@ -1372,10 +1377,6 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
 	}
 	return stats;
-}
-
-string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	return "CAST(" + column + " AS " + DuckLakeUtil::GetInlinedStorageType(*this, type).ToString() + ")";
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,

@@ -85,7 +85,17 @@ static bool CastVariant(Vector &source, Vector &result, idx_t count, CastParamet
 	// List children can exceed the executor batch size
 	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
 		auto batch = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - offset);
-		state.input.data[0].Slice(source, offset, offset + batch);
+		Vector blobs_from_text(LogicalType::BLOB, count_t(batch));
+		if (!state.encode && source.GetType().id() == LogicalTypeId::VARCHAR) {
+			// A VARIANT nested inside a STRUCT/LIST/MAP is stored as escaped blob text inside the parent's text
+			// representation; parse the escapes before decoding the bytes
+			Vector text(source.GetType());
+			text.Slice(source, offset, offset + batch);
+			VectorOperations::DefaultCast(text, blobs_from_text, batch, true);
+			state.input.data[0].Reference(blobs_from_text);
+		} else {
+			state.input.data[0].Slice(source, offset, offset + batch);
+		}
 		state.input.SetChildCardinality(batch);
 		state.output.Reset();
 		state.executor.Execute(state.input, state.output);
@@ -120,6 +130,9 @@ DuckLakeInlinedDataConverter::DuckLakeInlinedDataConverter(ClientContext &contex
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<true>));
 	functions.RegisterCastFunction(LogicalType::BLOB, LogicalType::VARIANT(),
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
+	functions.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::VARIANT(),
+	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
+	// Postgres stores VARCHAR columns as BYTEA (they may hold null bytes) - read them back as-is
 	functions.RegisterCastFunction(LogicalType::BLOB, LogicalType::VARCHAR, DefaultCasts::ReinterpretCast);
 	GetCastFunctionInput input(context);
 	for (idx_t i = 0; i < source_types.size(); i++) {

@@ -1,0 +1,32 @@
+# name: test/sql/data_inlining/variant_inlining_version_gate.test
+# description: VARIANT is only inlined as Parquet Variant blobs on DuckLake 1.1 catalogs; the DuckDB catalog stores VARIANT natively on every version
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_variant_gate', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, v VARIANT);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 42::TINYINT);
+
+query III
+SELECT id, v, variant_typeof(v) FROM ducklake.t
+----
+1	42	INT8
+
+# a 1.0 catalog without native VARIANT support writes the rows to parquet instead of inlining them
+# (inlining on 1.1 catalogs is covered by data_inlining_variant.test)
+query I
+SELECT (SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')) = (catalog_type <> 'duckdb')::INTEGER FROM ducklake_settings('ducklake')
+----
+true
