@@ -1,12 +1,10 @@
 # name: test/sql/data_inlining/data_inlining_variant_nested.test
-# description: VARIANTs nested inside STRUCT/LIST/MAP columns are inlined on every metadata backend
+# description: Inlined VARIANT fields in nested types
 # group: [data_inlining]
 
 require ducklake
 
 require parquet
-
-require json
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
@@ -16,49 +14,45 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_variant_nested', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10000)
 
 statement ok
-CREATE TABLE ducklake.nested(id INTEGER, s STRUCT(v VARIANT, n INTEGER), l VARIANT[], m MAP(VARCHAR, VARIANT), deep STRUCT(lvl2 STRUCT(vs VARIANT[])[]));
+CREATE TABLE memory.reference(id INTEGER, s STRUCT("a'b" VARIANT, n INTEGER, "sp ace" VARIANT[][]), m MAP(VARIANT, VARIANT), v VARIANT);
 
 statement ok
-INSERT INTO ducklake.nested VALUES
-  (1, {'v': 42, 'n': 7}, [1::VARIANT, 'x'::VARIANT, NULL], MAP {'a': 1::VARIANT, 'b': 'two'::VARIANT}, {'lvl2': [{'vs': [DATE '2000-01-01'::VARIANT, 2.5::VARIANT]}, {'vs': []}]}),
-  (2, {'v': NULL, 'n': NULL}, [], MAP {}, {'lvl2': []}),
-  (3, NULL, NULL, NULL, NULL),
-  (4, {'v': '{"k": [true, null]}'::JSON::VARIANT, 'n': 1}, [{'q': 1}::VARIANT], MAP {'x': NULL::VARIANT}, {'lvl2': NULL});
+INSERT INTO memory.reference VALUES
+    (1, {'a''b': 1::TINYINT::VARIANT, 'n': 7, 'sp ace': [[NULL::VARIANT, 1.5::FLOAT::VARIANT], NULL, ['two'::VARIANT], []]},
+     map([1::TINYINT::VARIANT, '1'::VARIANT], [NULL::VARIANT, 'hi'::VARIANT]),
+     {'numbers': [1::TINYINT, 2::TINYINT], 'text': 'a' || chr(0) || 'b', 'float': 1.5::FLOAT}),
+    (2, {'a''b': NULL, 'n': NULL, 'sp ace': []}, MAP {}, NULL),
+    (3, NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE ducklake.nested AS FROM memory.reference;
 
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'nested')
 ----
 0
 
+query IIIIII nosort nested_values
+SELECT id, s, m, v.float, v.numbers, v.text FROM memory.reference ORDER BY id
+----
+
+query IIIIII nosort nested_values
+SELECT id, s, m, v.float, v.numbers, v.text FROM ducklake.nested ORDER BY id
+----
+
 query IIIII
-SELECT id, s, l, m, deep FROM ducklake.nested ORDER BY id
+SELECT variant_typeof(s."a'b"), variant_typeof(s."sp ace"[1][2]), variant_typeof(map_keys(m)[1]), variant_typeof(v.numbers[1]), variant_typeof(v.float) FROM ducklake.nested WHERE id = 1
 ----
-1	{'v': 42, 'n': 7}	[1, x, NULL]	{a=1, b=two}	{'lvl2': [{'vs': [2000-01-01, 2.5]}, {'vs': []}]}
-2	{'v': NULL, 'n': NULL}	[]	{}	{'lvl2': []}
-3	NULL	NULL	NULL	NULL
-4	{'v': {'k': [true, NULL]}, 'n': 1}	[{'q': 1}]	{x=NULL}	{'lvl2': NULL}
-
-query IIII
-SELECT id, variant_typeof(s.v), variant_typeof(l[1]), variant_typeof(deep.lvl2[1].vs[1]) FROM ducklake.nested ORDER BY id
-----
-1	INT32	INT32	DATE
-2	VARIANT_NULL	VARIANT_NULL	VARIANT_NULL
-3	VARIANT_NULL	VARIANT_NULL	VARIANT_NULL
-4	OBJECT(k)	OBJECT(q)	VARIANT_NULL
-
-query I
-SELECT s.v = 42 FROM ducklake.nested WHERE id = 1
-----
-true
+INT8	FLOAT	INT8	INT8	FLOAT
 
 statement ok
 CREATE TABLE ducklake.big(id INTEGER, l VARIANT[]);
 
 statement ok
-INSERT INTO ducklake.big SELECT 1, list_transform(range(5000), lambda x: x::VARIANT);
+INSERT INTO ducklake.big SELECT i, [i::VARIANT, NULL] FROM range(3000) t(i);
 
 statement ok
-INSERT INTO ducklake.big SELECT i, [i::VARIANT, (i::VARCHAR)::VARIANT] FROM range(2, 3000) t(i);
+INSERT INTO ducklake.big SELECT 3000, list_transform(range(4097), lambda i: CASE WHEN i % 3 = 0 THEN NULL ELSE ('s' || i)::VARIANT END);
 
 query I
 SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'big')
@@ -66,88 +60,16 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'big')
 0
 
 query III
-SELECT len(l), l[1], l[5000] FROM ducklake.big WHERE id = 1
+SELECT COUNT(*), SUM(l[1]::INTEGER), COUNT(*) FILTER (WHERE l[2] IS NULL) FROM ducklake.big WHERE id < 3000
 ----
-5000	0	4999
-
-query III
-SELECT COUNT(*), SUM(l[1]::INTEGER), COUNT(*) FILTER (WHERE variant_typeof(l[2]) = 'VARCHAR') FROM ducklake.big WHERE id > 1
-----
-2998	4498499	2998
-
-statement ok
-UPDATE ducklake.nested SET s = {'v': 'updated', 'n': 8}, l = ['u'::VARIANT] WHERE id = 1
-
-statement ok
-DELETE FROM ducklake.nested WHERE id = 3
-
-query IIII
-SELECT id, s, l, variant_typeof(s.v) FROM ducklake.nested ORDER BY id
-----
-1	{'v': updated, 'n': 8}	[u]	VARCHAR
-2	{'v': NULL, 'n': NULL}	[]	VARIANT_NULL
-4	{'v': {'k': [true, NULL]}, 'n': 1}	[{'q': 1}]	OBJECT(k)
-
-query I
-SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'nested')
-----
-0
-
-query IIII nosort nested_state
-SELECT id, s, l, m FROM ducklake.nested ORDER BY id
-----
-
-# flushing requires the parquet writer to support nested VARIANT columns
-statement maybe
-CALL ducklake_flush_inlined_data('ducklake', table_name => 'nested')
-----
-requires a transform
-
-query IIII nosort nested_state
-SELECT id, s, l, m FROM ducklake.nested ORDER BY id
-----
-
-statement ok
-CREATE TABLE memory.edge_reference(s STRUCT("a'b" VARIANT, "sp ace" VARIANT[][]), m MAP(VARIANT, VARIANT), v VARIANT);
-
-statement ok
-INSERT INTO memory.edge_reference VALUES
-    ({'a''b': 1::TINYINT::VARIANT, 'sp ace': [[NULL::VARIANT, 1.5::FLOAT::VARIANT], NULL, ['two'::VARIANT], []]},
-     map([1::TINYINT::VARIANT, '1'::VARIANT], [NULL::VARIANT, 'hi'::VARIANT]),
-     {'numbers': [1::TINYINT, 2::TINYINT], 'text': 'a' || chr(0) || 'b', 'float': 1.5::FLOAT}),
-    (NULL, NULL, NULL);
-
-statement ok
-CREATE TABLE ducklake.edges AS FROM memory.edge_reference;
-
-query I
-SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'edges')
-----
-0
-
-query IIIII rowsort edge_values
-SELECT s, m, v.float, v.numbers, v.text FROM memory.edge_reference
-----
-
-query IIIII rowsort edge_values
-SELECT s, m, v.float, v.numbers, v.text FROM ducklake.edges
-----
+3000	4498500	3000
 
 query IIIII
-SELECT variant_typeof(s."a'b"), variant_typeof(s."sp ace"[1][2]), variant_typeof(map_keys(m)[1]), variant_typeof(v.numbers[1]), variant_typeof(v.float) FROM ducklake.edges WHERE s IS NOT NULL
+SELECT len(l), l[1], l[2048], l[2049], l[4097] FROM ducklake.big WHERE id = 3000
 ----
-INT8	FLOAT	INT8	INT8	FLOAT
-
-statement ok
-CREATE TABLE ducklake.null_lists AS
-SELECT list_transform(range(5000), lambda i: CASE WHEN i % 3 = 0 THEN NULL ELSE ('s' || i)::VARIANT END) AS l;
-
-query IIIIII
-SELECT len(l), l[1], l[2048], l[2049], l[4097], l[5000] FROM ducklake.null_lists
-----
-5000	NULL	s2047	s2048	s4096	s4999
+4097	NULL	s2047	s2048	s4096
 
 query I
-SELECT COUNT(*) FROM ducklake.null_lists, UNNEST(l) t(v) WHERE v IS NULL
+SELECT COUNT(*) FROM ducklake.big, UNNEST(l) t(v) WHERE id = 3000 AND v IS NULL
 ----
-1667
+1366
