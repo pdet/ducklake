@@ -4,6 +4,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "common/ducklake_util.hpp"
+#include "common/ducklake_inlined_data_converter.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -1374,13 +1375,7 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	if (!TypeIsNativelySupported(LogicalType::VARIANT()) && TypeVisitor::Contains(type, LogicalTypeId::VARIANT)) {
-		auto storage_type = DuckLakeUtil::VariantToBlobType(type);
-		auto cast = "CAST(" + column + " AS " + storage_type.ToString() + ")";
-		return DuckLakeUtil::DecodeInlinedVariantExpression(cast, type);
-	}
-	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
-	return "CAST(" + column + " AS " + type.ToString() + ")";
+	return "CAST(" + column + " AS " + DuckLakeUtil::GetInlinedStorageType(*this, type).ToString() + ")";
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
@@ -3260,9 +3255,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		vector<string> cells_per_row;
-		DuckLakeInlinedChunkEncoder encoder(*this, context, entry.data->data->Types());
+		auto &types = entry.data->data->Types();
+		DuckLakeInlinedDataConverter encoder(context, types, DuckLakeUtil::GetInlinedStorageTypes(*this, types));
 		for (auto &chunk : entry.data->data->Chunks()) {
-			auto &encoded_chunk = encoder.Encode(chunk);
+			auto &encoded_chunk = encoder.Convert(chunk);
 			for (idx_t r = 0; r < encoded_chunk.size(); r++) {
 				cells_per_row.push_back(DuckLakeUtil::ChunkRowToSQL(*this, context, encoded_chunk, r));
 			}
@@ -3570,18 +3566,15 @@ void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, con
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
-                                                                              const vector<LogicalType> &,
+                                                                              const vector<LogicalType> &expected_types,
                                                                               const string &inlined_table_name) {
 	CheckInlinedDataReadError(result, inlined_table_name);
 
 	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());
-	while (true) {
-		auto chunk = result.Fetch();
-		if (!chunk) {
-			break;
-		}
-		data->Append(*chunk);
+	DuckLakeInlinedDataConverter decoder(*context, result.GetTypes(), expected_types);
+	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
+	while (auto chunk = result.Fetch()) {
+		data->Append(decoder.Convert(*chunk));
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);

@@ -16,11 +16,10 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
-#include "duckdb/common/types/data_chunk.hpp"
 
 namespace duckdb {
 class ClientContext;
-class ExpressionExecutor;
+class DataChunk;
 class ColumnList;
 class DuckLakeCatalog;
 class DuckLakeMetadataManager;
@@ -101,34 +100,9 @@ public:
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 
-	//! Replace VARIANT fields with BLOB storage
-	static LogicalType VariantToBlobType(const LogicalType &type);
-	//! Decode inlined blobs into their original VARIANT fields
-	static string DecodeInlinedVariantExpression(const string &expr, const LogicalType &type, idx_t depth = 0);
-};
-
-//! Store VARIANT fields as Parquet metadata followed by value bytes when the catalog lacks native support
-class DuckLakeInlinedChunkEncoder {
-public:
-	DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
-	                            const vector<LogicalType> &types);
-	~DuckLakeInlinedChunkEncoder();
-
-	DataChunk &Encode(DataChunk &chunk);
-
-private:
-	void EncodeVector(Vector &input, idx_t count, Vector &result);
-	void EncodeVariant(Vector &input, idx_t count, Vector &result);
-
-private:
-	vector<idx_t> encoded_columns;
-	vector<unique_ptr<Expression>> expressions;
-	unique_ptr<ExpressionExecutor> executor;
-	unique_ptr<ExpressionExecutor> concat_executor;
-	DataChunk variant_chunk;
-	DataChunk parquet_variant_chunk;
-	DataChunk concat_chunk;
-	DataChunk encoded_chunk;
+	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);
+	static vector<LogicalType> GetInlinedStorageTypes(DuckLakeMetadataManager &metadata_manager,
+	                                                  const vector<LogicalType> &types);
 };
 
 } // namespace duckdb

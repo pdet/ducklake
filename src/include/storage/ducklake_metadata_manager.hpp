@@ -460,9 +460,8 @@ public:
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
-	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                             const vector<LogicalType> &expected_types,
-	                                                             const string &inlined_table_name);
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
+	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! We delete at the flush

@@ -18,19 +18,8 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
-#include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
-#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/type_visitor.hpp"
-#include "duckdb/function/function_binder.hpp"
-#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_transaction.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
-#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -633,202 +622,22 @@ string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, Cl
 	return result;
 }
 
-LogicalType DuckLakeUtil::VariantToBlobType(const LogicalType &type) {
+LogicalType DuckLakeUtil::GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type) {
+	if (metadata_manager.TypeIsNativelySupported(LogicalType::VARIANT())) {
+		return type;
+	}
 	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
 		return child.id() == LogicalTypeId::VARIANT ? LogicalType::BLOB : child;
 	});
 }
 
-string DuckLakeUtil::DecodeInlinedVariantExpression(const string &expr, const LogicalType &type, idx_t depth) {
-	if (!TypeVisitor::Contains(type, LogicalTypeId::VARIANT)) {
-		return expr;
+vector<LogicalType> DuckLakeUtil::GetInlinedStorageTypes(DuckLakeMetadataManager &metadata_manager,
+                                                         const vector<LogicalType> &types) {
+	vector<LogicalType> result;
+	for (auto &type : types) {
+		result.push_back(GetInlinedStorageType(metadata_manager, type));
 	}
-	switch (type.id()) {
-	case LogicalTypeId::VARIANT:
-		return "variant_bytes_to_variant(" + expr + ")";
-	case LogicalTypeId::STRUCT: {
-		auto &children = StructType::GetChildTypes(type);
-		bool unnamed = StructType::IsUnnamed(type);
-		string fields;
-		for (idx_t i = 0; i < children.size(); i++) {
-			if (i > 0) {
-				fields += ", ";
-			}
-			auto &child = children[i];
-			string child_expr = unnamed ? StringUtil::Format("struct_extract(%s, %d)", expr, i + 1)
-			                            : StringUtil::Format("struct_extract(%s, %s)", expr,
-			                                                 SQLLiteralToString(child.first.GetIdentifierName()));
-			child_expr = DecodeInlinedVariantExpression(child_expr, child.second, depth);
-			if (unnamed) {
-				fields += child_expr;
-			} else {
-				fields += SQLLiteralToString(child.first.GetIdentifierName()) + ": " + child_expr;
-			}
-		}
-		string rebuilt = unnamed ? "row(" + fields + ")" : "{" + fields + "}";
-		return StringUtil::Format("CASE WHEN (%s) IS NULL THEN NULL ELSE %s END", expr, rebuilt);
-	}
-	case LogicalTypeId::LIST: {
-		auto element = StringUtil::Format("__ducklake_variant_%d", depth);
-		auto element_expr = DecodeInlinedVariantExpression(element, ListType::GetChildType(type), depth + 1);
-		return StringUtil::Format("list_transform(%s, lambda %s: %s)", expr, element, element_expr);
-	}
-	case LogicalTypeId::MAP: {
-		auto keys =
-		    DecodeInlinedVariantExpression("map_keys(" + expr + ")", LogicalType::LIST(MapType::KeyType(type)), depth);
-		auto values = DecodeInlinedVariantExpression("map_values(" + expr + ")",
-		                                             LogicalType::LIST(MapType::ValueType(type)), depth);
-		return StringUtil::Format("CASE WHEN (%s) IS NULL THEN NULL ELSE map(%s, %s) END", expr, keys, values);
-	}
-	default:
-		throw NotImplementedException("Cannot read an inlined VARIANT nested inside a %s column in this catalog type",
-		                              type.ToString());
-	}
-}
-
-static ScalarFunctionCatalogEntry &GetFunctionEntry(ClientContext &context, const string &name) {
-	auto &db = DatabaseInstance::GetDatabase(context);
-	auto &system_catalog = Catalog::GetSystemCatalog(db);
-	auto system_transaction = CatalogTransaction::GetSystemTransaction(db);
-	auto &schema = system_catalog.GetSchema(system_transaction, Identifier::DefaultSchema());
-	auto entry = schema.GetEntry(system_transaction, CatalogType::SCALAR_FUNCTION_ENTRY, Identifier(name));
-	if (!entry) {
-		throw MissingExtensionException("Inlining VARIANT data requires the function %s, which is provided by the "
-		                                "parquet extension. Try explicitly loading the parquet extension",
-		                                name);
-	}
-	return entry->Cast<ScalarFunctionCatalogEntry>();
-}
-
-DuckLakeInlinedChunkEncoder::DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager &metadata_manager,
-                                                         ClientContext &context, const vector<LogicalType> &types) {
-	if (metadata_manager.TypeIsNativelySupported(LogicalType::VARIANT())) {
-		return;
-	}
-	vector<LogicalType> encoded_types;
-	for (idx_t c = 0; c < types.size(); c++) {
-		if (!TypeVisitor::Contains(types[c], LogicalTypeId::VARIANT)) {
-			encoded_types.push_back(types[c]);
-			continue;
-		}
-		encoded_columns.push_back(c);
-		encoded_types.push_back(DuckLakeUtil::VariantToBlobType(types[c]));
-	}
-	if (encoded_columns.empty()) {
-		return;
-	}
-	// Commit has no active client transaction
-	auto &function_entry = GetFunctionEntry(context, "variant_to_parquet_variant");
-	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::VARIANT(), 0));
-	ErrorData error;
-	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(function_entry, std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	vector<LogicalType> parquet_variant_types {function->GetReturnType()};
-	expressions.push_back(std::move(function));
-	executor = make_uniq<ExpressionExecutor>(context, *expressions.back());
-
-	vector<unique_ptr<Expression>> concat_children;
-	concat_children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::BLOB, 1));
-	concat_children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::BLOB, 2));
-	auto concat = binder.BindScalarFunction(ConcatOperatorFun::GetFunction(), std::move(concat_children));
-	auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-	is_null->GetChildrenMutable().push_back(make_uniq<BoundReferenceExpression>(LogicalType::VARIANT(), 0));
-	expressions.push_back(make_uniq<BoundCaseExpression>(
-	    std::move(is_null), make_uniq<BoundConstantExpression>(Value(LogicalType::BLOB)), std::move(concat)));
-	concat_executor = make_uniq<ExpressionExecutor>(context, *expressions.back());
-	variant_chunk.InitializeEmpty({LogicalType::VARIANT()});
-	parquet_variant_chunk.Initialize(context, parquet_variant_types);
-	concat_chunk.InitializeEmpty({LogicalType::VARIANT(), LogicalType::BLOB, LogicalType::BLOB});
-	encoded_chunk.Initialize(context, encoded_types);
-}
-
-DuckLakeInlinedChunkEncoder::~DuckLakeInlinedChunkEncoder() {
-}
-
-void DuckLakeInlinedChunkEncoder::EncodeVariant(Vector &input, idx_t count, Vector &result) {
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	// List children can exceed the executor batch size
-	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
-		auto batch = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - offset);
-		Vector batch_input(input.GetType());
-		batch_input.Slice(input, offset, offset + batch);
-		variant_chunk.Reset();
-		variant_chunk.data[0].Reference(batch_input);
-		variant_chunk.SetChildCardinality(batch);
-		parquet_variant_chunk.Reset();
-		executor->Execute(variant_chunk, parquet_variant_chunk);
-		auto &entries = StructVector::GetEntries(parquet_variant_chunk.data[0]);
-		concat_chunk.data[0].Reference(batch_input);
-		concat_chunk.data[1].Reference(entries[0]);
-		concat_chunk.data[2].Reference(entries[1]);
-		concat_chunk.SetChildCardinality(batch);
-		Vector blobs(LogicalType::BLOB, count_t(batch));
-		concat_executor->ExecuteExpression(concat_chunk, blobs);
-		VectorOperations::Copy(blobs, result, batch, 0, offset);
-	}
-}
-
-void DuckLakeInlinedChunkEncoder::EncodeVector(Vector &input, idx_t count, Vector &result) {
-	auto &type = input.GetType();
-	if (type.id() == LogicalTypeId::VARIANT) {
-		EncodeVariant(input, count, result);
-		return;
-	}
-	if (!TypeVisitor::Contains(type, LogicalTypeId::VARIANT)) {
-		result.Reference(input);
-		return;
-	}
-	input.Flatten();
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	FlatVector::SetValidity(result, FlatVector::Validity(input));
-	switch (type.id()) {
-	case LogicalTypeId::STRUCT: {
-		auto &input_entries = StructVector::GetEntries(input);
-		auto &result_entries = StructVector::GetEntries(result);
-		D_ASSERT(input_entries.size() == result_entries.size());
-		for (idx_t i = 0; i < input_entries.size(); i++) {
-			EncodeVector(input_entries[i], count, result_entries[i]);
-		}
-		break;
-	}
-	case LogicalTypeId::LIST:
-	case LogicalTypeId::MAP: {
-		// Maps share the list layout
-		auto input_entries = FlatVector::GetData<list_entry_t>(input);
-		auto result_entries = FlatVector::GetDataMutable<list_entry_t>(result);
-		memcpy(result_entries, input_entries, count * sizeof(list_entry_t));
-		auto list_size = ListVector::GetListSize(input);
-		ListVector::Reserve(result, list_size);
-		EncodeVector(ListVector::GetChildMutable(input), list_size, ListVector::GetChildMutable(result));
-		ListVector::SetListSize(result, list_size);
-		break;
-	}
-	default:
-		throw InternalException("DuckLakeInlinedChunkEncoder: unsupported nested type %s", type.ToString());
-	}
-}
-
-DataChunk &DuckLakeInlinedChunkEncoder::Encode(DataChunk &chunk) {
-	if (!executor) {
-		return chunk;
-	}
-	auto count = chunk.size();
-	encoded_chunk.Reset();
-	idx_t encoded_idx = 0;
-	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
-		if (encoded_idx < encoded_columns.size() && encoded_columns[encoded_idx] == c) {
-			EncodeVector(chunk.data[c], count, encoded_chunk.data[c]);
-			encoded_idx++;
-		} else {
-			encoded_chunk.data[c].Reference(chunk.data[c]);
-		}
-	}
-	encoded_chunk.SetChildCardinality(count);
-	return encoded_chunk;
+	return result;
 }
 
 void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {

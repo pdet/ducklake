@@ -2,6 +2,7 @@
 
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_util.hpp"
+#include "common/ducklake_inlined_data_converter.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -335,9 +336,11 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 		                          DuckLakeUtil::BoolLiteral(has_preserved));
 		idx_t row_order = 0;
 		idx_t global_row_idx = 0;
-		DuckLakeInlinedChunkEncoder encoder(metadata_manager, context, inlined.data->Types());
+		auto &types = inlined.data->Types();
+		DuckLakeInlinedDataConverter encoder(context, types,
+		                                     DuckLakeUtil::GetInlinedStorageTypes(metadata_manager, types));
 		for (auto &chunk : inlined.data->Chunks()) {
-			auto &encoded_chunk = encoder.Encode(chunk);
+			auto &encoded_chunk = encoder.Convert(chunk);
 			for (idx_t r = 0; r < encoded_chunk.size(); r++) {
 				string tuple = "(" + DuckLakeUtil::ChunkRowToSQL(metadata_manager, context, encoded_chunk, r) + ")";
 				string preserved_row_id = "NULL";
