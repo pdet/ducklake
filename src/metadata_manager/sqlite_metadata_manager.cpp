@@ -21,19 +21,12 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	// Variant is not natively supported
+	// Variant is inlined as the Parquet Variant binary encoding (metadata followed by value) in a BLOB column
 	case LogicalTypeId::VARIANT:
 		return false;
 	default:
 		return true;
 	}
-}
-
-bool SQLiteMetadataManager::SupportsInlining(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::VARIANT) {
-		return false;
-	}
-	return DuckLakeMetadataManager::SupportsInlining(type);
 }
 
 bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const {
@@ -47,8 +40,9 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	switch (column_type.id()) {
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::VARIANT:
 		return "VARCHAR";
+	case LogicalTypeId::VARIANT:
+		return "BLOB";
 	case LogicalTypeId::SQLNULL:
 		return "INTEGER";
 	default:
