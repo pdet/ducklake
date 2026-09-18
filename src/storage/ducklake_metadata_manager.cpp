@@ -1374,6 +1374,11 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
+	if (type.id() == LogicalTypeId::VARIANT && !TypeIsNativelySupported(type)) {
+		// inlined as the Parquet Variant binary encoding (see DuckLakeInlinedChunkEncoder) - decode it again.
+		// The projection is evaluated by DuckDB, so the parquet extension's decoder is available here.
+		return "variant_bytes_to_variant(CAST(" + column + " AS BLOB))";
+	}
 	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
 	return "CAST(" + column + " AS " + type.ToString() + ")";
 }
@@ -2905,7 +2910,8 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
-		if (!column_type.IsNested()) {
+		// VARIANT counts as nested but is stored as a single binary column (see DuckLakeInlinedChunkEncoder)
+		if (!column_type.IsNested() || column_type.id() == LogicalTypeId::VARIANT) {
 			return GetColumnTypeInternal(column_type);
 		}
 		return "VARCHAR";
