@@ -1,0 +1,209 @@
+# name: test/sql/data_inlining/data_inlining_variant_types.test
+# description: inlined VARIANT columns round-trip on every metadata backend (stored as Parquet Variant blobs on non-DuckDB catalogs)
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlining_variant_types', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10000)
+
+# the reference: the same values in a plain DuckDB table
+statement ok
+CREATE TABLE memory.reference(id INTEGER, v VARIANT);
+
+statement ok
+INSERT INTO memory.reference VALUES
+	(1, true), (2, false),
+	(3, 127::TINYINT), (4, -32767::SMALLINT), (5, 2147483647::INTEGER), (6, -9223372036854775807::BIGINT),
+	(7, 1.5::FLOAT), (8, 'nan'::DOUBLE), (9, 'inf'::DOUBLE), (10, '-inf'::DOUBLE), (11, -0.0::DOUBLE),
+	(12, 12345.67::DECIMAL(9,2)), (13, 1234567890.1234::DECIMAL(18,4)), (14, 1234567890123456789.0123456789::DECIMAL(38,10)),
+	(15, ''), (16, 'it''s "quoted", {braces} [brackets] \x00 back\slash'), (17, 'ünïcödé 🦆'), (18, 'a' || chr(0) || 'b'),
+	(19, '\x00\x01\xff'::BLOB), (20, DATE '1970-01-01'), (21, DATE '2999-12-31'), (22, TIME '23:59:59.999999'),
+	(23, TIMESTAMP '2024-02-29 12:34:56.789'), (24, TIMESTAMPTZ '2024-02-29 12:34:56+00'),
+	(25, UUID '12345678-1234-5678-1234-567812345678'),
+	(26, NULL), (28, '[]'::JSON), (29, '{"a": {"b": [1, "two", null, {"c": false}]}}'::JSON),
+	(30, [1, 2, 3]), (31, {'x': 1, 'y': 'why'}), (32, MAP {'k': 1});
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, v VARIANT);
+
+statement ok
+INSERT INTO ducklake.t SELECT * FROM memory.reference;
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+0
+
+# exact round trip. The Parquet Variant encoding re-derives DECIMAL precision from the physical width and the
+# DuckDB catalog re-binds small integers and floats from their literals, so those rows are compared by value below.
+query III nosort reference_types
+SELECT id, v, variant_typeof(v) FROM memory.reference WHERE id NOT IN (3, 4, 7, 12, 13, 14) ORDER BY id
+----
+
+query III nosort reference_types
+SELECT id, v, variant_typeof(v) FROM ducklake.t WHERE id NOT IN (3, 4, 7, 12, 13, 14) ORDER BY id
+----
+
+query II nosort reference_values
+SELECT id, v::VARCHAR FROM memory.reference ORDER BY id
+----
+
+query II nosort reference_values
+SELECT id, v::VARCHAR FROM ducklake.t ORDER BY id
+----
+
+# spot checks through typed casts
+query IIII
+SELECT isnan(v::DOUBLE), isinf(v::DOUBLE), v::DOUBLE < 0, signbit(v::DOUBLE) FROM ducklake.t WHERE id IN (8, 9, 10, 11) ORDER BY id
+----
+true	false	false	false
+false	true	false	false
+false	true	true	true
+false	false	false	true
+
+query II
+SELECT v::VARCHAR, length(v::VARCHAR) FROM ducklake.t WHERE id IN (15, 16, 17, 18) ORDER BY id
+----
+(empty)	0
+it's "quoted", {braces} [brackets] \x00 back\slash	50
+ünïcödé 🦆	9
+a\0b	3
+
+query I
+SELECT hex(v::BLOB) FROM ducklake.t WHERE id = 19
+----
+0001FF
+
+query I
+SELECT v::UUID FROM ducklake.t WHERE id = 25
+----
+12345678-1234-5678-1234-567812345678
+
+query I
+SELECT v::JSON FROM ducklake.t WHERE id = 29
+----
+{"a":{"b":[1,"two",null,{"c":false}]}}
+
+# filters on the variant column
+query I
+SELECT id FROM ducklake.t WHERE v::VARCHAR = 'ünïcödé 🦆'
+----
+17
+
+query I
+SELECT id FROM ducklake.t WHERE variant_typeof(v) = 'DATE' ORDER BY id
+----
+20
+21
+
+# more rows than fit in one vector
+statement ok
+INSERT INTO ducklake.t SELECT 1000 + i, CASE WHEN i % 3 = 0 THEN i::VARIANT WHEN i % 3 = 1 THEN ('s' || i)::VARIANT ELSE NULL END FROM range(3000) t(i);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+0
+
+query IIIII
+SELECT COUNT(*), SUM(TRY_CAST(v AS BIGINT)), COUNT(*) FILTER (WHERE variant_typeof(v) LIKE 'INT%'), COUNT(*) FILTER (WHERE variant_typeof(v) = 'VARCHAR'), COUNT(*) FILTER (WHERE variant_typeof(v) = 'VARIANT_NULL') FROM ducklake.t WHERE id >= 1000
+----
+3000	1498500	1000	1000	1000
+
+# update and delete inlined rows
+statement ok
+UPDATE ducklake.t SET v = 'updated' WHERE id = 1
+
+statement ok
+DELETE FROM ducklake.t WHERE id = 2
+
+query III
+SELECT id, v, variant_typeof(v) FROM ducklake.t WHERE id IN (1, 2) ORDER BY id
+----
+1	updated	VARCHAR
+
+# time travel to before the update and the delete
+query II
+SELECT id, v FROM ducklake.t AT (VERSION => 3) WHERE id IN (1, 2) ORDER BY id
+----
+1	true
+2	false
+
+query IIII
+SELECT snapshot_id, change_type, id, v FROM ducklake.table_changes('t', 4, 5) ORDER BY ALL
+----
+4	update_postimage	1	updated
+4	update_preimage	1	true
+5	delete	2	false
+
+# flushing the inlined data to parquet yields the same result (decimal precision aside, see above)
+query III nosort final_state
+SELECT id, v, variant_typeof(v) FROM ducklake.t WHERE id NOT IN (3, 4, 7, 12, 13, 14) ORDER BY id
+----
+
+query II nosort final_values
+SELECT id, v::VARCHAR FROM ducklake.t ORDER BY id
+----
+
+query II
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('ducklake')
+----
+t	3032
+
+query I
+SELECT COUNT(*) > 0 FROM ducklake_list_files('ducklake', 't')
+----
+true
+
+query III nosort final_state
+SELECT id, v, variant_typeof(v) FROM ducklake.t WHERE id NOT IN (3, 4, 7, 12, 13, 14) ORDER BY id
+----
+
+query II nosort final_values
+SELECT id, v::VARCHAR FROM ducklake.t ORDER BY id
+----
+
+# adding a VARIANT column to an inlined table
+statement ok
+CREATE TABLE ducklake.evolve(id INTEGER);
+
+statement ok
+INSERT INTO ducklake.evolve VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.evolve ADD COLUMN v VARIANT;
+
+statement ok
+INSERT INTO ducklake.evolve VALUES (2, {'new': [1::VARIANT, 'two'::VARIANT]});
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'evolve')
+----
+0
+
+query III
+SELECT id, v, variant_typeof(v) FROM ducklake.evolve ORDER BY id
+----
+1	NULL	VARIANT_NULL
+2	{'new': [1, two]}	OBJECT(new)
+
+# values the Parquet Variant encoding cannot represent are rejected on backends that store VARIANT as
+# Parquet Variant blobs; the DuckDB catalog stores them natively
+statement maybe
+INSERT INTO ducklake.evolve VALUES (3, INTERVAL '1 day');
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+query I
+SELECT COUNT(*) FROM ducklake.evolve WHERE id <= 2
+----
+2
