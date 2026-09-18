@@ -3254,9 +3254,11 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		vector<string> cells_per_row;
+		DuckLakeInlinedChunkEncoder encoder(*this, context, entry.data->data->Types());
 		for (auto &chunk : entry.data->data->Chunks()) {
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				cells_per_row.push_back(DuckLakeUtil::ChunkRowToSQL(*this, context, chunk, r));
+			auto &encoded_chunk = encoder.Encode(chunk);
+			for (idx_t r = 0; r < encoded_chunk.size(); r++) {
+				cells_per_row.push_back(DuckLakeUtil::ChunkRowToSQL(*this, context, encoded_chunk, r));
 			}
 		}
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,

@@ -20,6 +20,12 @@
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -181,10 +187,12 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		RecursiveUnifiedVectorFormat format;
 		Vector::RecursiveToUnifiedFormat(tmp, format);
 		UnifiedVariantVectorData vector_data(format);
-		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
 		if (!use_native_type) {
-			throw NotImplementedException("Variant types cannot be inlined in this catalog type yet");
+			// DuckLakeInlinedChunkEncoder turns these into BLOB columns before the rows are formatted
+			throw InternalException("VARIANT values must be encoded as Parquet Variant blobs before being "
+			                        "inlined in this catalog type");
 		}
+		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
 		// variant can just be stored as a variant
 		return ToSQLString(metadata_manager, val);
 	}
@@ -625,6 +633,124 @@ string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, Cl
 		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
 	}
 	return result;
+}
+
+//===--------------------------------------------------------------------===//
+// DuckLakeInlinedChunkEncoder
+//===--------------------------------------------------------------------===//
+static ScalarFunctionCatalogEntry &GetFunctionEntry(ClientContext &context, const string &name) {
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto &system_catalog = Catalog::GetSystemCatalog(db);
+	auto system_transaction = CatalogTransaction::GetSystemTransaction(db);
+	auto &schema = system_catalog.GetSchema(system_transaction, Identifier::DefaultSchema());
+	auto entry = schema.GetEntry(system_transaction, CatalogType::SCALAR_FUNCTION_ENTRY, Identifier(name));
+	if (!entry) {
+		throw MissingExtensionException("Inlining VARIANT data requires the function %s, which is provided by the "
+		                                "parquet extension. Try explicitly loading the parquet extension",
+		                                name);
+	}
+	return entry->Cast<ScalarFunctionCatalogEntry>();
+}
+
+DuckLakeInlinedChunkEncoder::DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager &metadata_manager,
+                                                         ClientContext &context, const vector<LogicalType> &types) {
+	if (metadata_manager.TypeIsNativelySupported(LogicalType::VARIANT())) {
+		return;
+	}
+	vector<LogicalType> encoded_types;
+	vector<LogicalType> parquet_variant_types;
+	for (idx_t c = 0; c < types.size(); c++) {
+		if (types[c].id() != LogicalTypeId::VARIANT) {
+			encoded_types.push_back(types[c]);
+			continue;
+		}
+		// bind variant_to_parquet_variant(col) - provided by the parquet extension. This runs at commit time,
+		// outside of a client transaction, so look the function up through the system catalog directly.
+		auto &function_entry = GetFunctionEntry(context, "variant_to_parquet_variant");
+		vector<unique_ptr<Expression>> children;
+		children.push_back(make_uniq<BoundReferenceExpression>(types[c], c));
+		ErrorData error;
+		FunctionBinder binder(context);
+		auto function = binder.BindScalarFunction(function_entry, std::move(children), error, false);
+		if (!function) {
+			error.Throw();
+		}
+		parquet_variant_types.push_back(function->GetReturnType());
+		expressions.push_back(std::move(function));
+		variant_columns.push_back(c);
+		encoded_types.push_back(LogicalType::BLOB);
+	}
+	if (variant_columns.empty()) {
+		return;
+	}
+	executor = make_uniq<ExpressionExecutor>(context, expressions);
+	parquet_variant_chunk.Initialize(context, parquet_variant_types);
+	encoded_chunk.Initialize(context, encoded_types);
+}
+
+DuckLakeInlinedChunkEncoder::~DuckLakeInlinedChunkEncoder() {
+}
+
+//! Concatenate the metadata and value blobs of each row into a single BLOB; rows that are NULL stay NULL
+static void ConcatenateParquetVariant(Vector &input, Vector &parquet_variant, Vector &result, idx_t count) {
+	UnifiedVectorFormat input_format;
+	input.ToUnifiedFormat(input_format);
+
+	parquet_variant.Flatten();
+	auto &struct_validity = FlatVector::Validity(parquet_variant);
+	auto &entries = StructVector::GetEntries(parquet_variant);
+	D_ASSERT(entries.size() >= 2);
+	UnifiedVectorFormat metadata_format;
+	UnifiedVectorFormat value_format;
+	entries[0].ToUnifiedFormat(metadata_format);
+	entries[1].ToUnifiedFormat(value_format);
+	auto metadata_data = UnifiedVectorFormat::GetData<string_t>(metadata_format);
+	auto value_data = UnifiedVectorFormat::GetData<string_t>(value_format);
+
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
+	for (idx_t row = 0; row < count; row++) {
+		auto input_idx = input_format.sel->get_index(row);
+		auto metadata_idx = metadata_format.sel->get_index(row);
+		auto value_idx = value_format.sel->get_index(row);
+		if (!input_format.validity.RowIsValid(input_idx) || !struct_validity.RowIsValid(row) ||
+		    !metadata_format.validity.RowIsValid(metadata_idx) || !value_format.validity.RowIsValid(value_idx)) {
+			result_validity.SetInvalid(row);
+			continue;
+		}
+		auto &metadata = metadata_data[metadata_idx];
+		auto &value = value_data[value_idx];
+		auto target = StringVector::EmptyString(result, metadata.GetSize() + value.GetSize());
+		auto target_data = target.GetDataWriteable();
+		memcpy(target_data, metadata.GetData(), metadata.GetSize());
+		memcpy(target_data + metadata.GetSize(), value.GetData(), value.GetSize());
+		target.Finalize();
+		result_data[row] = target;
+	}
+}
+
+DataChunk &DuckLakeInlinedChunkEncoder::Encode(DataChunk &chunk) {
+	if (!executor) {
+		return chunk;
+	}
+	auto count = chunk.size();
+	parquet_variant_chunk.Reset();
+	executor->Execute(chunk, parquet_variant_chunk);
+
+	encoded_chunk.Reset();
+	idx_t variant_idx = 0;
+	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+		if (variant_idx < variant_columns.size() && variant_columns[variant_idx] == c) {
+			ConcatenateParquetVariant(chunk.data[c], parquet_variant_chunk.data[variant_idx], encoded_chunk.data[c],
+			                          count);
+			variant_idx++;
+		} else {
+			encoded_chunk.data[c].Reference(chunk.data[c]);
+		}
+	}
+	encoded_chunk.SetChildCardinality(count);
+	return encoded_chunk;
 }
 
 void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {

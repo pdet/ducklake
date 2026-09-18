@@ -335,9 +335,11 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 		                          DuckLakeUtil::BoolLiteral(has_preserved));
 		idx_t row_order = 0;
 		idx_t global_row_idx = 0;
+		DuckLakeInlinedChunkEncoder encoder(metadata_manager, context, inlined.data->Types());
 		for (auto &chunk : inlined.data->Chunks()) {
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				string tuple = "(" + DuckLakeUtil::ChunkRowToSQL(metadata_manager, context, chunk, r) + ")";
+			auto &encoded_chunk = encoder.Encode(chunk);
+			for (idx_t r = 0; r < encoded_chunk.size(); r++) {
+				string tuple = "(" + DuckLakeUtil::ChunkRowToSQL(metadata_manager, context, encoded_chunk, r) + ")";
 				string preserved_row_id = "NULL";
 				if (has_preserved) {
 					auto rid = inlined.row_ids[global_row_idx];

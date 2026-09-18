@@ -16,10 +16,11 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/data_chunk.hpp"
 
 namespace duckdb {
 class ClientContext;
-class DataChunk;
+class ExpressionExecutor;
 class ColumnList;
 class DuckLakeCatalog;
 class DuckLakeMetadataManager;
@@ -99,6 +100,31 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+};
+
+//! Rewrites the VARIANT columns of an inlined data chunk into the Parquet Variant binary encoding (the metadata
+//! blob immediately followed by the value blob) as BLOB columns. Used for metadata backends that cannot store
+//! VARIANT natively; the DuckDB backend keeps the VARIANT column as-is. The read path decodes the blob again with
+//! variant_bytes_to_variant.
+class DuckLakeInlinedChunkEncoder {
+public:
+	DuckLakeInlinedChunkEncoder(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
+	                            const vector<LogicalType> &types);
+	~DuckLakeInlinedChunkEncoder();
+
+	//! Returns the chunk whose rows should be formatted: the input itself when no column needs encoding
+	DataChunk &Encode(DataChunk &chunk);
+
+private:
+	//! Indexes of the VARIANT columns that are encoded, in ascending order
+	vector<idx_t> variant_columns;
+	//! variant_to_parquet_variant(col) per encoded column - referenced by the executor, so kept alive here
+	vector<unique_ptr<Expression>> expressions;
+	unique_ptr<ExpressionExecutor> executor;
+	//! STRUCT(metadata BLOB, value BLOB) per encoded column
+	DataChunk parquet_variant_chunk;
+	//! The input chunk with every encoded column replaced by a BLOB column
+	DataChunk encoded_chunk;
 };
 
 } // namespace duckdb
