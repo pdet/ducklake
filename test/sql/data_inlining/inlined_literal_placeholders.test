@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/inlined_literal_placeholders.test
-# description: inlined data containing commit placeholders such as {SNAPSHOT_ID} (or JSON stored as BYTEA on postgres) round-trips unchanged
+# description: inlined data holding commit placeholders or JSON stored as BYTEA round-trips unchanged
 # group: [data_inlining]
 
 require ducklake
@@ -37,13 +37,13 @@ SELECT id, j, s, v, n, b FROM ducklake.j WHERE id < 4 ORDER BY id
 2	{"a": 1}	plain	plain	{'v': plain}	plain
 3	{"q": "it's"}	it's {NOT_A_PLACEHOLDER}	a{b}	{'v': {x}}	it\x27s
 
-# object keys that look like placeholders (key order depends on the storage format, so extract instead of rendering)
+# object key order depends on the storage format, compare by extraction
 query IIII
 SELECT j, variant_extract(v, '{TAG}')::VARCHAR, v.k[1]::VARCHAR, variant_extract(n.v, '{TAG}')::INTEGER FROM ducklake.j WHERE id = 4
 ----
 {"{TAG}": "{TAG}"}	{TAG}	{A}	1
 
-# struct field names that look like placeholders stay valid SQL in key position
+# struct field names that look like placeholders stay valid in key position
 statement ok
 CREATE TABLE ducklake.k(id INTEGER, s STRUCT("{TAG}" INTEGER, v VARCHAR));
 

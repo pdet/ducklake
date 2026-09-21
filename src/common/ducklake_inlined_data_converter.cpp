@@ -15,6 +15,8 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 
 namespace duckdb {
 
@@ -85,38 +87,39 @@ static bool CastVariant(Vector &source, Vector &result, idx_t count, CastParamet
 	// List children can exceed the executor batch size
 	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
 		auto batch = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - offset);
-		Vector blobs_from_text(LogicalType::BLOB, count_t(batch));
+		Vector batch_source(source.GetType());
+		batch_source.Slice(source, offset, offset + batch);
+		unique_ptr<Vector> blobs_from_text;
 		if (!state.encode && source.GetType().id() == LogicalTypeId::VARCHAR) {
 			// Nested VARIANT values are stored as escaped blob text
-			Vector text(source.GetType());
-			text.Slice(source, offset, offset + batch);
-			VectorOperations::DefaultCast(text, blobs_from_text, batch, true);
-			state.input.data[0].Reference(blobs_from_text);
+			blobs_from_text = make_uniq<Vector>(LogicalType::BLOB, count_t(batch));
+			VectorOperations::DefaultCast(batch_source, *blobs_from_text, batch, true);
+			state.input.data[0].Reference(*blobs_from_text);
 		} else {
-			state.input.data[0].Slice(source, offset, offset + batch);
+			state.input.data[0].Reference(batch_source);
 		}
 		state.input.SetChildCardinality(batch);
 		state.output.Reset();
 		state.executor.Execute(state.input, state.output);
+		Vector encoded(LogicalType::BLOB, count_t(batch));
+		auto &converted = state.output.data[0];
 		if (state.encode) {
-			auto &entries = StructVector::GetEntries(state.output.data[0]);
+			auto &entries = StructVector::GetEntries(converted);
 			state.concat_input.data[0].Reference(state.input.data[0]);
 			state.concat_input.data[1].Reference(entries[0]);
 			state.concat_input.data[2].Reference(entries[1]);
 			state.concat_input.SetChildCardinality(batch);
-			Vector blobs(LogicalType::BLOB, count_t(batch));
-			state.concat_executor.ExecuteExpression(state.concat_input, blobs);
-			VectorOperations::Copy(blobs, result, batch, 0, offset);
-		} else {
-			VectorOperations::Copy(state.output.data[0], result, batch, 0, offset);
+			state.concat_executor.ExecuteExpression(state.concat_input, encoded);
 		}
+		VectorOperations::Copy(state.encode ? encoded : converted, result, batch, 0, offset);
 	}
 	return true;
 }
 
 DuckLakeInlinedDataConverter::DuckLakeInlinedDataConverter(ClientContext &context,
                                                            const vector<LogicalType> &source_types,
-                                                           const vector<LogicalType> &target_types) {
+                                                           const vector<LogicalType> &target_types)
+    : executor(context) {
 	if (source_types == target_types) {
 		return;
 	}
@@ -131,38 +134,29 @@ DuckLakeInlinedDataConverter::DuckLakeInlinedDataConverter(ClientContext &contex
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
 	functions.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::VARIANT(),
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
-	// Postgres stores strings as BYTEA to preserve null bytes
 	GetCastFunctionInput input(context);
 	for (idx_t i = 0; i < source_types.size(); i++) {
-		if (source_types[i].id() == LogicalTypeId::BLOB && target_types[i].id() == LogicalTypeId::VARCHAR) {
-			// Postgres stores VARCHAR columns (including aliased ones such as JSON) as BYTEA because they may hold
-			// null bytes - read the bytes back as-is instead of escaping them
-			casts.push_back(BoundCastInfo(DefaultCasts::ReinterpretCast));
-			states.push_back(nullptr);
-			continue;
+		unique_ptr<Expression> expr = make_uniq<BoundReferenceExpression>(source_types[i], i);
+		if (source_types[i] != target_types[i]) {
+			// Postgres stores VARCHAR and JSON as BYTEA, read the bytes back unchanged
+			bool reinterpret =
+			    source_types[i].id() == LogicalTypeId::BLOB && target_types[i].id() == LogicalTypeId::VARCHAR;
+			auto cast = reinterpret ? BoundCastInfo(DefaultCasts::ReinterpretCast)
+			                        : functions.GetCastFunction(source_types[i], target_types[i], input);
+			expr = BoundCastExpression::Create(std::move(expr), target_types[i], std::move(cast));
 		}
-		auto cast = functions.GetCastFunction(source_types[i], target_types[i], input);
-		unique_ptr<FunctionLocalState> state;
-		if (cast.HasInitLocalState()) {
-			CastLocalStateParameters parameters(context, cast.GetCastData());
-			state = cast.InitLocalState(parameters);
-		}
-		casts.push_back(std::move(cast));
-		states.push_back(std::move(state));
+		executor.AddExpression(*expr);
+		expressions.push_back(std::move(expr));
 	}
 	result.Initialize(context, target_types);
 }
 
 DataChunk &DuckLakeInlinedDataConverter::Convert(DataChunk &chunk) {
-	if (casts.empty()) {
+	if (expressions.empty()) {
 		return chunk;
 	}
 	result.Reset();
-	for (idx_t i = 0; i < casts.size(); i++) {
-		CastParameters parameters(casts[i].GetCastData(), false, nullptr, states[i]);
-		casts[i].Cast(chunk.data[i], result.data[i], chunk.size(), parameters);
-	}
-	result.SetChildCardinality(chunk.size());
+	executor.Execute(chunk, result);
 	return result;
 }
 

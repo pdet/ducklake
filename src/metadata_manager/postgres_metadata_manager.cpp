@@ -220,7 +220,6 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 		return "REAL";
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::VARIANT:
 		return "BYTEA";
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:

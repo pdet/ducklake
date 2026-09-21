@@ -19,6 +19,7 @@
 
 namespace duckdb {
 class ClientContext;
+class ColumnDataCollection;
 class DataChunk;
 class ColumnList;
 class DuckLakeCatalog;
@@ -85,8 +86,6 @@ public:
 
 	static string PartitionValueLiteral(const Value &v);
 
-	static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
-	                            idx_t row);
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
 	                                        TableIndex table_id, const string &name);
@@ -100,9 +99,11 @@ public:
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 
+	//! Storage type of an inlined column, VARIANT becomes a Parquet Variant BLOB where VARIANT is not native
 	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);
-	static vector<LogicalType> GetInlinedStorageTypes(DuckLakeMetadataManager &metadata_manager,
-	                                                  const vector<LogicalType> &types);
+	//! Formats inlined rows as comma separated cell literals in storage types
+	static vector<string> InlinedDataToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
+	                                       const ColumnDataCollection &data);
 };
 
 } // namespace duckdb

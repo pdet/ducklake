@@ -40,8 +40,6 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
 		return "VARCHAR";
-	case LogicalTypeId::VARIANT:
-		return "BLOB";
 	case LogicalTypeId::SQLNULL:
 		return "INTEGER";
 	default:

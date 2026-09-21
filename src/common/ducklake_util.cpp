@@ -1,4 +1,6 @@
 #include "common/ducklake_util.hpp"
+#include "common/ducklake_inlined_data_converter.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/column_list.hpp"
@@ -292,10 +294,7 @@ string ToByteaHexLiteral(const string &raw_bytes) {
 
 static string ValueToSQLInternal(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
-//! The commit batch has {SNAPSHOT_ID}-style placeholders substituted by plain text replacement, which would also
-//! rewrite that pattern inside a data literal (e.g. a VARCHAR holding "{SNAPSHOT_ID}"). Split the opening brace out
-//! of every such pattern inside the single-quoted literals of a data cell so the placeholder can never match.
-//! Literals in struct key position ('key': value) must stay a single literal and are left as they are.
+//! Splits the opening brace out of {UPPERCASE} patterns in a single quoted literal
 static string SplitPlaceholders(const string &literal) {
 	string result;
 	for (idx_t i = 0; i < literal.size(); i++) {
@@ -314,6 +313,7 @@ static string SplitPlaceholders(const string &literal) {
 	return result;
 }
 
+//! Keeps {SNAPSHOT_ID} style placeholders inside data literals from being substituted by the commit batch
 static string NeutralizePlaceholders(const string &sql) {
 	string result;
 	idx_t i = 0;
@@ -322,7 +322,7 @@ static string NeutralizePlaceholders(const string &sql) {
 			result += sql[i++];
 			continue;
 		}
-		// find the closing quote of the literal - '' is an escaped quote
+		// find the closing quote, '' is an escaped quote
 		idx_t end = i + 1;
 		while (end < sql.size()) {
 			if (sql[end] == '\'') {
@@ -335,12 +335,12 @@ static string NeutralizePlaceholders(const string &sql) {
 			end++;
 		}
 		if (end >= sql.size()) {
-			// unterminated - not something ValueToSQL produces; leave the rest untouched
+			// unterminated literal, leave the rest untouched
 			result += sql.substr(i);
 			break;
 		}
 		auto literal = sql.substr(i, end - i + 1);
-		// a literal followed by a single ':' is a struct key, not a value
+		// a literal followed by a single colon is a struct key
 		idx_t after = end + 1;
 		while (after < sql.size() && sql[after] == ' ') {
 			after++;
@@ -677,14 +677,14 @@ string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
 }
 
-string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
-                                   idx_t row) {
+static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                            idx_t row) {
 	string result;
 	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 		if (c > 0) {
 			result += ", ";
 		}
-		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+		result += DuckLakeUtil::ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
 	}
 	return result;
 }
@@ -698,13 +698,23 @@ LogicalType DuckLakeUtil::GetInlinedStorageType(DuckLakeMetadataManager &metadat
 	});
 }
 
-vector<LogicalType> DuckLakeUtil::GetInlinedStorageTypes(DuckLakeMetadataManager &metadata_manager,
-                                                         const vector<LogicalType> &types) {
-	vector<LogicalType> result;
+vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
+                                              const ColumnDataCollection &data) {
+	auto &types = data.Types();
+	vector<LogicalType> storage_types;
 	for (auto &type : types) {
-		result.push_back(GetInlinedStorageType(metadata_manager, type));
+		storage_types.push_back(GetInlinedStorageType(metadata_manager, type));
 	}
-	return result;
+	DuckLakeInlinedDataConverter encoder(context, types, storage_types);
+	vector<string> rows;
+	rows.reserve(data.Count());
+	for (auto &chunk : data.Chunks()) {
+		auto &encoded_chunk = encoder.Convert(chunk);
+		for (idx_t r = 0; r < encoded_chunk.size(); r++) {
+			rows.push_back(ChunkRowToSQL(metadata_manager, context, encoded_chunk, r));
+		}
+	}
+	return rows;
 }
 
 void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {
