@@ -1,7 +1,6 @@
 add_library(
   ducklake_common OBJECT
   ducklake_data_file.cpp
-  ducklake_inlined_data_converter.cpp
   ducklake_name_map.cpp
   ducklake_snapshot.cpp
   ducklake_types.cpp

@@ -318,9 +318,6 @@ string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_change
 string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_changes,
                                              DuckLakeTransaction &transaction) const {
 	string sql;
-	auto context_ref = transaction.context.lock();
-	auto &context = *context_ref;
-	auto &metadata_manager = transaction.GetMetadataManager();
 
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.GetTableIndex();
@@ -333,7 +330,7 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_DATA), table_id.index,
 		                          DuckLakeUtil::BoolLiteral(has_preserved));
-		auto rows = DuckLakeUtil::InlinedDataToSQL(metadata_manager, context, *inlined.data);
+		auto rows = DuckLakeUtil::InlinedDataToSQL(transaction, *inlined.data);
 		for (idx_t row_order = 0; row_order < rows.size(); row_order++) {
 			string tuple = "(" + rows[row_order] + ")";
 			string preserved_row_id = "NULL";

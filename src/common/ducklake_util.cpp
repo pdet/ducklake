@@ -1,6 +1,11 @@
 #include "common/ducklake_util.hpp"
-#include "common/ducklake_inlined_data_converter.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/parser/tableref/column_data_ref.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/column_list.hpp"
@@ -633,20 +638,84 @@ LogicalType DuckLakeUtil::GetInlinedStorageType(DuckLakeMetadataManager &metadat
 	});
 }
 
-vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
-                                              const ColumnDataCollection &data) {
-	auto &types = data.Types();
-	vector<LogicalType> storage_types;
-	for (auto &type : types) {
-		storage_types.push_back(GetInlinedStorageType(metadata_manager, type));
+string DuckLakeUtil::InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
+                                              idx_t depth) {
+	if (!TypeVisitor::Contains(type, [](const LogicalType &child) { return child.id() == LogicalTypeId::VARIANT; })) {
+		return expression;
 	}
-	DuckLakeInlinedDataConverter encoder(context, types, storage_types);
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT:
+		return string(encode ? "variant_to_bytes(" : "variant_bytes_to_variant(") + expression + ")";
+	case LogicalTypeId::LIST: {
+		auto element = "__ducklake_element_" + to_string(depth);
+		return "list_transform(" + expression + ", lambda " + element + ": " +
+		       InlinedVariantExpression(element, ListType::GetChildType(type), encode, depth + 1) + ")";
+	}
+	case LogicalTypeId::STRUCT: {
+		vector<string> fields;
+		auto &children = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < children.size(); i++) {
+			auto &child = children[i];
+			auto name =
+			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLLiteralToString(child.first.GetIdentifierName());
+			auto field = InlinedVariantExpression("struct_extract(" + expression + ", " + name + ")", child.second,
+			                                      encode, depth);
+			fields.push_back(StructType::IsUnnamed(type) ? field : name + ": " + field);
+		}
+		auto contents = StringUtil::Join(fields, ", ");
+		auto result = StructType::IsUnnamed(type) ? "row(" + contents + ")" : "{" + contents + "}";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + result + " END";
+	}
+	case LogicalTypeId::MAP: {
+		auto keys = InlinedVariantExpression("map_keys(" + expression + ")", LogicalType::LIST(MapType::KeyType(type)),
+		                                     encode, depth);
+		auto values = InlinedVariantExpression("map_values(" + expression + ")",
+		                                       LogicalType::LIST(MapType::ValueType(type)), encode, depth);
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE map(" + keys + ", " + values + ") END";
+	}
+	default:
+		throw NotImplementedException("Cannot inline VARIANT inside %s", type);
+	}
+}
+
+vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto context = transaction.context.lock();
 	vector<string> rows;
 	rows.reserve(data.Count());
-	for (auto &chunk : data.Chunks()) {
-		auto &encoded_chunk = encoder.Convert(chunk);
-		for (idx_t r = 0; r < encoded_chunk.size(); r++) {
-			rows.push_back(ChunkRowToSQL(metadata_manager, context, encoded_chunk, r));
+	vector<string> projections;
+	bool needs_encoding = false;
+	for (idx_t i = 0; i < data.ColumnCount(); i++) {
+		auto &type = data.Types()[i];
+		auto column = "col" + to_string(i + 1);
+		if (GetInlinedStorageType(metadata_manager, type) != type) {
+			column = InlinedVariantExpression(column, type, true);
+			needs_encoding = true;
+		}
+		projections.push_back(std::move(column));
+	}
+	unique_ptr<MaterializedQueryResult> encoded;
+	optional_ptr<ColumnDataCollection> storage_data = data;
+	if (needs_encoding) {
+		auto select = make_uniq<SelectNode>();
+		select->select_list = Parser::ParseExpressionList(StringUtil::Join(projections, ", "));
+		select->from_table = make_uniq<ColumnDataRef>(data);
+		select->from_table->alias = "inlined_data";
+		// Row order determines inlined row IDs, including preserved IDs on updates.
+		auto order = make_uniq<OrderModifier>();
+		order->orders = Parser::ParseOrderList("row_number() OVER ()");
+		select->modifiers.push_back(std::move(order));
+		auto statement = make_uniq<SelectStatement>();
+		statement->node = std::move(select);
+		encoded = transaction.GetConnection().Query(std::move(statement));
+		if (encoded->HasError()) {
+			encoded->GetErrorObject().Throw("Failed to encode inlined VARIANT data: ");
+		}
+		storage_data = encoded->Collection();
+	}
+	for (auto &chunk : storage_data->Chunks()) {
+		for (idx_t r = 0; r < chunk.size(); r++) {
+			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r));
 		}
 	}
 	return rows;

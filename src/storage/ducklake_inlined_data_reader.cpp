@@ -68,8 +68,8 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					continue;
 				}
 			}
-			// TransformInlinedData converts storage types to table types
-			columns_to_read.push_back(SQLIdentifier::ToString(columns[index].name.GetIdentifierName()));
+			columns_to_read.push_back(metadata_manager.CastColumnToTarget(
+			    SQLIdentifier::ToString(columns[index].name.GetIdentifierName()), col.type));
 			expected_types.push_back(col.type);
 		}
 		if (deletion_filter) {

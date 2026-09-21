@@ -240,6 +240,7 @@ public:
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
+	string CastColumnToTarget(const string &column, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 

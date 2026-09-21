@@ -24,6 +24,7 @@ class DataChunk;
 class ColumnList;
 class DuckLakeCatalog;
 class DuckLakeMetadataManager;
+class DuckLakeTransaction;
 class FileSystem;
 class Expression;
 class LogicalType;
@@ -101,9 +102,11 @@ public:
 
 	//! Storage type of an inlined column, VARIANT becomes a Parquet Variant BLOB where VARIANT is not native
 	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);
+	//! SQL expression encoding or decoding VARIANT leaves in an inlined column
+	static string InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
+	                                       idx_t depth = 0);
 	//! Formats inlined rows as comma separated cell literals in storage types
-	static vector<string> InlinedDataToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context,
-	                                       const ColumnDataCollection &data);
+	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
 };
 
 } // namespace duckdb
