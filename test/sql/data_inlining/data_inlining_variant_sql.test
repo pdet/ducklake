@@ -48,8 +48,15 @@ SELECT variant_typeof(s.v), variant_typeof(map_values(m)[1][1]) FROM ducklake.t 
 ----
 INT8	FLOAT
 
+# Row IDs stay attached to their values regardless of the session settings.
+statement ok
+SET default_order = 'DESC';
+
 statement ok
 UPDATE ducklake.t SET s = {'v': ('updated-' || id)::VARIANT} WHERE id % 2 = 1;
+
+statement ok
+RESET default_order;
 
 query II
 SELECT count(*), count(*) FILTER (WHERE s.v::VARCHAR != 'updated-' || id) FROM ducklake.t WHERE id % 2 = 1;

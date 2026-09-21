@@ -38,6 +38,7 @@ struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class QueryResult;
+class SQLStatement;
 class FileSystem;
 
 struct SnapshotAndStats;
@@ -374,7 +375,8 @@ public:
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
-	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
+	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
+	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts);
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.

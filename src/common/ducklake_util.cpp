@@ -1,10 +1,5 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
-#include "duckdb/main/connection.hpp"
-#include "duckdb/parser/parser.hpp"
-#include "duckdb/parser/query_node/select_node.hpp"
-#include "duckdb/parser/statement/select_statement.hpp"
-#include "duckdb/parser/tableref/column_data_ref.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -644,8 +639,14 @@ string DuckLakeUtil::InlinedVariantExpression(const string &expression, const Lo
 		return expression;
 	}
 	switch (type.id()) {
-	case LogicalTypeId::VARIANT:
-		return string(encode ? "variant_to_bytes(" : "variant_bytes_to_variant(") + expression + ")";
+	case LogicalTypeId::VARIANT: {
+		if (!encode) {
+			return "variant_bytes_to_variant(" + expression + ")";
+		}
+		auto parquet = "(CAST(variant_to_parquet_variant(" + expression + ") AS STRUCT(metadata BLOB, value BLOB)))";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + parquet + ".metadata || " + parquet +
+		       ".value END";
+	}
 	case LogicalTypeId::LIST: {
 		auto element = "__ducklake_element_" + to_string(depth);
 		return "list_transform(" + expression + ", lambda " + element + ": " +
@@ -683,37 +684,7 @@ vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, 
 	auto context = transaction.context.lock();
 	vector<string> rows;
 	rows.reserve(data.Count());
-	vector<string> projections;
-	bool needs_encoding = false;
-	for (idx_t i = 0; i < data.ColumnCount(); i++) {
-		auto &type = data.Types()[i];
-		auto column = "col" + to_string(i + 1);
-		if (GetInlinedStorageType(metadata_manager, type) != type) {
-			column = InlinedVariantExpression(column, type, true);
-			needs_encoding = true;
-		}
-		projections.push_back(std::move(column));
-	}
-	unique_ptr<MaterializedQueryResult> encoded;
-	optional_ptr<ColumnDataCollection> storage_data = data;
-	if (needs_encoding) {
-		auto select = make_uniq<SelectNode>();
-		select->select_list = Parser::ParseExpressionList(StringUtil::Join(projections, ", "));
-		select->from_table = make_uniq<ColumnDataRef>(data);
-		select->from_table->alias = "inlined_data";
-		// Row order determines inlined row IDs, including preserved IDs on updates.
-		auto order = make_uniq<OrderModifier>();
-		order->orders = Parser::ParseOrderList("row_number() OVER ()");
-		select->modifiers.push_back(std::move(order));
-		auto statement = make_uniq<SelectStatement>();
-		statement->node = std::move(select);
-		encoded = transaction.GetConnection().Query(std::move(statement));
-		if (encoded->HasError()) {
-			encoded->GetErrorObject().Throw("Failed to encode inlined VARIANT data: ");
-		}
-		storage_data = encoded->Collection();
-	}
-	for (auto &chunk : storage_data->Chunks()) {
+	for (auto &chunk : data.Chunks()) {
 		for (idx_t r = 0; r < chunk.size(); r++) {
 			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r));
 		}

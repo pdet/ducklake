@@ -279,6 +279,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 	return DuckLakeMetadataManager::Query(snapshot, query);
 }
 
+void PostgresMetadataManager::ClearCache() {
+	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to clear the PostgreSQL metadata cache: ");
+	}
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
