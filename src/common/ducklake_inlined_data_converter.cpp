@@ -87,8 +87,7 @@ static bool CastVariant(Vector &source, Vector &result, idx_t count, CastParamet
 		auto batch = MinValue<idx_t>(STANDARD_VECTOR_SIZE, count - offset);
 		Vector blobs_from_text(LogicalType::BLOB, count_t(batch));
 		if (!state.encode && source.GetType().id() == LogicalTypeId::VARCHAR) {
-			// A VARIANT nested inside a STRUCT/LIST/MAP is stored as escaped blob text inside the parent's text
-			// representation; parse the escapes before decoding the bytes
+			// Nested VARIANT values are stored as escaped blob text
 			Vector text(source.GetType());
 			text.Slice(source, offset, offset + batch);
 			VectorOperations::DefaultCast(text, blobs_from_text, batch, true);
@@ -132,10 +131,16 @@ DuckLakeInlinedDataConverter::DuckLakeInlinedDataConverter(ClientContext &contex
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
 	functions.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::VARIANT(),
 	                               BoundCastInfo(CastVariant, nullptr, InitVariantCast<false>));
-	// Postgres stores VARCHAR columns as BYTEA (they may hold null bytes) - read them back as-is
-	functions.RegisterCastFunction(LogicalType::BLOB, LogicalType::VARCHAR, DefaultCasts::ReinterpretCast);
+	// Postgres stores strings as BYTEA to preserve null bytes
 	GetCastFunctionInput input(context);
 	for (idx_t i = 0; i < source_types.size(); i++) {
+		if (source_types[i].id() == LogicalTypeId::BLOB && target_types[i].id() == LogicalTypeId::VARCHAR) {
+			// Postgres stores VARCHAR columns (including aliased ones such as JSON) as BYTEA because they may hold
+			// null bytes - read the bytes back as-is instead of escaping them
+			casts.push_back(BoundCastInfo(DefaultCasts::ReinterpretCast));
+			states.push_back(nullptr);
+			continue;
+		}
 		auto cast = functions.GetCastFunction(source_types[i], target_types[i], input);
 		unique_ptr<FunctionLocalState> state;
 		if (cast.HasInitLocalState()) {

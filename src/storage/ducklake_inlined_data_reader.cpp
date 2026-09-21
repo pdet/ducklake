@@ -68,7 +68,7 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 					continue;
 				}
 			}
-			// columns are read in their storage type - TransformInlinedData casts them to the table's types
+			// TransformInlinedData converts storage types to table types
 			columns_to_read.push_back(SQLIdentifier::ToString(columns[index].name.GetIdentifierName()));
 			expected_types.push_back(col.type);
 		}

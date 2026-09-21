@@ -290,7 +290,74 @@ string ToByteaHexLiteral(const string &raw_bytes) {
 	return "'\\x" + hex + "'";
 }
 
+static string ValueToSQLInternal(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
+
+//! The commit batch has {SNAPSHOT_ID}-style placeholders substituted by plain text replacement, which would also
+//! rewrite that pattern inside a data literal (e.g. a VARCHAR holding "{SNAPSHOT_ID}"). Split the opening brace out
+//! of every such pattern inside the single-quoted literals of a data cell so the placeholder can never match.
+//! Literals in struct key position ('key': value) must stay a single literal and are left as they are.
+static string SplitPlaceholders(const string &literal) {
+	string result;
+	for (idx_t i = 0; i < literal.size(); i++) {
+		if (literal[i] == '{') {
+			idx_t end = i + 1;
+			while (end < literal.size() && ((literal[end] >= 'A' && literal[end] <= 'Z') || literal[end] == '_')) {
+				end++;
+			}
+			if (end > i + 1 && end < literal.size() && literal[end] == '}') {
+				result += "' || chr(123) || '";
+				continue;
+			}
+		}
+		result += literal[i];
+	}
+	return result;
+}
+
+static string NeutralizePlaceholders(const string &sql) {
+	string result;
+	idx_t i = 0;
+	while (i < sql.size()) {
+		if (sql[i] != '\'') {
+			result += sql[i++];
+			continue;
+		}
+		// find the closing quote of the literal - '' is an escaped quote
+		idx_t end = i + 1;
+		while (end < sql.size()) {
+			if (sql[end] == '\'') {
+				if (end + 1 < sql.size() && sql[end + 1] == '\'') {
+					end += 2;
+					continue;
+				}
+				break;
+			}
+			end++;
+		}
+		if (end >= sql.size()) {
+			// unterminated - not something ValueToSQL produces; leave the rest untouched
+			result += sql.substr(i);
+			break;
+		}
+		auto literal = sql.substr(i, end - i + 1);
+		// a literal followed by a single ':' is a struct key, not a value
+		idx_t after = end + 1;
+		while (after < sql.size() && sql[after] == ' ') {
+			after++;
+		}
+		bool is_struct_key =
+		    after < sql.size() && sql[after] == ':' && (after + 1 >= sql.size() || sql[after + 1] != ':');
+		result += is_struct_key ? literal : SplitPlaceholders(literal);
+		i = end + 1;
+	}
+	return result;
+}
+
 string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
+	return NeutralizePlaceholders(ValueToSQLInternal(metadata_manager, context, val));
+}
+
+static string ValueToSQLInternal(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
 	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToString();
@@ -298,7 +365,7 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 	if (val.type().HasAlias()) {
 		// extension type: cast to string
 		auto str_val = val.CastAs(context, LogicalType::VARCHAR);
-		return ValueToSQL(metadata_manager, context, str_val);
+		return ValueToSQLInternal(metadata_manager, context, str_val);
 	}
 	string result;
 	switch (val.type().id()) {

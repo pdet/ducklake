@@ -1,0 +1,56 @@
+# name: test/sql/data_inlining/inlined_literal_placeholders.test
+# description: inlined data containing commit placeholders such as {SNAPSHOT_ID} (or JSON stored as BYTEA on postgres) round-trips unchanged
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_inlined_literal_placeholders', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.j(id INTEGER, j JSON, s VARCHAR, v VARIANT, n STRUCT(v VARIANT), b BLOB);
+
+statement ok
+INSERT INTO ducklake.j VALUES
+  (1, '{"k": "back\\slash é é"}', 'x{SNAPSHOT_ID}y', 'x{SNAPSHOT_ID}y', {'v': 'x{SNAPSHOT_ID}y'}, 'x{SNAPSHOT_ID}y'::BLOB),
+  (2, '{"a": 1}', 'plain', 'plain', {'v': 'plain'}, 'plain'::BLOB),
+  (3, '{"q": "it''s"}', 'it''s {NOT_A_PLACEHOLDER}', 'a{b}', {'v': '{x}'}, 'it''s'::BLOB),
+  (4, '{"{TAG}": "{TAG}"}', NULL, {'{TAG}': '{TAG}', 'k': ['{A}', '{b}']}, {'v': {'{TAG}': 1}}, NULL);
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'j')
+----
+0
+
+query IIIIII
+SELECT id, j, s, v, n, b FROM ducklake.j WHERE id < 4 ORDER BY id
+----
+1	{"k": "back\\slash é é"}	x{SNAPSHOT_ID}y	x{SNAPSHOT_ID}y	{'v': x{SNAPSHOT_ID}y}	x{SNAPSHOT_ID}y
+2	{"a": 1}	plain	plain	{'v': plain}	plain
+3	{"q": "it's"}	it's {NOT_A_PLACEHOLDER}	a{b}	{'v': {x}}	it\x27s
+
+# object keys that look like placeholders (key order depends on the storage format, so extract instead of rendering)
+query IIII
+SELECT j, variant_extract(v, '{TAG}')::VARCHAR, v.k[1]::VARCHAR, variant_extract(n.v, '{TAG}')::INTEGER FROM ducklake.j WHERE id = 4
+----
+{"{TAG}": "{TAG}"}	{TAG}	{A}	1
+
+# struct field names that look like placeholders stay valid SQL in key position
+statement ok
+CREATE TABLE ducklake.k(id INTEGER, s STRUCT("{TAG}" INTEGER, v VARCHAR));
+
+statement ok
+INSERT INTO ducklake.k VALUES (1, {'{TAG}': 7, 'v': 'x{SNAPSHOT_ID}y'});
+
+query II
+SELECT id, s FROM ducklake.k
+----
+1	{'{TAG}': 7, 'v': 'x{SNAPSHOT_ID}y'}

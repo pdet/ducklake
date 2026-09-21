@@ -102,7 +102,7 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	}
 	if (type.id() == LogicalTypeId::VARIANT && !TypeIsNativelySupported(type) &&
 	    !transaction.GetCatalog().SupportsV1_1Metadata()) {
-		// storing VARIANT as Parquet Variant blobs in the metadata catalog is a DuckLake 1.1 feature
+		// Parquet VARIANT storage requires DuckLake 1.1
 		return false;
 	}
 	return true;
