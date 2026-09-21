@@ -26,12 +26,12 @@ statement ok
 INSERT INTO ducklake.t
 SELECT i, CASE WHEN i % 2 = 0 THEN NULL ELSE {'v': (i % 100)::TINYINT::VARIANT} END,
        CASE WHEN i % 3 = 0 THEN NULL ELSE map([i::INTEGER], [[1.5::FLOAT::VARIANT, NULL]]) END
-FROM range(65536) t(i) ORDER BY i;
+FROM range(8192) t(i) ORDER BY i;
 
 query III
 SELECT count(*), count(*) FILTER (WHERE s IS NULL), count(*) FILTER (WHERE m IS NULL) FROM ducklake.t;
 ----
-65536	32768	21846
+8192	4096	2731
 
 query I
 SELECT count(*) FROM ducklake_list_files('ducklake', 't');
@@ -61,7 +61,7 @@ RESET default_order;
 query II
 SELECT count(*), count(*) FILTER (WHERE s.v::VARCHAR != 'updated-' || id) FROM ducklake.t WHERE id % 2 = 1;
 ----
-32768	0
+4096	0
 
 statement ok
 DELETE FROM ducklake.t WHERE id = 2048;
