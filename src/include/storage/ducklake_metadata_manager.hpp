@@ -491,6 +491,13 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
+	//! Best-effort re-run of the v1.1-dev1 migration on a plain attach of a dev catalog: dev schemas evolve in
+	//! place, so a catalog created by an older dev build picks up every later addition. Only the additions the
+	//! catalog is missing are applied, and failures (e.g. a metadata catalog this session cannot alter) are
+	//! logged instead of failing the attach - reattaching with AUTOMATIC_MIGRATION surfaces them.
+	virtual void MigrateV10Dev();
+	//! Whether the metadata schema has every column and table the v1.1-dev1 migration adds
+	virtual bool HasV1_1SchemaAdditions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
