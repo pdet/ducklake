@@ -1457,6 +1457,7 @@ void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
@@ -1470,7 +1471,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return GetSnapshot();
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
-		return metadata_manager->Execute(snapshot, query);
+		auto result = metadata_manager->Execute(snapshot, query);
+		for (auto &insert : inlined_inserts) {
+			if (result->HasError()) {
+				break;
+			}
+			// Table creation must finish before binding the inlined INSERT.
+			result = connection->Query(std::move(insert));
+		}
+		inlined_inserts.clear();
+		return result;
 	};
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return metadata_manager->IsRetryableCommitError(message);
@@ -1487,8 +1497,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (connection->context->transaction.HasActiveTransaction()) {
 			connection->Rollback();
 		}
+		// Rollback can remove tables that were cached while binding inlined INSERTs.
+		metadata_manager->ClearCache();
 	};
 	context.prepare_retry = [&]() {
+		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
 		snapshot.reset();
@@ -1513,7 +1526,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_inlined_data = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
-		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result);
+		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
+		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);

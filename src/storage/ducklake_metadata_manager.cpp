@@ -24,6 +24,10 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/statement/insert_statement.hpp"
+#include "duckdb/parser/tableref/column_data_ref.hpp"
+#include "duckdb/common/vector/vector_writer.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
@@ -97,6 +101,11 @@ bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 
 bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	if (type.id() == LogicalTypeId::GEOMETRY) {
+		return false;
+	}
+	if (type.id() == LogicalTypeId::VARIANT && !TypeIsNativelySupported(type) &&
+	    !transaction.GetCatalog().SupportsV1_1Metadata()) {
+		// Parquet VARIANT storage requires DuckLake 1.1
 		return false;
 	}
 	return true;
@@ -1371,11 +1380,6 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
 	}
 	return stats;
-}
-
-string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
-	// ANSI CAST(...) — same reason as elsewhere: SQLite rejects `::` casts.
-	return "CAST(" + column + " AS " + type.ToString() + ")";
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
@@ -2902,11 +2906,32 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	return column_type.ToString();
 }
 
+string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
+	auto &metadata_type = transaction.GetCatalog().MetadataType();
+	if (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
+	    metadata_type == "quack_scanner") {
+		return column;
+	}
+	auto expression = column;
+	if (type.id() == LogicalTypeId::VARCHAR && !TypeIsNativelySupported(type)) {
+		// Postgres stores VARCHAR and JSON as BYTEA.
+		expression = "decode(" + expression + ")";
+	}
+	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
+	expression = "CAST(" + expression + " AS " + storage_type.ToString() + ")";
+	if (storage_type != type) {
+		expression = DuckLakeUtil::InlinedVariantExpression(expression, type, false);
+	}
+	return expression;
+}
+
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
-		if (!column_type.IsNested()) {
-			return GetColumnTypeInternal(column_type);
+		// scalars including VARIANT get a backend type, nested types are stored as text
+		auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, column_type);
+		if (!storage_type.IsNested()) {
+			return GetColumnTypeInternal(storage_type);
 		}
 		return "VARCHAR";
 	}
@@ -3183,17 +3208,77 @@ string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &ne
 	return {};
 }
 
+static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transaction, const DuckLakeSnapshot &snapshot,
+                                                  const DuckLakeInlinedDataInfo &entry, const string &table_name) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto &catalog = transaction.GetCatalog();
+	auto context = transaction.context.lock();
+	auto &data = *entry.data->data;
+	auto types = data.Types();
+	types.push_back(LogicalType::BIGINT);
+	auto input = make_uniq<ColumnDataCollection>(*context, types);
+	DataChunk input_chunk;
+	input_chunk.Initialize(*context, types);
+	idx_t row_offset = 0;
+	idx_t next_row_id = entry.row_id_start;
+	for (auto &chunk : data.Chunks()) {
+		input_chunk.Reset();
+		for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+			input_chunk.data[c].Reference(chunk.data[c]);
+		}
+		{
+			auto writer = FlatVector::Writer<int64_t>(input_chunk.data.back(), chunk.size());
+			for (idx_t r = 0; r < chunk.size(); r++) {
+				auto row_id = entry.data->GetOutputRowId(row_offset++);
+				if (DuckLakeConstants::IsTransactionLocalRowId(row_id)) {
+					row_id = NumericCast<int64_t>(next_row_id++);
+				}
+				writer.WriteValue(row_id);
+			}
+		}
+		input_chunk.CheckCardinality(chunk.size());
+		input->Append(input_chunk);
+	}
+
+	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id), "NULL"};
+	for (idx_t c = 0; c < data.ColumnCount(); c++) {
+		auto &type = data.Types()[c];
+		auto expression = "col" + to_string(c + 1);
+		if (DuckLakeUtil::GetInlinedStorageType(metadata_manager, type) != type) {
+			expression = DuckLakeUtil::InlinedVariantExpression(expression, type, true);
+		}
+		if (!metadata_manager.TypeIsNativelySupported(type)) {
+			if (type.IsNested()) {
+				expression = "CAST(" + expression + " AS VARCHAR)";
+			} else if (type.id() == LogicalTypeId::VARCHAR) {
+				// PostgreSQL stores strings as BYTEA to preserve embedded NUL bytes.
+				expression = "encode(" + expression + ")";
+			}
+		}
+		projections.push_back(std::move(expression));
+	}
+	auto select = make_uniq<SelectNode>();
+	select->select_list = Parser::ParseExpressionList(StringUtil::Join(projections, ", "));
+	select->from_table = make_uniq<ColumnDataRef>(std::move(input));
+	select->from_table->alias = "inlined_data";
+	auto statement = make_uniq<InsertStatement>();
+	statement->node->SetQualifiedName(Identifier(catalog.MetadataDatabaseName()), catalog.MetadataSchemaName(),
+	                                  Identifier(table_name));
+	statement->node->select_statement = make_uniq<SelectStatement>();
+	statement->node->select_statement->node = std::move(select);
+	return std::move(statement);
+}
+
 string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
                                                     const vector<DuckLakeInlinedDataInfo> &new_data,
                                                     const vector<DuckLakeTableInfo> &new_tables,
-                                                    const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+                                                    const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
+                                                    vector<unique_ptr<SQLStatement>> &inlined_inserts) {
 	string batch_query;
 	if (new_data.empty()) {
 		return batch_query;
 	}
 
-	auto context_ptr = transaction.context.lock();
-	auto &context = *context_ptr;
 	for (auto &entry : new_data) {
 		string inlined_table_name;
 		for (auto &inlined_table : new_inlined_data_tables_result) {
@@ -3250,15 +3335,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			batch_query += inlined_table_queries;
 		}
 
+		bool needs_encoding = false;
+		for (auto &type : entry.data->data->Types()) {
+			needs_encoding |= DuckLakeUtil::GetInlinedStorageType(*this, type) != type;
+		}
+		if (needs_encoding) {
+			inlined_inserts.push_back(InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name));
+			continue;
+		}
 		// Build one cell list per row, then defer formatting to the shared helper.
 		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
-		vector<string> cells_per_row;
-		for (auto &chunk : entry.data->data->Chunks()) {
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				cells_per_row.push_back(DuckLakeUtil::ChunkRowToSQL(*this, context, chunk, r));
-			}
-		}
+		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data);
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
 		                                       has_preserved_row_ids ? &entry.data->row_ids : nullptr, cells_per_row);
 	}
@@ -3562,17 +3650,26 @@ void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, con
 }
 
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
-                                                                              const vector<LogicalType> &,
+                                                                              const vector<LogicalType> &expected_types,
                                                                               const string &inlined_table_name) {
 	CheckInlinedDataReadError(result, inlined_table_name);
 
 	auto context = transaction.context.lock();
-	auto data = make_uniq<ColumnDataCollection>(*context, result.GetTypes());
-	while (true) {
-		auto chunk = result.Fetch();
-		if (!chunk) {
-			break;
+	auto &result_types = result.GetTypes();
+	if (result_types.size() != expected_types.size()) {
+		throw InvalidInputException("Failed to read inlined data from DuckLake table \"%s\": expected %llu columns "
+		                            "but read %llu",
+		                            inlined_table_name, expected_types.size(), result_types.size());
+	}
+	for (idx_t i = 0; i < expected_types.size(); i++) {
+		if (result_types[i] != expected_types[i]) {
+			throw InvalidInputException("Failed to read inlined data from DuckLake table \"%s\": expected %s for "
+			                            "column %llu but read %s",
+			                            inlined_table_name, expected_types[i], i + 1, result_types[i]);
 		}
+	}
+	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
+	while (auto chunk = result.Fetch()) {
 		data->Append(*chunk);
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();

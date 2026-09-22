@@ -38,6 +38,7 @@ struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class QueryResult;
+class SQLStatement;
 class FileSystem;
 
 struct SnapshotAndStats;
@@ -240,7 +241,7 @@ public:
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
-	virtual string CastColumnToTarget(const string &column, const LogicalType &type);
+	string CastColumnToTarget(const string &column, const LogicalType &type);
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -374,7 +375,8 @@ public:
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
-	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result);
+	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
+	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts);
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.
@@ -460,9 +462,8 @@ public:
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
-	virtual shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                             const vector<LogicalType> &expected_types,
-	                                                             const string &inlined_table_name);
+	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
+	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! We delete at the flush
