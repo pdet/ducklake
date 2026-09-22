@@ -449,7 +449,6 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	}
 }
 
-// keep in sync with HasV1_1SchemaAdditions
 static constexpr const char *V1_1_DEV1_MIGRATION_QUERY = R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
@@ -469,30 +468,16 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
-bool DuckLakeMetadataManager::HasV1_1SchemaAdditions() {
-	// a single probe that binds every column and table the v1.1-dev1 migration adds - fails when any is missing
-	auto probe = Query(R"(
-SELECT 1 FROM
-	(SELECT row_group_count FROM {METADATA_CATALOG}.ducklake_data_file LIMIT 0) data_file,
-	(SELECT row_group_count FROM {METADATA_CATALOG}.ducklake_delete_file LIMIT 0) delete_file,
-	(SELECT min_is_exact, max_is_exact FROM {METADATA_CATALOG}.ducklake_file_column_stats LIMIT 0) file_stats,
-	(SELECT min_is_exact, max_is_exact FROM {METADATA_CATALOG}.ducklake_table_column_stats LIMIT 0) table_stats,
-	(SELECT view_id FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0) view_tags)");
-	return !probe->HasError();
-}
-
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
-	// the schema additions and the inlined column rename are independent - a failure of one must not skip the other
-	if (!HasV1_1SchemaAdditions()) {
-		try {
-			ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
-		} catch (std::exception &ex) {
-			ErrorData error(ex);
-			DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
-			                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
-			                                          error.RawMessage()));
-		}
+	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
+	try {
+		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
+		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
+		                                          error.RawMessage()));
 	}
 	try {
 		MigrateInlinedColumnNames();
@@ -517,9 +502,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
 	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
 	                                          {old_names.end_snapshot, new_names.end_snapshot}};
-	// probe every inlined table for the renamed columns in one statement - the common case of an already
-	// migrated catalog then costs a single round trip instead of one per inlined table
-	// (inlined table name, user table name) - a query result can only be iterated once
+	// a query result can only be iterated once, so collect the (inlined table name, user table name) pairs
 	vector<pair<string, string>> inlined_tables;
 	string renamed_probe;
 	for (auto &row : *tables) {
@@ -536,6 +519,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (inlined_tables.empty()) {
 		return;
 	}
+	// probe all inlined tables in one statement so an already migrated catalog costs a single round trip
 	auto probe_all = Query(renamed_probe);
 	if (!probe_all->HasError()) {
 		return;
