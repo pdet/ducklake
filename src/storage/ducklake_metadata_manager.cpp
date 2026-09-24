@@ -3619,6 +3619,12 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	return result;
 }
 
+bool DuckLakeMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	return transaction.GetConnection().TableInfo(Identifier(catalog.MetadataDatabaseName()),
+	                                             catalog.MetadataSchemaName(), Identifier(table_name)) != nullptr;
+}
+
 string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                             bool create_if_not_exists) {
 	// The table name is always deterministic
@@ -3632,40 +3638,34 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// Check catalog-level cache (persists across transactions)
 	auto &catalog = transaction.GetCatalog();
 	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
-	if (cache_result == InlinedDeletionCacheResult::EXISTS) {
-		return table_name; // known to exist (committed)
-	}
 	if (cache_result == InlinedDeletionCacheResult::DOES_NOT_EXIST && !create_if_not_exists) {
 		return string(); // known to not exist
 	}
-
-	if (create_if_not_exists) {
-		auto create_query = StringUtil::Format(
-		    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
-		    table_name);
-		auto create_result = Execute(snapshot, create_query);
-		if (create_result->HasError()) {
-			create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
+	if (!create_if_not_exists || cache_result == InlinedDeletionCacheResult::EXISTS) {
+		// A committed table may not be visible in this transaction's catalog snapshot.
+		if (InlinedDeletionTableExists(table_name)) {
+			delete_inlined_table_cache.insert(table_id.index);
+			catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
+			return table_name;
 		}
-		// Only cache per-transaction — the CREATE is transactional and may be rolled back
-		delete_inlined_table_cache.insert(table_id.index);
-		ClearCache();
-		return table_name;
+		if (!create_if_not_exists) {
+			catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
+			return string();
+		}
 	}
 
-	// Read path: table visibility implies it was committed, safe to cache at catalog level
-	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
-	auto result = Query(snapshot, query);
-	// TODO: Using the error state to check for existence here is fragile.
-	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
-	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
-	if (!result->HasError()) {
-		delete_inlined_table_cache.insert(table_id.index);
-		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
-		return table_name;
+	D_ASSERT(create_if_not_exists);
+	auto create_query = StringUtil::Format(
+	    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
+	    table_name);
+	auto create_result = Execute(snapshot, create_query);
+	if (create_result->HasError()) {
+		create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
 	}
-	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
-	return string();
+	// Only cache per-transaction — the CREATE is transactional and may be rolled back
+	delete_inlined_table_cache.insert(table_id.index);
+	ClearCache();
+	return table_name;
 }
 
 void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name) {
