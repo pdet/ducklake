@@ -100,6 +100,9 @@ public:
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 
+	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
+	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);
+
 	//! Storage type of an inlined column, VARIANT becomes a Parquet Variant BLOB where VARIANT is not native
 	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);
 	//! SQL expression encoding or decoding VARIANT leaves in an inlined column

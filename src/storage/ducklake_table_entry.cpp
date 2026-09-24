@@ -29,9 +29,13 @@
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "storage/ducklake_partition_data.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
@@ -1398,6 +1402,52 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+static Value EvaluateTableOptionValue(ClientContext &context, const string &option, const ParsedExpression &expr) {
+	auto binder = Binder::CreateBinder(context);
+	ConstantBinder constant_binder(*binder, context, "ALTER TABLE SET");
+	auto expr_copy = expr.Copy();
+	auto bound_expr = constant_binder.Bind(expr_copy);
+	if (bound_expr->HasParameter()) {
+		throw NotImplementedException("ALTER TABLE SET option \"%s\" cannot have parameters", option);
+	}
+	return ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        SetTableOptionsInfo &info) {
+	if (duckdb::IsTransactionLocal(GetTableId())) {
+		throw NotImplementedException("Settings cannot be set for transaction-local tables");
+	}
+	auto &ducklake_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	vector<DuckLakeConfigOption> options;
+	for (auto &entry : info.table_options) {
+		auto option = StringUtil::Lower(entry.first);
+		Value value;
+		if (entry.second) {
+			value = EvaluateTableOptionValue(context, entry.first, *entry.second);
+		}
+		if (value.IsNull()) {
+			throw BinderException("ALTER TABLE SET option \"%s\" requires a value", entry.first);
+		}
+		DuckLakeConfigOption config_option;
+		config_option.option.key = option;
+		config_option.option.value = DuckLakeUtil::ParseConfigOptionValue(context, option, value);
+		DuckLakeUtil::ValidateConfigOptionScope(option, false, true);
+		if (option == "skip_stats_columns") {
+			config_option.option.value = ResolveSkippedStatsColumns(*this, value);
+		} else if (option == "data_inlining_row_limit" && std::stoull(config_option.option.value) > 0) {
+			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog.SupportsV1_1Metadata(),
+			                                        name.GetIdentifierName());
+		}
+		config_option.table_id = GetTableId();
+		options.push_back(std::move(config_option));
+	}
+	for (auto &option : options) {
+		transaction.SetConfigOption(option);
+	}
+	return nullptr;
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
                                                    AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
@@ -1408,7 +1458,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		    info.alter_table_type != AlterTableType::ALTER_COLUMN_TYPE &&
 		    info.alter_table_type != AlterTableType::SET_NOT_NULL &&
 		    info.alter_table_type != AlterTableType::DROP_NOT_NULL &&
-		    info.alter_table_type != AlterTableType::SET_DEFAULT) {
+		    info.alter_table_type != AlterTableType::SET_DEFAULT &&
+		    info.alter_table_type != AlterTableType::SET_TABLE_OPTIONS) {
 			throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported %s",
 			                              EnumUtil::ToString(info.alter_table_type));
 		}
@@ -1440,6 +1491,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		return AlterTable(transaction, info.Cast<SetDefaultInfo>());
 	case AlterTableType::SET_SORTED_BY:
 		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
+	case AlterTableType::SET_TABLE_OPTIONS:
+		return AlterTable(context, transaction, info.Cast<SetTableOptionsInfo>());
 	default:
 		throw BinderException("Unsupported ALTER TABLE type in DuckLake");
 	}
@@ -1478,6 +1531,70 @@ optional_ptr<const DuckLakeFieldId> FindStatsUnsupportedField(const DuckLakeFiel
 		}
 	}
 	return nullptr;
+}
+
+//! GEOMETRY and VARIANT bounds cannot be skipped
+static void ValidateStatsCanBeSkipped(const DuckLakeTableEntry &table, const DuckLakeFieldId &field_id) {
+	auto unsupported = FindStatsUnsupportedField(field_id);
+	if (unsupported) {
+		if (RefersToSameObject(*unsupported, field_id)) {
+			throw NotImplementedException("Statistics cannot be skipped for %s columns", field_id.Type().ToString());
+		}
+		throw NotImplementedException(
+		    "Statistics cannot be skipped for column \"%s\" - it contains a %s field (\"%s\")", field_id.Name(),
+		    unsupported->Type().ToString(), unsupported->Name());
+	}
+	auto partition_data = table.GetPartitionData();
+	if (!partition_data) {
+		return;
+	}
+	for (auto &field : partition_data->fields) {
+		if (field.field_id == field_id.GetFieldIndex()) {
+			throw InvalidInputException("Statistics cannot be skipped for partition column \"%s\"", field_id.Name());
+		}
+	}
+}
+
+//! Stores field ids because they survive renames
+string DuckLakeTableEntry::ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val) {
+	// NULL, '' and [] all clear the option
+	if (val.IsNull()) {
+		return string();
+	}
+	vector<string> column_names;
+	if (val.type().id() == LogicalTypeId::LIST) {
+		auto &children = ListValue::GetChildren(val);
+		column_names.reserve(children.size());
+		for (auto &child : children) {
+			if (!child.IsNull()) {
+				column_names.push_back(child.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>());
+			}
+		}
+	} else {
+		auto column_name = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		if (!column_name.empty()) {
+			column_names.push_back(std::move(column_name));
+		}
+	}
+	vector<string> field_ids;
+	field_ids.reserve(column_names.size());
+	unordered_set<idx_t> seen;
+	seen.reserve(column_names.size());
+	for (auto &column_name : column_names) {
+		// lets a VARIANT root resolve instead of throwing
+		optional_idx name_offset;
+		auto field_id = table.TryGetFieldId(StringsToIdentifiers({column_name}), &name_offset);
+		if (!field_id) {
+			throw BinderException("Column \"%s\" does not exist in table \"%s\"", column_name,
+			                      table.name.GetIdentifierName());
+		}
+		ValidateStatsCanBeSkipped(table, *field_id);
+		auto field_index = field_id->GetFieldIndex().index;
+		if (seen.insert(field_index).second) {
+			field_ids.push_back(to_string(field_index));
+		}
+	}
+	return StringUtil::Join(field_ids, ",");
 }
 
 static void AddFieldAndChildren(const DuckLakeFieldId &field_id, unordered_set<idx_t> &result) {

@@ -25,6 +25,7 @@ namespace duckdb {
 struct AlterTableInfo;
 struct DuckLakeColumnInfo;
 struct SetPartitionedByInfo;
+struct SetTableOptionsInfo;
 struct SetCommentInfo;
 class DuckLakeTransaction;
 
@@ -145,6 +146,8 @@ public:
 
 	//! Validate that every sort-expression column reference exists in the column list.
 	static void ValidateSortExpressionColumns(const ColumnList &columns, const vector<OrderByNode> &orders);
+	//! Resolves skip_stats_columns names to the stored field ids
+	static string ResolveSkippedStatsColumns(DuckLakeTableEntry &table, const Value &val);
 
 	//! Build a DuckLakePartition from raw partition expressions (allocates a transaction-local id).
 	static unique_ptr<DuckLakePartition> BuildPartitionData(DuckLakeTransaction &transaction, const ColumnList &columns,
@@ -172,6 +175,8 @@ private:
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetSortedByInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+	                                    SetTableOptionsInfo &info);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);

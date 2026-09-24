@@ -24,6 +24,8 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/common/types/interval.hpp"
 
 #include <cmath>
 
@@ -708,6 +710,95 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		to.config.user_settings.SetUserSetting(setting_index, value);
+	}
+}
+
+string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val) {
+	if (option == "parquet_compression") {
+		auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
+		bool found = false;
+		for (auto &algorithm : supported_algorithms) {
+			if (StringUtil::CIEquals(algorithm, codec)) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			auto supported = StringUtil::Join(supported_algorithms, ", ");
+			throw NotImplementedException("Unsupported codec \"%s\" for parquet, supported options are %s", codec,
+			                              supported);
+		}
+		return StringUtil::Lower(codec);
+	}
+	if (option == "parquet_version") {
+		auto version = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+		if (version != 1 && version != 2) {
+			throw NotImplementedException("Only Parquet version 1 and 2 are supported");
+		}
+		return "V" + to_string(version);
+	}
+	if (option == "parquet_compression_level" || option == "data_inlining_row_limit") {
+		return to_string(val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>());
+	}
+	if (option == "parquet_row_group_size") {
+		auto row_group_size = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+		if (row_group_size == 0) {
+			throw NotImplementedException("Row group size cannot be 0");
+		}
+		return to_string(row_group_size);
+	}
+	if (option == "parquet_row_group_size_bytes") {
+		auto row_group_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
+		if (row_group_size_bytes == 0) {
+			throw NotImplementedException("Row group size bytes cannot be 0");
+		}
+		return to_string(row_group_size_bytes);
+	}
+	if (option == "target_file_size") {
+		return to_string(DBConfig::ParseMemoryLimit(val.ToString()));
+	}
+	if (option == "require_commit_message" || option == "hive_file_pattern") {
+		return BoolLiteral(val.GetValue<bool>());
+	}
+	if (option == "rewrite_delete_threshold") {
+		double threshold = val.GetValue<double>();
+		if (threshold < 0 || threshold > 1) {
+			throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
+		}
+		return to_string(threshold);
+	}
+	if (option == "delete_older_than" || option == "expire_older_than") {
+		auto interval_value = val.ToString();
+		if (!interval_value.empty()) {
+			interval_t result;
+			if (!Interval::FromString(interval_value, result)) {
+				throw BinderException("%s is not a valid interval value.", option);
+			}
+		}
+		return interval_value;
+	}
+	if (option == "auto_compact" || option == "per_thread_output" || option == "write_deletion_vectors" ||
+	    option == "sort_on_insert") {
+		if (option == "auto_compact" && val.IsNull()) {
+			throw BinderException("The %s option can't be null.", option.c_str());
+		}
+		return BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
+	}
+	if (option == "skip_stats_columns") {
+		// resolved against the table by the caller
+		return string();
+	}
+	throw NotImplementedException("Unsupported option %s", option);
+}
+
+void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {
+	if ((has_schema || has_table) && (option == "expire_older_than" || option == "delete_older_than")) {
+		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
+		                            option);
+	}
+	if (option == "skip_stats_columns" && !has_table) {
+		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
 	}
 }
 
