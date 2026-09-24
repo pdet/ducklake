@@ -370,9 +370,8 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 		return cached;
 	}
 	auto schema = LoadSchemaForSnapshot(transaction, snapshot);
-	auto entry = make_shared_ptr<DuckLakeSchemaCacheEntry>(std::move(schema));
-	cache.Put(std::move(key), entry);
-	return entry;
+	auto schema_shared = shared_ptr<DuckLakeCatalogSet>(schema.release());
+	return cache.GetOrCreate<DuckLakeSchemaCacheEntry>(std::move(key), std::move(schema_shared));
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {

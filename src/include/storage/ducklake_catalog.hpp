@@ -71,6 +71,11 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	    : catalog_set(std::move(*catalog_set_p)) {
 	}
 
+	// contents of the shared_ptr target are moved out
+	explicit DuckLakeSchemaCacheEntry(shared_ptr<DuckLakeCatalogSet> catalog_set_p)
+	    : catalog_set(std::move(*catalog_set_p)) {
+	}
+
 	DuckLakeCatalogSet catalog_set;
 
 	static string ObjectType() {
