@@ -28,6 +28,9 @@
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
@@ -1356,6 +1359,50 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
+static Value EvaluateTableOptionValue(ClientContext &context, const string &option, const ParsedExpression &expr) {
+	auto binder = Binder::CreateBinder(context);
+	ConstantBinder constant_binder(*binder, context, "ALTER TABLE SET");
+	auto expr_copy = expr.Copy();
+	auto bound_expr = constant_binder.Bind(expr_copy);
+	if (bound_expr->HasParameter()) {
+		throw NotImplementedException("ALTER TABLE SET option \"%s\" cannot have parameters", option);
+	}
+	return ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        SetTableOptionsInfo &info) {
+	if (duckdb::IsTransactionLocal(GetTableId())) {
+		throw NotImplementedException("Settings cannot be set for transaction-local tables");
+	}
+	auto &ducklake_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	vector<DuckLakeConfigOption> options;
+	for (auto &entry : info.table_options) {
+		auto option = StringUtil::Lower(entry.first);
+		Value value;
+		if (entry.second) {
+			value = EvaluateTableOptionValue(context, entry.first, *entry.second);
+		}
+		if (value.IsNull()) {
+			throw BinderException("ALTER TABLE SET option \"%s\" requires a value", entry.first);
+		}
+		DuckLakeConfigOption config_option;
+		config_option.option.key = option;
+		config_option.option.value = DuckLakeUtil::ParseConfigOptionValue(context, option, value);
+		DuckLakeUtil::ValidateConfigOptionScope(option, false);
+		if (option == "data_inlining_row_limit" && std::stoull(config_option.option.value) > 0) {
+			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog.SupportsV1_1Metadata(),
+			                                        name.GetIdentifierName());
+		}
+		config_option.table_id = GetTableId();
+		options.push_back(std::move(config_option));
+	}
+	for (auto &option : options) {
+		transaction.SetConfigOption(option);
+	}
+	return nullptr;
+}
+
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
                                                    AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
@@ -1366,7 +1413,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		    info.alter_table_type != AlterTableType::ALTER_COLUMN_TYPE &&
 		    info.alter_table_type != AlterTableType::SET_NOT_NULL &&
 		    info.alter_table_type != AlterTableType::DROP_NOT_NULL &&
-		    info.alter_table_type != AlterTableType::SET_DEFAULT) {
+		    info.alter_table_type != AlterTableType::SET_DEFAULT &&
+		    info.alter_table_type != AlterTableType::SET_TABLE_OPTIONS) {
 			throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported %s",
 			                              EnumUtil::ToString(info.alter_table_type));
 		}
@@ -1398,6 +1446,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 		return AlterTable(transaction, info.Cast<SetDefaultInfo>());
 	case AlterTableType::SET_SORTED_BY:
 		return AlterTable(transaction, info.Cast<SetSortedByInfo>());
+	case AlterTableType::SET_TABLE_OPTIONS:
+		return AlterTable(context, transaction, info.Cast<SetTableOptionsInfo>());
 	default:
 		throw BinderException("Unsupported ALTER TABLE type in DuckLake");
 	}

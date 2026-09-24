@@ -80,6 +80,9 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+
+	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
+	static void ValidateConfigOptionScope(const string &option, bool global_scope);
 };
 
 } // namespace duckdb
