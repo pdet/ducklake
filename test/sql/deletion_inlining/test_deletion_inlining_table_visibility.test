@@ -44,7 +44,18 @@ SELECT COUNT(*), SUM(a) FROM ducklake.t
 statement ok con2
 COMMIT
 
-query II
+query II con2
 SELECT COUNT(*), SUM(a) FROM ducklake.t
 ----
 45	1215
+
+# A new transaction on the same connection can use the existing deletion table.
+query I con2
+DELETE FROM ducklake.t WHERE a >= 5 AND a < 10
+----
+5
+
+query II
+SELECT COUNT(*), SUM(a) FROM ducklake.t
+----
+40	1180
