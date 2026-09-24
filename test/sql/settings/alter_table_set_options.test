@@ -226,6 +226,39 @@ SELECT value FROM ducklake.options() WHERE option_name = 'parquet_compression' A
 ----
 zstd
 
+# skip_stats_columns resolves names against the table
+statement ok
+CREATE TABLE ducklake.t_skip(id INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = ['s', 'd', 's'])
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+2,3
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = 'd')
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+3
+
+statement error
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = 'nonexistent')
+----
+does not exist
+
+statement ok
+ALTER TABLE ducklake.t_skip SET (skip_stats_columns = [])
+
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'skip_stats_columns' AND scope_entry = 'main.t_skip'
+----
+(empty)
+
 # Tables created in the current transaction cannot change settings
 statement ok
 BEGIN

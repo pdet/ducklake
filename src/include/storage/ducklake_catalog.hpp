@@ -33,8 +33,11 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
+struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
+struct BoundCreateTableInfo;
+class ColumnList;
 class LogicalGet;
 
 //! Per-table stats cache entry, keyed by <next_file_id, table_id>.
@@ -132,13 +135,22 @@ public:
 	idx_t DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index) const;
 	//! Returns the inlining limit (0 if the table is not eligible)
 	idx_t GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table);
+	//! Inlining limit for a table that does not exist yet (CTAS), given its scope and columns
+	idx_t GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
+	                       const ColumnList &columns);
+	//! Whether inserts in this scope sort their data according to SORTED BY (the sort_on_insert option)
+	bool SortOnInsert(SchemaIndex schema_id, TableIndex table_id) const;
 	idx_t GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id) const;
 	idx_t GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const;
 	string &Separator() {
 		return separator;
 	}
-	void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Sets a config option, returning what it held before so a rollback can put it back
+	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id) const;
+	//! Look up a config option in the table scope only, without falling back to schema or global
+	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
 	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
 	                              TableIndex table_id) const;
@@ -155,6 +167,8 @@ public:
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
 

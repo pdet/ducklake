@@ -98,7 +98,7 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	if (table_entry != input.named_parameters.end() && !table_entry->second.IsNull()) {
 		table = StringValue::Get(table_entry->second);
 	}
-	DuckLakeUtil::ValidateConfigOptionScope(option, table.empty() && schema.empty());
+	DuckLakeUtil::ValidateConfigOptionScope(option, !schema.empty(), !table.empty());
 	if (!table.empty()) {
 		auto table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(
 		    context, QualifiedName(catalog.GetName(), Identifier(schema), Identifier(table)),
@@ -107,6 +107,9 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 		config_option.table_id = ducklake_table.GetTableId();
 		if (IsTransactionLocal(config_option.table_id)) {
 			throw NotImplementedException("Settings cannot be set for transaction-local tables");
+		}
+		if (option == "skip_stats_columns") {
+			value = DuckLakeTableEntry::ResolveSkippedStatsColumns(ducklake_table, val);
 		}
 	} else if (!schema.empty()) {
 		auto schema_catalog_entry = catalog.GetSchema(context, Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);

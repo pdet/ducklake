@@ -768,23 +768,38 @@ const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransactio
 void DuckLakeTransaction::Start() {
 }
 
+void DuckLakeTransaction::UndoConfigOptions() {
+	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+		ducklake_catalog.UndoConfigOption(*it);
+	}
+	config_option_undo.clear();
+}
+
 void DuckLakeTransaction::Commit() {
-	if (ChangesMade()) {
-		FlushChanges();
-	} else if (connection) {
-		connection->Commit();
-		if (!state->flushed_inlined_tables.empty()) {
-			DropEmptySupersededInlinedTablesClientSide();
+	try {
+		if (ChangesMade()) {
+			FlushChanges();
+		} else if (connection) {
+			connection->Commit();
+			if (!state->flushed_inlined_tables.empty()) {
+				DropEmptySupersededInlinedTablesClientSide();
+			}
 		}
+	} catch (...) {
+		// a failed commit never reaches Rollback - the transaction manager only reports the error
+		UndoConfigOptions();
+		throw;
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
+	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
+	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
 		connection->Rollback();
@@ -825,6 +840,9 @@ Connection &DuckLakeTransaction::GetConnection() {
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
 			connection->Query("SET pg_experimental_filter_pushdown=false");
+		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
+			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
+			connection->Query("SET sqlite_disable_multithreaded_scans=true");
 		}
 		connection->BeginTransaction();
 		connection->Query("SET current_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE'");
@@ -1439,6 +1457,7 @@ void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
@@ -1452,7 +1471,19 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return GetSnapshot();
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
-		return metadata_manager->Execute(snapshot, query);
+		auto result = metadata_manager->Execute(snapshot, query);
+		for (auto &insert : inlined_inserts) {
+			if (result->HasError()) {
+				break;
+			}
+			// Table creation must finish before binding the inlined INSERT.
+			result = connection->Query(std::move(insert));
+		}
+		inlined_inserts.clear();
+		return result;
+	};
+	context.is_retryable_metadata_error = [&](const string &message) {
+		return metadata_manager->IsRetryableCommitError(message);
 	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
@@ -1466,8 +1497,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (connection->context->transaction.HasActiveTransaction()) {
 			connection->Rollback();
 		}
+		// Rollback can remove tables that were cached while binding inlined INSERTs.
+		metadata_manager->ClearCache();
 	};
 	context.prepare_retry = [&]() {
+		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
 		snapshot.reset();
@@ -1492,7 +1526,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_inlined_data = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
-		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result);
+		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
+		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
@@ -1560,6 +1595,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
+	context.report_post_commit_error = [&](const string &message) {
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
+	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
@@ -1568,8 +1606,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// write the config option to the metadata
 	metadata_manager->SetConfigOption(option);
-	// set the option in the catalog
-	ducklake_catalog.SetConfigOption(option);
+	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
+	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

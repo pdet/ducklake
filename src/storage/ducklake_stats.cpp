@@ -110,6 +110,17 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
+void DuckLakeColumnStats::ClearBounds() {
+	min.clear();
+	max.clear();
+	has_min = false;
+	has_max = false;
+	min_is_exact = false;
+	max_is_exact = false;
+	contains_nan = false;
+	has_contains_nan = false;
+}
+
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
 	// bound strings reread exactly at wider types
 	if (source.IsIntegral() && target.IsIntegral()) {
@@ -376,6 +387,13 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return CreateGeometryStats();
 	case LogicalTypeId::VARIANT:
 		return CreateVariantStats();
+	case LogicalTypeId::SQLNULL: {
+		auto stats = BaseStatistics::CreateEmpty(type);
+		if (!has_null_count || null_count > 0) {
+			stats.SetHasNullFast();
+		}
+		return stats.ToUnique();
+	}
 	default:
 		return nullptr;
 	}

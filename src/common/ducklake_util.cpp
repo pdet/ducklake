@@ -1,4 +1,8 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#include "storage/ducklake_transaction.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -7,10 +11,17 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
-#include "duckdb/function/scalar/variant_utils.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/config.hpp"
@@ -170,18 +181,17 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 	case LogicalTypeId::ENUM:
 		return EscapeVarcharForSQL(value.ToString());
 	case LogicalTypeId::VARIANT: {
-		Vector tmp(value, count_t(1));
-		RecursiveUnifiedVectorFormat format;
-		Vector::RecursiveToUnifiedFormat(tmp, format);
-		UnifiedVariantVectorData vector_data(format);
-		auto val = VariantUtils::ConvertVariantToValue(vector_data, 0, 0);
 		if (!use_native_type) {
-			throw NotImplementedException("Variant types cannot be inlined in this catalog type yet");
+			throw InternalException("VARIANT values must be encoded as Parquet Variant blobs before being "
+			                        "inlined in this catalog type");
 		}
-		// variant can just be stored as a variant
-		return ToSQLString(metadata_manager, val);
+		return value.ToSQLString();
 	}
 	case LogicalTypeId::STRUCT: {
+		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
+			// Stored as VARCHAR text - use ToString() which produces parseable format
+			return value.ToString();
+		}
 		auto &child_types = StructType::GetChildTypes(value.type());
 		auto &struct_values = StructValue::GetChildren(value);
 		if (struct_values.empty()) {
@@ -362,6 +372,111 @@ shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const T
 	return nullptr;
 }
 
+unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {
+	vector<unique_ptr<Expression>> conjuncts;
+	conjuncts.push_back(std::move(left));
+	conjuncts.push_back(std::move(right));
+	LogicalFilter::SplitPredicates(conjuncts);
+
+	vector<unique_ptr<Expression>> merged;
+	for (auto &conjunct : conjuncts) {
+		bool is_duplicate = false;
+		for (auto &existing : merged) {
+			if (existing->Equals(*conjunct)) {
+				is_duplicate = true;
+				break;
+			}
+		}
+		if (!is_duplicate) {
+			merged.push_back(std::move(conjunct));
+		}
+	}
+	if (merged.size() == 1) {
+		return std::move(merged[0]);
+	}
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	for (auto &conjunct : merged) {
+		result->GetChildrenMutable().push_back(std::move(conjunct));
+	}
+	return std::move(result);
+}
+
+//! Resolve which child of the input struct a struct_extract reads, rejecting a position the type cannot hold
+static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	if (func.GetChildren().empty()) {
+		return false;
+	}
+	// stats are stored against a named field, so an unnamed struct (TUPLE) has nothing to resolve against
+	auto &input_type = func.GetChildren()[0]->GetReturnType();
+	if (input_type.id() != LogicalTypeId::STRUCT) {
+		return false;
+	}
+	if (!TryGetStructExtractChildIndex(func, position)) {
+		return false;
+	}
+	return position < StructType::GetChildCount(input_type);
+}
+
+bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
+	idx_t position;
+	return TryResolveStructExtractChild(expr, position);
+}
+
+//! Walk to the sub-expressions a filter reads a column through, without descending into them
+static void FindFilterSubject(const Expression &expr, optional_ptr<const Expression> &subject, bool &conflict) {
+	if (conflict) {
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
+		if (subject && !subject->Equals(expr)) {
+			conflict = true;
+		} else {
+			subject = expr;
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { FindFilterSubject(child, subject, conflict); });
+}
+
+optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &expr) {
+	optional_ptr<const Expression> subject;
+	bool conflict = false;
+	FindFilterSubject(expr, subject, conflict);
+	return conflict ? nullptr : subject;
+}
+
+const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, vector<string> &path) {
+	reference<const Expression> current = subject;
+	idx_t position;
+	while (TryResolveStructExtractChild(current.get(), position)) {
+		auto &func = current.get().Cast<BoundFunctionExpression>();
+		auto &input_type = func.GetChildren()[0]->GetReturnType();
+		// the key is matched case-insensitively at bind time, so take the name from the struct type
+		path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
+		current = *func.GetChildren()[0];
+	}
+	return current.get();
+}
+
+//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
+unique_ptr<Expression> DuckLakeUtil::ReplaceFilterSubject(const Expression &expr, const Expression &subject,
+                                                          const LogicalType &type) {
+	if (expr.Equals(subject)) {
+		return make_uniq<BoundReferenceExpression>(type, 0U);
+	}
+	auto result = expr.Copy();
+	ExpressionIterator::EnumerateChildren(*result, [&](unique_ptr<Expression> &child) {
+		child = DuckLakeUtil::ReplaceFilterSubject(*child, subject, type);
+	});
+	return result;
+}
+
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {
 	if (prefixed_inlined_columns) {
 		return StringUtil::CIStartsWith(name, DuckLakeInlinedColNames::PREFIX);
@@ -499,16 +614,84 @@ string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
 }
 
-string DuckLakeUtil::ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
-                                   idx_t row) {
+static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
+                            idx_t row) {
 	string result;
 	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 		if (c > 0) {
 			result += ", ";
 		}
-		result += ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+		result += DuckLakeUtil::ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
 	}
 	return result;
+}
+
+LogicalType DuckLakeUtil::GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type) {
+	if (metadata_manager.TypeIsNativelySupported(LogicalType::VARIANT())) {
+		return type;
+	}
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
+		return child.id() == LogicalTypeId::VARIANT ? LogicalType::BLOB : child;
+	});
+}
+
+string DuckLakeUtil::InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
+                                              idx_t depth) {
+	if (!TypeVisitor::Contains(type, [](const LogicalType &child) { return child.id() == LogicalTypeId::VARIANT; })) {
+		return expression;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT: {
+		if (!encode) {
+			return "variant_bytes_to_variant(" + expression + ")";
+		}
+		auto parquet = "(CAST(variant_to_parquet_variant(" + expression + ") AS STRUCT(metadata BLOB, value BLOB)))";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + parquet + ".metadata || " + parquet +
+		       ".value END";
+	}
+	case LogicalTypeId::LIST: {
+		auto element = "__ducklake_element_" + to_string(depth);
+		return "list_transform(" + expression + ", lambda " + element + ": " +
+		       InlinedVariantExpression(element, ListType::GetChildType(type), encode, depth + 1) + ")";
+	}
+	case LogicalTypeId::STRUCT: {
+		vector<string> fields;
+		auto &children = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < children.size(); i++) {
+			auto &child = children[i];
+			auto name =
+			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLLiteralToString(child.first.GetIdentifierName());
+			auto field = InlinedVariantExpression("struct_extract(" + expression + ", " + name + ")", child.second,
+			                                      encode, depth);
+			fields.push_back(StructType::IsUnnamed(type) ? field : name + ": " + field);
+		}
+		auto contents = StringUtil::Join(fields, ", ");
+		auto result = StructType::IsUnnamed(type) ? "row(" + contents + ")" : "{" + contents + "}";
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE " + result + " END";
+	}
+	case LogicalTypeId::MAP: {
+		auto keys = InlinedVariantExpression("map_keys(" + expression + ")", LogicalType::LIST(MapType::KeyType(type)),
+		                                     encode, depth);
+		auto values = InlinedVariantExpression("map_values(" + expression + ")",
+		                                       LogicalType::LIST(MapType::ValueType(type)), encode, depth);
+		return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE map(" + keys + ", " + values + ") END";
+	}
+	default:
+		throw NotImplementedException("Cannot inline VARIANT inside %s", type);
+	}
+}
+
+vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto context = transaction.context.lock();
+	vector<string> rows;
+	rows.reserve(data.Count());
+	for (auto &chunk : data.Chunks()) {
+		for (idx_t r = 0; r < chunk.size(); r++) {
+			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r));
+		}
+	}
+	return rows;
 }
 
 void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to) {
@@ -602,17 +785,45 @@ string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string
 		}
 		return BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
 	}
+	if (option == "skip_stats_columns") {
+		// resolved against the table by the caller
+		return string();
+	}
 	throw NotImplementedException("Unsupported option %s", option);
 }
 
-void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool global_scope) {
-	if (global_scope) {
-		return;
-	}
-	if (option == "expire_older_than" || option == "delete_older_than") {
+void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {
+	if ((has_schema || has_table) && (option == "expire_older_than" || option == "delete_older_than")) {
 		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
 		                            option);
 	}
+	if (option == "skip_stats_columns" && !has_table) {
+		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
+	}
+}
+
+bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &result) {
+	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		result = expr.Cast<ConstantExpression>().GetLiteral().ToValue();
+		return true;
+	}
+	if (expr.GetExpressionType() != ExpressionType::OPERATOR_CAST) {
+		return false;
+	}
+	auto &cast = expr.Cast<CastExpression>();
+	if (cast.IsTryCast() || cast.Child().GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		return false;
+	}
+	auto target_type = UnboundType::TryDefaultBind(cast.TargetType());
+	if (target_type.id() == LogicalTypeId::INVALID || target_type.id() == LogicalTypeId::UNBOUND) {
+		return false;
+	}
+	auto value = cast.Child().Cast<ConstantExpression>().GetLiteral().ToValue().DefaultTryCastAs(target_type);
+	if (!value) {
+		return false;
+	}
+	result = std::move(*value);
+	return true;
 }
 
 } // namespace duckdb
