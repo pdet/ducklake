@@ -5130,6 +5130,21 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options) {
+	if (new_options.empty()) {
+		return {};
+	}
+	string values;
+	for (auto &option : new_options) {
+		if (!values.empty()) {
+			values += ", ";
+		}
+		values += StringUtil::Format("(%s, %s, 'table', %d)", SQLString(option.option.key),
+		                             SQLString(option.option.value), option.table_id.index);
+	}
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES " + values + ";";
+}
+
 string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
 	if (new_tags.empty()) {
 		return {};
