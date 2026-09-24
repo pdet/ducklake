@@ -837,12 +837,12 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 
 	if (!table_stats) {
 		// cache negative result to avoid repeated metadata queries on empty tables
-		cache.GetOrCreate<DuckLakeTableStatsCacheEntry>(std::move(key), snapshot.schema_version);
+		cache.Put(std::move(key), make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version));
 		return nullptr;
 	}
 
-	auto entry = cache.GetOrCreate<DuckLakeTableStatsCacheEntry>(std::move(key), snapshot.schema_version,
-	                                                             std::move(*table_stats));
+	auto entry = make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version, std::move(*table_stats));
+	cache.Put(std::move(key), entry);
 	auto *raw = entry.get();
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
