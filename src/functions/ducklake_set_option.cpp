@@ -25,7 +25,7 @@ static void ValidateTablesInSchema(ClientContext &context, DuckLakeCatalog &duck
 		auto &ducklake_table = entry.Cast<DuckLakeTableEntry>();
 		string override_val;
 		if (duck_catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
-		                                          ducklake_table.GetTableId()) &&
+		                                          ducklake_table.GetTableId(), &ducklake_table.GetTableOptions()) &&
 		    std::stoull(override_val) == 0) {
 			return;
 		}

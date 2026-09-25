@@ -498,9 +498,10 @@ static void ThrowReservedInlinedColumn(const string &name, bool prefixed_inlined
 }
 
 void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-                                               TableIndex table_id, const string &name) {
+                                               TableIndex table_id, const string &name,
+                                               optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id) == 0) {
+	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id, table_options) == 0) {
 		return;
 	}
 	if (IsInlinedSystemColumn(name, prefixed_inlined_columns)) {
@@ -509,9 +510,11 @@ void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientC
 }
 
 void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context,
-                                                  SchemaIndex schema_id, const ColumnList &columns) {
+                                                  SchemaIndex schema_id, const ColumnList &columns,
+                                                  optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, TableIndex()) == 0) {
+	if (!prefixed_inlined_columns &&
+	    catalog.DataInliningRowLimit(context, schema_id, TableIndex(), table_options) == 0) {
 		return;
 	}
 	for (auto &col : columns.Logical()) {
