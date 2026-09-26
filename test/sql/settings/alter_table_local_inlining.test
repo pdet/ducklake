@@ -95,7 +95,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/local_inlining_{version}.db' AS ducklake (DATA_PATH '{TEST_DIR}/local_inlining_{version}_files')
+ATTACH 'ducklake:{TEST_DIR}/local_inlining_{version}.db' AS ducklake (DATA_PATH '{TEST_DIR}/local_inlining_{version}_files', DUCKLAKE_VERSION '{version}')
 
 query II
 SELECT id, j FROM ducklake.t_set
