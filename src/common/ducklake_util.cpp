@@ -24,6 +24,9 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 #include <cmath>
 
@@ -496,9 +499,10 @@ static void ThrowReservedInlinedColumn(const string &name, bool prefixed_inlined
 }
 
 void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-                                               TableIndex table_id, const string &name) {
+                                               TableIndex table_id, const string &name,
+                                               optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id) == 0) {
+	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id, table_options) == 0) {
 		return;
 	}
 	if (IsInlinedSystemColumn(name, prefixed_inlined_columns)) {
@@ -507,9 +511,11 @@ void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientC
 }
 
 void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context,
-                                                  SchemaIndex schema_id, const ColumnList &columns) {
+                                                  SchemaIndex schema_id, const ColumnList &columns,
+                                                  optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, TableIndex()) == 0) {
+	if (!prefixed_inlined_columns &&
+	    catalog.DataInliningRowLimit(context, schema_id, TableIndex(), table_options) == 0) {
 		return;
 	}
 	for (auto &col : columns.Logical()) {
@@ -708,6 +714,141 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		to.config.user_settings.SetUserSetting(setting_index, value);
+	}
+}
+
+using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
+
+static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
+	auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+	vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
+	bool found = false;
+	for (auto &algorithm : supported_algorithms) {
+		if (StringUtil::CIEquals(algorithm, codec)) {
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		auto supported = StringUtil::Join(supported_algorithms, ", ");
+		throw NotImplementedException("Unsupported codec \"%s\" for parquet, supported options are %s", codec,
+		                              supported);
+	}
+	return StringUtil::Lower(codec);
+}
+
+static string ParseParquetVersion(ClientContext &, const string &, const Value &val) {
+	auto version = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	if (version != 1 && version != 2) {
+		throw NotImplementedException("Only Parquet version 1 and 2 are supported");
+	}
+	return "V" + to_string(version);
+}
+
+static string ParseUnsignedInteger(ClientContext &, const string &, const Value &val) {
+	return to_string(val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>());
+}
+
+static string ParseRowGroupSize(ClientContext &, const string &, const Value &val) {
+	auto row_group_size = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	if (row_group_size == 0) {
+		throw NotImplementedException("Row group size cannot be 0");
+	}
+	return to_string(row_group_size);
+}
+
+static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Value &val) {
+	auto row_group_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
+	if (row_group_size_bytes == 0) {
+		throw NotImplementedException("Row group size bytes cannot be 0");
+	}
+	return to_string(row_group_size_bytes);
+}
+
+static string ParseMemorySize(ClientContext &, const string &, const Value &val) {
+	return to_string(DBConfig::ParseMemoryLimit(val.ToString()));
+}
+
+static string ParseBooleanLiteral(ClientContext &, const string &, const Value &val) {
+	return DuckLakeUtil::BoolLiteral(val.GetValue<bool>());
+}
+
+static string ParseDeleteThreshold(ClientContext &, const string &, const Value &val) {
+	double threshold = val.GetValue<double>();
+	if (threshold < 0 || threshold > 1) {
+		throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
+	}
+	return to_string(threshold);
+}
+
+static string ParseInterval(ClientContext &, const string &option, const Value &val) {
+	auto interval_value = val.ToString();
+	if (!interval_value.empty()) {
+		interval_t result;
+		if (!Interval::FromString(interval_value, result)) {
+			throw BinderException("%s is not a valid interval value.", option);
+		}
+	}
+	return interval_value;
+}
+
+static string ParseBoolean(ClientContext &context, const string &, const Value &val) {
+	return DuckLakeUtil::BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
+}
+
+static string ParseAutoCompact(ClientContext &context, const string &option, const Value &val) {
+	if (val.IsNull()) {
+		throw BinderException("The %s option can't be null.", option.c_str());
+	}
+	return ParseBoolean(context, option, val);
+}
+
+//! resolved against the table by the caller
+static string ParseSkippedStatsColumns(ClientContext &, const string &, const Value &) {
+	return string();
+}
+
+static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers() {
+	static const unordered_map<string, config_option_parser_t> parsers {
+	    {"parquet_compression", ParseParquetCompression},
+	    {"parquet_version", ParseParquetVersion},
+	    {"parquet_compression_level", ParseUnsignedInteger},
+	    {"data_inlining_row_limit", ParseUnsignedInteger},
+	    {"parquet_row_group_size", ParseRowGroupSize},
+	    {"parquet_row_group_size_bytes", ParseRowGroupSizeBytes},
+	    {"target_file_size", ParseMemorySize},
+	    {"require_commit_message", ParseBooleanLiteral},
+	    {"hive_file_pattern", ParseBooleanLiteral},
+	    {"rewrite_delete_threshold", ParseDeleteThreshold},
+	    {"delete_older_than", ParseInterval},
+	    {"expire_older_than", ParseInterval},
+	    {"auto_compact", ParseAutoCompact},
+	    {"per_thread_output", ParseBoolean},
+	    {"write_deletion_vectors", ParseBoolean},
+	    {"sort_on_insert", ParseBoolean},
+	    {"skip_stats_columns", ParseSkippedStatsColumns},
+	};
+	return parsers;
+}
+
+void DuckLakeUtil::ValidateConfigOptionName(const string &option) {
+	if (!ConfigOptionParsers().count(option)) {
+		throw NotImplementedException("Unsupported option %s", option);
+	}
+}
+
+string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val) {
+	ValidateConfigOptionName(option);
+	return ConfigOptionParsers().at(option)(context, option, val);
+}
+
+void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {
+	if ((has_schema || has_table) && (option == "expire_older_than" || option == "delete_older_than")) {
+		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
+		                            option);
+	}
+	if (option == "skip_stats_columns" && !has_table) {
+		throw InvalidInputException("The '%s' option can only be set for a specific table - pass table_name", option);
 	}
 }
 

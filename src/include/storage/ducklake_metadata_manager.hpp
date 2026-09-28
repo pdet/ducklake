@@ -358,6 +358,7 @@ public:
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
+	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	virtual string WriteNewDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
@@ -397,6 +398,8 @@ public:
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                           bool create_if_not_exists = false);
+	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
+	virtual bool InlinedDeletionTableExists(const string &table_name);
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      string &inlined_tables, string &inlined_table_queries);
@@ -482,6 +485,7 @@ public:
 	virtual void DropEmptySupersededInlinedTables();
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -491,6 +495,8 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
+	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
+	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames();
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,

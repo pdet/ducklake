@@ -13,6 +13,7 @@
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/map.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -89,9 +90,11 @@ public:
 
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-	                                        TableIndex table_id, const string &name);
+	                                        TableIndex table_id, const string &name,
+	                                        optional_ptr<const map<string, string>> table_options = nullptr);
 	static void ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-	                                           const ColumnList &columns);
+	                                           const ColumnList &columns,
+	                                           optional_ptr<const map<string, string>> table_options = nullptr);
 	//! Throws if a column conflicts with inlined data metadata columns when enabling inlining
 	static void ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
 	                                      const string &table_name);
@@ -99,6 +102,10 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+
+	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
+	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);
+	static void ValidateConfigOptionName(const string &option);
 
 	//! Storage type of an inlined column, VARIANT becomes a Parquet Variant BLOB where VARIANT is not native
 	static LogicalType GetInlinedStorageType(DuckLakeMetadataManager &metadata_manager, const LogicalType &type);

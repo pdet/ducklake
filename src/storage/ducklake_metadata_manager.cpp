@@ -3,6 +3,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
@@ -448,8 +449,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	}
 }
 
-void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
-	string migrate_query = R"(
+static constexpr const char *V1_1_DEV1_MIGRATION_QUERY = R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_data_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file ADD COLUMN {IF_NOT_EXISTS} row_group_count BIGINT;
 ALTER TABLE {METADATA_CATALOG}.ducklake_file_column_stats ADD COLUMN {IF_NOT_EXISTS} min_is_exact BOOLEAN DEFAULT NULL;
@@ -461,9 +461,32 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 );
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
+
+void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames();
-	ExecuteMigration(migrate_query, allow_failures, "1.0", "1.1-dev1");
+	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
+}
+
+void DuckLakeMetadataManager::MigrateV10Dev() {
+	auto &db = transaction.GetCatalog().GetDatabase();
+	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
+	try {
+		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
+		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
+		                                          error.RawMessage()));
+	}
+	try {
+		MigrateInlinedColumnNames();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
+		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
+		                                          error.RawMessage()));
+	}
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
@@ -479,9 +502,31 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
 	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
 	                                          {old_names.end_snapshot, new_names.end_snapshot}};
+	// a query result can only be iterated once, so collect the (inlined table name, user table name) pairs
+	vector<pair<string, string>> inlined_tables;
+	string renamed_probe;
 	for (auto &row : *tables) {
 		auto table_name = row.GetValue<string>(0);
 		auto user_table_name = row.IsNull(1) ? table_name : row.GetValue<string>(1);
+		if (!renamed_probe.empty()) {
+			renamed_probe += " UNION ALL ";
+		}
+		renamed_probe +=
+		    StringUtil::Format("(SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s LIMIT 0)", new_names.row_id,
+		                       new_names.begin_snapshot, new_names.end_snapshot, SQLIdentifier(table_name));
+		inlined_tables.emplace_back(std::move(table_name), std::move(user_table_name));
+	}
+	if (inlined_tables.empty()) {
+		return;
+	}
+	// probe all inlined tables in one statement so an already migrated catalog costs a single round trip
+	auto probe_all = Query(renamed_probe);
+	if (!probe_all->HasError()) {
+		return;
+	}
+	for (auto &inlined_table : inlined_tables) {
+		auto &table_name = inlined_table.first;
+		auto &user_table_name = inlined_table.second;
 		auto probe =
 		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		if (probe->HasError()) {
@@ -3581,6 +3626,12 @@ DuckLakeMetadataManager::ReadInlinedFileDeletionsForRange(TableIndex table_id, D
 	return result;
 }
 
+bool DuckLakeMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	return transaction.GetConnection().TableInfo(Identifier(catalog.MetadataDatabaseName()),
+	                                             catalog.MetadataSchemaName(), Identifier(table_name)) != nullptr;
+}
+
 string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                             bool create_if_not_exists) {
 	// The table name is always deterministic
@@ -3594,40 +3645,34 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// Check catalog-level cache (persists across transactions)
 	auto &catalog = transaction.GetCatalog();
 	auto cache_result = catalog.CheckInlinedDeletionTableCache(table_id, snapshot);
-	if (cache_result == InlinedDeletionCacheResult::EXISTS) {
-		return table_name; // known to exist (committed)
-	}
 	if (cache_result == InlinedDeletionCacheResult::DOES_NOT_EXIST && !create_if_not_exists) {
 		return string(); // known to not exist
 	}
-
-	if (create_if_not_exists) {
-		auto create_query = StringUtil::Format(
-		    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
-		    table_name);
-		auto create_result = Execute(snapshot, create_query);
-		if (create_result->HasError()) {
-			create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
+	if (!create_if_not_exists || cache_result == InlinedDeletionCacheResult::EXISTS) {
+		// A committed table may not be visible in this transaction's catalog snapshot.
+		if (InlinedDeletionTableExists(table_name)) {
+			delete_inlined_table_cache.insert(table_id.index);
+			catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
+			return table_name;
 		}
-		// Only cache per-transaction — the CREATE is transactional and may be rolled back
-		delete_inlined_table_cache.insert(table_id.index);
-		ClearCache();
-		return table_name;
+		if (!create_if_not_exists) {
+			catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
+			return string();
+		}
 	}
 
-	// Read path: table visibility implies it was committed, safe to cache at catalog level
-	auto query = StringUtil::Format("SELECT NULL FROM {METADATA_CATALOG}.%s LIMIT 1", table_name);
-	auto result = Query(snapshot, query);
-	// TODO: Using the error state to check for existence here is fragile.
-	// Even if the table exists, a transient error in the catalog query would lead us to assume it does not exist.
-	// Maybe persist the existence of the deletion inlining table on the table metadata instead?
-	if (!result->HasError()) {
-		delete_inlined_table_cache.insert(table_id.index);
-		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
-		return table_name;
+	D_ASSERT(create_if_not_exists);
+	auto create_query = StringUtil::Format(
+	    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);",
+	    table_name);
+	auto create_result = Execute(snapshot, create_query);
+	if (create_result->HasError()) {
+		create_result->GetErrorObject().Throw("Failed to create inlined deletion table: ");
 	}
-	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
-	return string();
+	// Only cache per-transaction — the CREATE is transactional and may be rolled back
+	delete_inlined_table_cache.insert(table_id.index);
+	ClearCache();
+	return table_name;
 }
 
 void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name) {
@@ -5092,6 +5137,21 @@ WHERE table_id IN (%s) AND end_snapshot IS NULL
 	return batch_query;
 }
 
+string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options) {
+	if (new_options.empty()) {
+		return {};
+	}
+	string values;
+	for (auto &option : new_options) {
+		if (!values.empty()) {
+			values += ", ";
+		}
+		values += StringUtil::Format("(%s, %s, 'table', %d)", SQLString(option.option.key),
+		                             SQLString(option.option.value), option.table_id.index);
+	}
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES " + values + ";";
+}
+
 string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
 	if (new_tags.empty()) {
 		return {};
@@ -6072,13 +6132,8 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 	return table_sizes;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
-	string scope;
-	string scope_id;
-	string scope_filter;
+static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope, string &scope_id,
+                              string &scope_filter) {
 	if (option.table_id.IsValid()) {
 		scope = "'table'";
 		scope_id = to_string(option.table_id.index);
@@ -6092,6 +6147,31 @@ void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option
 		scope_id = "NULL";
 		scope_filter = "scope IS NULL";
 	}
+}
+
+bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to reset config option in DuckLake: ");
+	}
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
+}
+
+void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
+	// check if the option already exists
+	auto &option_key = option.option.key;
+	auto &option_value = option.option.value;
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
 	auto result = Query(StringUtil::Format(R"(
 SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata
