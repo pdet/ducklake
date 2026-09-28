@@ -24,6 +24,7 @@ class DuckLakeSchemaEntry : public SchemaCatalogEntry {
 public:
 	DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, SchemaIndex schema_id, string schema_uuid,
 	                    string data_path, optional_ptr<DuckLakeSchemaEntry> parent_schema = nullptr);
+	~DuckLakeSchemaEntry() override;
 
 public:
 	SchemaIndex GetSchemaId() const {
@@ -80,6 +81,7 @@ public:
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);
 	void TryDropSchema(DuckLakeTransaction &transaction, bool cascade);
+	vector<reference<DuckLakeSchemaEntry>> GetChildSchemas(DuckLakeTransaction &transaction);
 
 	static bool CatalogTypeIsSupported(CatalogType type);
 
@@ -88,8 +90,9 @@ private:
 	const DuckLakeCatalogSet &GetCatalogSet(CatalogType type) const;
 	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,
 	                          OnCreateConflict on_conflict);
-
+	void Scan(DuckLakeTransaction &transaction, CatalogType type, const std::function<void(CatalogEntry &)> &callback);
 	void RefreshPathKey();
+	void DropSchemaContents(DuckLakeTransaction &transaction);
 
 	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);
 	optional_ptr<CatalogEntry> LoadBuiltInFunction(DefaultTableMacro macro);
@@ -101,6 +104,7 @@ private:
 	optional_ptr<DuckLakeSchemaEntry> parent_schema;
 	string path_key;
 	idx_t schema_depth;
+	DuckLakeCatalogSet child_schemas;
 	DuckLakeCatalogSet tables;
 	DuckLakeCatalogSet scalar_macros;
 	DuckLakeCatalogSet table_macros;

@@ -1855,6 +1855,11 @@ DuckLakeTransaction &DuckLakeTransaction::Get(ClientContext &context, Catalog &c
 void DuckLakeTransaction::CreateEntry(unique_ptr<CatalogEntry> entry) {
 	catalog_version = ducklake_catalog.GetNewUncommittedCatalogVersion();
 	auto &set = GetOrCreateTransactionLocalEntries(*entry);
+	if (entry->type == CatalogType::SCHEMA_ENTRY) {
+		auto key = entry->Cast<DuckLakeSchemaEntry>().PathKey();
+		set.CreateEntry(key, std::move(entry));
+		return;
+	}
 	set.CreateEntry(std::move(entry));
 }
 
@@ -1866,7 +1871,7 @@ void DuckLakeTransaction::DropSchema(DuckLakeSchemaEntry &schema) {
 		if (!new_schemas) {
 			throw InternalException("Dropping a transaction local table that does not exist?");
 		}
-		new_schemas->DropEntry(schema.name.GetIdentifierName());
+		new_schemas->DropEntry(schema.PathKey());
 		if (new_schemas->GetEntries().empty()) {
 			// we have dropped all schemas created in this transaction - clear it
 			new_schemas.reset();
@@ -2183,6 +2188,30 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 
 optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalSchemas() {
 	return state->new_schemas;
+}
+
+optional_ptr<CatalogEntry>
+DuckLakeTransaction::GetTransactionLocalSchema(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name) {
+	if (!state->new_schemas) {
+		return nullptr;
+	}
+	return state->new_schemas->GetEntry(DuckLakeSchemaEntry::ChildPathKey(parent, name));
+}
+
+vector<reference<DuckLakeSchemaEntry>>
+DuckLakeTransaction::GetTransactionLocalChildSchemas(const DuckLakeSchemaEntry &parent) {
+	vector<reference<DuckLakeSchemaEntry>> result;
+	if (!state->new_schemas) {
+		return result;
+	}
+	for (auto &entry : state->new_schemas->GetEntries()) {
+		auto &schema = entry.second->Cast<DuckLakeSchemaEntry>();
+		auto schema_parent = schema.ParentDuckLakeSchema();
+		if (schema_parent && schema_parent->GetSchemaId() == parent.GetSchemaId()) {
+			result.push_back(schema);
+		}
+	}
+	return result;
 }
 
 optional_ptr<CatalogEntry> DuckLakeTransaction::GetTransactionLocalEntry(CatalogType catalog_type,

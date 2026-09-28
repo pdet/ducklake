@@ -232,6 +232,9 @@ public:
 
 	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntries(CatalogEntry &entry);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalSchemas();
+	optional_ptr<CatalogEntry> GetTransactionLocalSchema(optional_ptr<const DuckLakeSchemaEntry> parent,
+	                                                     const string &name);
+	vector<reference<DuckLakeSchemaEntry>> GetTransactionLocalChildSchemas(const DuckLakeSchemaEntry &parent);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, SchemaIndex schema_id);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, SchemaIndex schema_id,
 	                                                    const string &entry_name);

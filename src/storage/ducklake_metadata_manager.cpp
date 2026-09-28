@@ -851,14 +851,16 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-    const string &base_data_path, const string &separator, bool load_view_column_tags) {
+    const string &base_data_path, const string &separator, bool supports_v1_1_metadata) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
-	auto result = query_executor(snapshot, R"(
-SELECT schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative
+	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
+	auto result = query_executor(snapshot, StringUtil::Format(R"(
+SELECT schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative%s
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-)");
+)",
+	                                                          parent_schema_select));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get schema information from DuckLake: ");
 	}
@@ -878,6 +880,9 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_s
 			path.path_is_relative = row.GetValue<bool>(4);
 
 			schema.path = FromRelativePath(path, base_data_path, separator);
+		}
+		if (supports_v1_1_metadata && !row.IsNull(5)) {
+			schema.parent_id = SchemaIndex(row.GetValue<uint64_t>(5));
 		}
 		schema_map[schema.id] = catalog.schemas.size();
 		catalog.schemas.push_back(std::move(schema));
@@ -1014,15 +1019,15 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 	}
 	// load view information
-	auto view_column_tags_select = load_view_column_tags ? StringUtil::Format(R"(,
+	auto view_column_tags_select = supports_v1_1_metadata ? StringUtil::Format(R"(,
 	(
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_view_column_tag vct
 		WHERE vct.view_id=view.view_id AND
 		      {SNAPSHOT_ID} >= vct.begin_snapshot AND ({SNAPSHOT_ID} < vct.end_snapshot OR vct.end_snapshot IS NULL)
 	) AS view_column_tags)",
-	                                                                          ListAggregation(VIEW_COLUMN_TAG_FIELDS))
-	                                                     : ",\n\tNULL AS view_column_tags";
+	                                                                           ListAggregation(VIEW_COLUMN_TAG_FIELDS))
+	                                                      : ",\n\tNULL AS view_column_tags";
 	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
