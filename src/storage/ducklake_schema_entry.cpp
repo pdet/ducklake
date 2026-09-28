@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/similar_catalog_entry.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -23,9 +24,37 @@
 namespace duckdb {
 
 DuckLakeSchemaEntry::DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, SchemaIndex schema_id,
-                                         string schema_uuid, string data_path_p)
+                                         string schema_uuid, string data_path_p,
+                                         optional_ptr<DuckLakeSchemaEntry> parent_schema_p)
     : SchemaCatalogEntry(catalog, info), schema_id(schema_id), schema_uuid(std::move(schema_uuid)),
-      data_path(std::move(data_path_p)) {
+      data_path(std::move(data_path_p)), parent_schema(parent_schema_p), schema_depth(1) {
+	RefreshPathKey();
+}
+
+optional_ptr<SchemaCatalogEntry> DuckLakeSchemaEntry::GetParentSchema() const {
+	return parent_schema.get_mutable();
+}
+
+void DuckLakeSchemaEntry::SetParentSchema(DuckLakeSchemaEntry &parent) {
+	parent_schema = &parent;
+	RefreshPathKey();
+}
+
+void DuckLakeSchemaEntry::RefreshPathKey() {
+	path_key = ChildPathKey(parent_schema.get(), name.GetIdentifierName());
+	schema_depth = parent_schema ? parent_schema->SchemaDepth() + 1 : 1;
+}
+
+const string &DuckLakeSchemaEntry::PathKey() const {
+	return path_key;
+}
+
+string DuckLakeSchemaEntry::ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name) {
+	auto key = SQLQuotedIdentifier::ToString(name);
+	if (!parent) {
+		return key;
+	}
+	return parent->PathKey() + "." + key;
 }
 
 unique_ptr<CreateInfo> DuckLakeSchemaEntry::GetInfo() const {

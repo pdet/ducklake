@@ -23,12 +23,22 @@ struct DefaultTableMacro;
 class DuckLakeSchemaEntry : public SchemaCatalogEntry {
 public:
 	DuckLakeSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, SchemaIndex schema_id, string schema_uuid,
-	                    string data_path);
+	                    string data_path, optional_ptr<DuckLakeSchemaEntry> parent_schema = nullptr);
 
 public:
 	SchemaIndex GetSchemaId() const {
 		return schema_id;
 	}
+	optional_ptr<SchemaCatalogEntry> GetParentSchema() const override;
+	optional_ptr<DuckLakeSchemaEntry> ParentDuckLakeSchema() const {
+		return parent_schema;
+	}
+	void SetParentSchema(DuckLakeSchemaEntry &parent);
+	const string &PathKey() const;
+	idx_t SchemaDepth() const {
+		return schema_depth;
+	}
+	static string ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name);
 	const string &GetSchemaUUID() const {
 		return schema_uuid;
 	}
@@ -79,6 +89,8 @@ private:
 	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,
 	                          OnCreateConflict on_conflict);
 
+	void RefreshPathKey();
+
 	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);
 	optional_ptr<CatalogEntry> LoadBuiltInFunction(DefaultTableMacro macro);
 
@@ -86,6 +98,9 @@ private:
 	SchemaIndex schema_id;
 	string schema_uuid;
 	string data_path;
+	optional_ptr<DuckLakeSchemaEntry> parent_schema;
+	string path_key;
+	idx_t schema_depth;
 	DuckLakeCatalogSet tables;
 	DuckLakeCatalogSet scalar_macros;
 	DuckLakeCatalogSet table_macros;

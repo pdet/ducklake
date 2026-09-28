@@ -55,14 +55,8 @@ string DuckLakeUtil::ParseQuotedValue(const string &input, idx_t &pos) {
 }
 
 string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separator) {
-	string result;
-	for (auto &str : input) {
-		if (!result.empty()) {
-			result += list_separator;
-		}
-		result += SQLQuotedIdentifier::ToString(str);
-	}
-	return result;
+	return StringUtil::Join(input, input.size(), string(1, list_separator),
+	                        [](const string &value) { return SQLQuotedIdentifier::ToString(value); });
 }
 
 vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_separator) {
@@ -84,31 +78,32 @@ vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_sepa
 	return result;
 }
 
+string ParsedCatalogEntry::SchemaKey() const {
+	return DuckLakeUtil::ToQuotedList(schema_path, '.');
+}
+
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
+	auto parts = ParseQuotedList(input, '.');
+	if (parts.size() < 2) {
+		throw InvalidInputException("Failed to parse catalog entry - expected a schema and a name");
+	}
 	ParsedCatalogEntry result_data;
-	idx_t pos = 0;
-	result_data.schema = DuckLakeUtil::ParseQuotedValue(input, pos);
-	if (pos >= input.size() || input[pos] != '.') {
-		throw InvalidInputException("Failed to parse catalog entry - expected a dot");
-	}
-	pos++;
-	result_data.name = DuckLakeUtil::ParseQuotedValue(input, pos);
-	if (pos < input.size()) {
-		throw InvalidInputException("Failed to parse catalog entry - trailing data after quoted value");
-	}
+	result_data.name = std::move(parts.back());
+	parts.pop_back();
+	result_data.schema_path = std::move(parts);
 	return result_data;
 }
 
 string DuckLakeUtil::SQLIdentifierToString(const string &text) {
-	return "\"" + StringUtil::Replace(text, "\"", "\"\"") + "\"";
+	return SQLQuotedIdentifier::ToString(text);
 }
 
 string DuckLakeUtil::SQLIdentifierToString(const Identifier &identifier) {
-	return SQLQuotedIdentifier::ToString(identifier.GetIdentifierName());
+	return SQLQuotedIdentifier::ToString(identifier);
 }
 
 string DuckLakeUtil::SQLLiteralToString(const string &text) {
-	return "'" + StringUtil::Replace(text, "'", "''") + "'";
+	return SQLString::ToString(text);
 }
 
 string DuckLakeUtil::StatsToString(const string &text) {

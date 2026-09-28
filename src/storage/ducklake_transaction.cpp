@@ -761,7 +761,7 @@ const set<MacroIndex> &DuckLakeTransaction::GetDroppedTableMacros() {
 const set<TableIndex> &DuckLakeTransaction::GetRenamedTables() {
 	return state->renamed_tables;
 }
-const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewTables() {
+const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewTables() const {
 	return state->new_tables;
 }
 
@@ -850,7 +850,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 	return *connection;
 }
 
-map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(CatalogType type) {
+map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(const CatalogType type) const {
 	switch (type) {
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
@@ -917,7 +917,7 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 		case LocalChangeType::RENAMED: {
 			// write any new tables that we created
 			auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			changes.created_tables[schema.name.GetIdentifierName()].insert(table);
+			changes.created_tables[schema.PathKey()].insert(table);
 			break;
 		}
 		default:
@@ -955,7 +955,7 @@ void GetTransactionViewChanges(reference<CatalogEntry> view_entry, TransactionCh
 		case LocalChangeType::RENAMED: {
 			// write any new view that we created
 			auto &schema = view.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			changes.created_tables[schema.name.GetIdentifierName()].insert(view);
+			changes.created_tables[schema.PathKey()].insert(view);
 			break;
 		}
 		default:
@@ -1001,21 +1001,22 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	if (new_schemas) {
 		for (auto &entry : new_schemas->GetEntries()) {
 			auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
-			changes.created_schemas.insert(schema_entry.name.GetIdentifierName());
+			changes.created_schemas.insert(
+			    make_pair(schema_entry.PathKey(), reference<DuckLakeSchemaEntry>(schema_entry)));
 		}
 	}
 	for (auto &schema_entry : new_scalar_macros) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			auto &macro = *entry.second;
 			auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			changes.created_scalar_macros[schema.name.GetIdentifierName()].insert(macro);
+			changes.created_scalar_macros[schema.PathKey()].insert(macro);
 		}
 	}
 	for (auto &schema_entry : new_table_macros) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			auto &macro = *entry.second;
 			auto &schema = macro.ParentSchema().Cast<DuckLakeSchemaEntry>();
-			changes.created_table_macros[schema.name.GetIdentifierName()].insert(macro);
+			changes.created_table_macros[schema.PathKey()].insert(macro);
 		}
 	}
 	for (auto &schema_entry : new_tables) {
