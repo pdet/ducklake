@@ -1,3 +1,5 @@
+#include "duckdb/catalog/catalog_entry_retriever.hpp"
+#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -118,7 +120,7 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(table.schema.name.GetIdentifierName()));
+	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
@@ -911,16 +913,17 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, Identifier(table), nullptr, QueryErrorContext());
-	auto table_entry = catalog.GetEntry(context, Identifier(schema), table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
+	                             DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table), nullptr,
+	                             QueryErrorContext());
+	CatalogEntryRetriever retriever(context);
+	auto table_entry = catalog.LookupEntry(retriever, table_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;
 	auto &ducklake_table = table_entry->Cast<DuckLakeTableEntry>();
 	optional_ptr<DuckLakeSchemaEntry> dl_schema;
 	bool auto_compact;
 	if (!schema.empty()) {
-		auto schema_catalog =
-		    catalog.GetSchema(context, catalog.GetName(), Identifier(schema), OnEntryNotFound::THROW_EXCEPTION);
-		dl_schema = &schema_catalog->Cast<DuckLakeSchemaEntry>();
-		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema.get()->GetSchemaId(),
+		dl_schema = &ducklake_table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+		auto_compact = ducklake_catalog.GetConfigOption<string>("auto_compact", dl_schema->GetSchemaId(),
 		                                                        ducklake_table.GetTableId(), "true") == "true";
 
 	} else {

@@ -28,6 +28,14 @@
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
 
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/exception/parser_exception.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry_retriever.hpp"
+#include "duckdb/catalog/entry_lookup_info.hpp"
+#include "duckdb/planner/tableref/bound_at_clause.hpp"
+
 #include <cmath>
 
 namespace duckdb {
@@ -80,6 +88,104 @@ vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_sepa
 
 string ParsedCatalogEntry::SchemaKey() const {
 	return DuckLakeUtil::ToQuotedList(schema_path, '.');
+}
+
+static bool TryParseSchemaPath(const string &schema_arg, vector<Identifier> &result) {
+	try {
+		result = QualifiedName::ParseComponents(schema_arg);
+	} catch (ParserException &) {
+		return false;
+	}
+	if (schema_arg.empty() || schema_arg.back() == '.') {
+		result.emplace_back();
+	}
+	return true;
+}
+
+static string EmptyComponentError(const string &schema_arg) {
+	return StringUtil::Format(
+	    "Failed to parse schema path \"%s\" - schema paths cannot contain empty components. Schema names that "
+	    "contain a '.' or a '\"' must be double-quoted (e.g. '\"my.schema\"')",
+	    schema_arg);
+}
+
+struct SchemaPathCandidateList {
+	vector<vector<Identifier>> candidates;
+	string parse_error;
+};
+
+static SchemaPathCandidateList SchemaPathCandidates(Catalog &catalog, const string &schema_arg) {
+	SchemaPathCandidateList result;
+	vector<Identifier> literal_path;
+	literal_path.emplace_back(schema_arg);
+	vector<Identifier> nested_path;
+	if (!catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata() || !TryParseSchemaPath(schema_arg, nested_path)) {
+		result.candidates.push_back(std::move(literal_path));
+		return result;
+	}
+	if (std::any_of(nested_path.begin(), nested_path.end(), [](const Identifier &part) { return part.empty(); })) {
+		result.parse_error = EmptyComponentError(schema_arg);
+		result.candidates.push_back(std::move(literal_path));
+		return result;
+	}
+	bool is_literal = nested_path.size() == 1 && nested_path[0].GetIdentifierName() == schema_arg;
+	result.candidates.push_back(std::move(nested_path));
+	if (!is_literal) {
+		result.candidates.push_back(std::move(literal_path));
+	}
+	return result;
+}
+
+static QualifiedName QualifiedPath(Catalog &catalog, const vector<Identifier> &schema_path,
+                                   const Identifier &entry_name) {
+	auto path = schema_path;
+	path.insert(path.begin(), catalog.GetName());
+	return QualifiedName(std::move(path), entry_name);
+}
+
+QualifiedName DuckLakeUtil::QualifiedEntryName(ClientContext &context, Catalog &catalog, const string &schema_arg,
+                                               const string &entry_name, CatalogType entry_type,
+                                               optional_ptr<BoundAtClause> at_clause) {
+	Identifier name(entry_name);
+	if (schema_arg.empty()) {
+		return QualifiedName(catalog.GetName(), Identifier(), std::move(name));
+	}
+	auto candidates = SchemaPathCandidates(catalog, schema_arg);
+	if (candidates.candidates.size() > 1 || !candidates.parse_error.empty()) {
+		for (auto &candidate : candidates.candidates) {
+			auto qualified_name = QualifiedPath(catalog, candidate, name);
+			EntryLookupInfo lookup(entry_type, qualified_name, at_clause, QueryErrorContext());
+			CatalogEntryRetriever retriever(context);
+			if (catalog.LookupEntry(retriever, lookup, OnEntryNotFound::RETURN_NULL).entry) {
+				return qualified_name;
+			}
+		}
+		if (!candidates.parse_error.empty()) {
+			throw InvalidInputException("%s", candidates.parse_error);
+		}
+	}
+	return QualifiedPath(catalog, candidates.candidates[0], name);
+}
+
+SchemaCatalogEntry &DuckLakeUtil::GetSchema(ClientContext &context, Catalog &catalog, const string &schema_arg) {
+	auto candidates = SchemaPathCandidates(catalog, schema_arg);
+	if (candidates.candidates.size() > 1 || !candidates.parse_error.empty()) {
+		for (auto &candidate : candidates.candidates) {
+			auto entry = Catalog::GetSchema(context, catalog.GetName(), candidate, OnEntryNotFound::RETURN_NULL);
+			if (entry) {
+				return *entry;
+			}
+		}
+		if (!candidates.parse_error.empty()) {
+			throw InvalidInputException("%s", candidates.parse_error);
+		}
+	}
+	return *Catalog::GetSchema(context, catalog.GetName(), candidates.candidates[0], OnEntryNotFound::THROW_EXCEPTION);
+}
+
+string DuckLakeUtil::SchemaPathToDisplay(const vector<Identifier> &schema_path) {
+	return StringUtil::Join(schema_path, schema_path.size(), ".",
+	                        [](const Identifier &component) { return SQLIdentifier::ToString(component); });
 }
 
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
