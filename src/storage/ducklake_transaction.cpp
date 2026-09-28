@@ -761,7 +761,7 @@ const set<MacroIndex> &DuckLakeTransaction::GetDroppedTableMacros() {
 const set<TableIndex> &DuckLakeTransaction::GetRenamedTables() {
 	return state->renamed_tables;
 }
-const case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewTables() {
+const map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewTables() {
 	return state->new_tables;
 }
 
@@ -850,7 +850,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 	return *connection;
 }
 
-case_insensitive_map_t<unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(CatalogType type) {
+map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMacroMap(CatalogType type) {
 	switch (type) {
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
@@ -1880,7 +1880,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 	auto &new_tables = state->new_tables;
 	auto table_id = table.GetTableId();
 	if (table.IsTransactionLocal()) {
-		auto schema_entry = new_tables.find(table.ParentSchema().name.GetIdentifierName());
+		auto schema_entry = new_tables.find(table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId());
 		if (schema_entry == new_tables.end()) {
 			throw InternalException("Dropping a transaction local table %s that does not exist", table.name);
 		}
@@ -1904,7 +1904,7 @@ void DuckLakeTransaction::DropView(DuckLakeViewEntry &view) {
 	auto &new_tables = state->new_tables;
 	auto view_id = view.GetViewId();
 	if (view.IsTransactionLocal()) {
-		auto schema_entry = new_tables.find(view.ParentSchema().name.GetIdentifierName());
+		auto schema_entry = new_tables.find(view.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId());
 		if (schema_entry == new_tables.end()) {
 			throw InternalException("Dropping a transaction local view that does not exist?");
 		}
@@ -1980,11 +1980,11 @@ void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {
 		break;
 	case CatalogType::MACRO_ENTRY:
 	case CatalogType::TABLE_MACRO_ENTRY: {
-		auto local_entry = GetTransactionLocalEntry(entry.type, entry.ParentSchema().name.GetIdentifierName(),
-		                                            entry.name.GetIdentifierName());
+		auto macro_schema_id = entry.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+		auto local_entry = GetTransactionLocalEntry(entry.type, macro_schema_id, entry.name.GetIdentifierName());
 		if (local_entry) {
 			auto &macro_map = GetNewMacroMap(entry.type);
-			auto schema_entry = macro_map.find(entry.ParentSchema().name.GetIdentifierName());
+			auto schema_entry = macro_map.find(macro_schema_id);
 			if (schema_entry == macro_map.end()) {
 				throw InternalException("Dropping a transaction local macro %s that does not exist.", entry.name);
 			}
@@ -2154,8 +2154,8 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 		}
 		return *new_schemas;
 	}
-	auto &schema_name = entry.ParentSchema().name.GetIdentifierName();
-	auto local_entry = GetTransactionLocalEntries(catalog_type, schema_name);
+	auto schema_id = entry.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+	auto local_entry = GetTransactionLocalEntries(catalog_type, schema_id);
 	if (local_entry) {
 		return *local_entry;
 	}
@@ -2164,7 +2164,7 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 	case CatalogType::VIEW_ENTRY: {
 		auto new_table_list = make_uniq<DuckLakeCatalogSet>();
 		auto &result = *new_table_list;
-		new_tables.insert(make_pair(schema_name, std::move(new_table_list)));
+		new_tables.insert(make_pair(schema_id, std::move(new_table_list)));
 		return result;
 	}
 	case CatalogType::MACRO_ENTRY:
@@ -2172,7 +2172,7 @@ DuckLakeCatalogSet &DuckLakeTransaction::GetOrCreateTransactionLocalEntries(Cata
 		auto &macro_map = GetNewMacroMap(catalog_type);
 		auto new_macro_list = make_uniq<DuckLakeCatalogSet>();
 		auto &result = *new_macro_list;
-		macro_map.insert(make_pair(schema_name, std::move(new_macro_list)));
+		macro_map.insert(make_pair(schema_id, std::move(new_macro_list)));
 		return result;
 	}
 	default:
@@ -2185,9 +2185,9 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalSchemas
 }
 
 optional_ptr<CatalogEntry> DuckLakeTransaction::GetTransactionLocalEntry(CatalogType catalog_type,
-                                                                         const string &schema_name,
+                                                                         SchemaIndex schema_id,
                                                                          const string &entry_name) {
-	auto set = GetTransactionLocalEntries(catalog_type, schema_name);
+	auto set = GetTransactionLocalEntries(catalog_type, schema_id);
 	if (!set) {
 		return nullptr;
 	}
@@ -2195,12 +2195,12 @@ optional_ptr<CatalogEntry> DuckLakeTransaction::GetTransactionLocalEntry(Catalog
 }
 
 optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries(CatalogType catalog_type,
-                                                                                 const string &schema_name) {
+                                                                                 SchemaIndex schema_id) {
 	auto &new_tables = state->new_tables;
 	switch (catalog_type) {
 	case CatalogType::TABLE_ENTRY:
 	case CatalogType::VIEW_ENTRY: {
-		auto entry = new_tables.find(schema_name);
+		auto entry = new_tables.find(schema_id);
 		if (entry == new_tables.end()) {
 			return nullptr;
 		}
@@ -2211,7 +2211,7 @@ optional_ptr<DuckLakeCatalogSet> DuckLakeTransaction::GetTransactionLocalEntries
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
 	case CatalogType::TABLE_FUNCTION_ENTRY: {
 		auto &macro_map = GetNewMacroMap(catalog_type);
-		auto entry = macro_map.find(schema_name);
+		auto entry = macro_map.find(schema_id);
 		if (entry == macro_map.end()) {
 			return nullptr;
 		}

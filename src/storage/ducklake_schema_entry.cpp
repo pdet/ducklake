@@ -377,7 +377,7 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 	}
 	// scan transaction-local entries
 	auto &duck_transaction = DuckLakeTransaction::Get(context, ParentCatalog());
-	auto local_set = duck_transaction.GetTransactionLocalEntries(type, name.GetIdentifierName());
+	auto local_set = duck_transaction.GetTransactionLocalEntries(type, schema_id);
 	if (local_set) {
 		for (auto &entry : local_set->GetEntries()) {
 			callback(*entry.second);
@@ -446,8 +446,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	//! search in transaction local storage first
-	auto transaction_entry =
-	    duck_transaction.GetTransactionLocalEntry(catalog_type, name.GetIdentifierName(), entry_name);
+	auto transaction_entry = duck_transaction.GetTransactionLocalEntry(catalog_type, schema_id, entry_name);
 	if (transaction_entry) {
 		return transaction_entry;
 	}
@@ -472,7 +471,7 @@ SimilarCatalogEntry DuckLakeSchemaEntry::GetSimilarEntry(CatalogTransaction tran
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	// check transaction local first
-	auto local_set = duck_transaction.GetTransactionLocalEntries(catalog_type, name.GetIdentifierName());
+	auto local_set = duck_transaction.GetTransactionLocalEntries(catalog_type, schema_id);
 	if (local_set) {
 		for (auto &entry : local_set->GetEntries()) {
 			auto entry_score = StringUtil::SimilarityRating(entry.second->name, Identifier(entry_name));
@@ -506,11 +505,9 @@ void DuckLakeSchemaEntry::AddEntry(CatalogType type, unique_ptr<CatalogEntry> en
 }
 
 void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool cascade) {
-	auto local_tables = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, name.GetIdentifierName());
-	auto local_scalar_macros =
-	    transaction.GetTransactionLocalEntries(CatalogType::MACRO_ENTRY, name.GetIdentifierName());
-	auto local_table_macros =
-	    transaction.GetTransactionLocalEntries(CatalogType::TABLE_MACRO_ENTRY, name.GetIdentifierName());
+	auto local_tables = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, schema_id);
+	auto local_scalar_macros = transaction.GetTransactionLocalEntries(CatalogType::MACRO_ENTRY, schema_id);
+	auto local_table_macros = transaction.GetTransactionLocalEntries(CatalogType::TABLE_MACRO_ENTRY, schema_id);
 	if (!cascade) {
 		// get a list of all dependents
 		vector<reference<CatalogEntry>> dependents;
