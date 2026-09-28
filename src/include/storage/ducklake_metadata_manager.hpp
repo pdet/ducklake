@@ -255,6 +255,7 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
