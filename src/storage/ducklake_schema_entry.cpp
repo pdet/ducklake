@@ -588,7 +588,8 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		if (dependents.empty()) {
 			return;
 		}
-		string error_string = "Cannot drop schema \"" + name + "\" because there are entries that depend on it\n";
+		string error_string =
+		    StringUtil::Format("Cannot drop entry %s because there are entries that depend on it.\n", name);
 		for (auto &dependent : dependents) {
 			auto &dep = dependent.get();
 			error_string += StringUtil::Format(
