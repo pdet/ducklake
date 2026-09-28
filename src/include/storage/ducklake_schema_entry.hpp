@@ -92,6 +92,7 @@ private:
 	                          OnCreateConflict on_conflict);
 	void Scan(DuckLakeTransaction &transaction, CatalogType type, const std::function<void(CatalogEntry &)> &callback);
 	void RefreshPathKey();
+	void DropSchemaDependents(DuckLakeTransaction &transaction);
 	void DropSchemaContents(DuckLakeTransaction &transaction);
 
 	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);

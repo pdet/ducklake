@@ -179,13 +179,28 @@ DROP SCHEMA dl.a;
 ----
 depend
 
-statement error
+statement ok
 DROP SCHEMA dl.a CASCADE;
-----
-dependent child schemas
 
 query I
-SELECT * FROM dl.a.child.t UNION ALL SELECT * FROM dl.b."child.with""quote".t ORDER BY i;
+SELECT * FROM dl.b."child.with""quote".t;
 ----
-1
 2
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 9);
+----
+3
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+
+query II
+SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' ORDER BY ALL;
+----
+b	NULL
+child.with"quote	b
+main	NULL

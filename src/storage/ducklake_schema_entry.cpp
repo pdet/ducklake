@@ -579,9 +579,6 @@ vector<reference<DuckLakeSchemaEntry>> DuckLakeSchemaEntry::GetChildSchemas(Duck
 }
 
 void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool cascade) {
-	if (!GetChildSchemas(transaction).empty()) {
-		throw DependencyException("Cannot drop a schema with dependent child schemas");
-	}
 	if (!cascade) {
 		vector<reference<CatalogEntry>> dependents;
 		for (auto type : {CatalogType::SCHEMA_ENTRY, CatalogType::TABLE_ENTRY, CatalogType::MACRO_ENTRY,
@@ -601,7 +598,29 @@ void DuckLakeSchemaEntry::TryDropSchema(DuckLakeTransaction &transaction, bool c
 		error_string += "Use DROP...CASCADE to drop all dependents.";
 		throw CatalogException(error_string);
 	}
-	DropSchemaContents(transaction);
+	DropSchemaDependents(transaction);
+}
+
+void DuckLakeSchemaEntry::DropSchemaDependents(DuckLakeTransaction &transaction) {
+	vector<reference<DuckLakeSchemaEntry>> subtree;
+	vector<reference<DuckLakeSchemaEntry>> pending;
+	pending.emplace_back(*this);
+	while (!pending.empty()) {
+		auto &current = pending.back().get();
+		pending.pop_back();
+		subtree.emplace_back(current);
+		for (auto &child : current.GetChildSchemas(transaction)) {
+			pending.emplace_back(child);
+		}
+	}
+	for (idx_t schema_idx = subtree.size(); schema_idx > 0; schema_idx--) {
+		auto &current = subtree[schema_idx - 1].get();
+		current.DropSchemaContents(transaction);
+		if (&current == this) {
+			continue;
+		}
+		transaction.DropEntry(current);
+	}
 }
 
 void DuckLakeSchemaEntry::DropSchemaContents(DuckLakeTransaction &transaction) {

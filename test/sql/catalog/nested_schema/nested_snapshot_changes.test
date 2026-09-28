@@ -69,3 +69,11 @@ query I
 SELECT map_extract(changes, 'tables_created')[1][1] FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 8
 ----
 "a.b".t
+
+statement ok
+DROP SCHEMA ducklake.s1 CASCADE;
+
+query I
+SELECT map_extract(changes, 'schemas_dropped')[1] FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 9
+----
+[1, 2]

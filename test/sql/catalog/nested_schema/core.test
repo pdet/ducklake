@@ -129,6 +129,36 @@ SELECT * FROM dl.a.child.t;
 ----
 5	7
 
+statement error
+DROP SCHEMA dl.a;
+----
+depend
+
+statement ok
+BEGIN;
+
+statement ok
+DROP SCHEMA dl.a.child CASCADE;
+
+statement ok
+CREATE SCHEMA dl.a.child;
+
+statement ok
+CREATE TABLE dl.a.child.t AS SELECT 99 AS i;
+
+query I
+SELECT * FROM dl.a.child.t;
+----
+99
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT * FROM dl.a.child.deep.t;
+----
+4
+
 statement ok
 DETACH dl;
 
@@ -149,3 +179,70 @@ query I
 SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND parent_schema IS NOT NULL;
 ----
 3
+
+# Cascade sees renamed, replaced and newly created entries in the transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE dl.a.child.t RENAME TO old_t;
+
+statement ok
+CREATE TABLE dl.a.child.t AS SELECT 99 AS i;
+
+statement ok
+CREATE OR REPLACE VIEW dl.a.child.v AS SELECT * FROM dl.a.child.t;
+
+statement ok
+CREATE OR REPLACE MACRO dl.a.child.m(x) AS x + 100;
+
+statement ok
+DROP SCHEMA dl.a CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 'a';
+----
+0
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT * FROM dl.a.child.v;
+----
+5	7
+
+query I
+SELECT dl.a.child.m(1);
+----
+11
+
+statement ok
+DROP SCHEMA dl.a CASCADE;
+
+statement error
+SELECT * FROM dl.a.child.t;
+----
+does not exist
+
+query I
+SELECT * FROM dl.a.child.deep.t AT (VERSION => 1);
+----
+4
+
+query I
+SELECT * FROM dl.b.child.t UNION ALL SELECT * FROM dl."a.child".t ORDER BY i;
+----
+2
+3
+
+statement ok
+DETACH dl;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND parent_schema IS NOT NULL;
+----
+1
