@@ -96,10 +96,8 @@ SELECT * FROM dl.a.child.local_t UNION ALL SELECT * FROM dl.b."child.with""quote
 statement ok
 ROLLBACK;
 
-statement error
+statement ok
 CREATE SCHEMA dl.a.another;
-----
-Creating nested schemas is not supported
 
 statement ok
 USE dl;

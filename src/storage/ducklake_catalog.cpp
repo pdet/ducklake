@@ -275,31 +275,45 @@ string DuckLakeCatalog::GeneratePathFromName(const string &uuid, const string &n
 }
 
 optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
-	if (info.IsNested()) {
-		throw NotImplementedException("Creating nested schemas is not supported");
+	auto &schema_name = info.SchemaName();
+	auto parents = info.ParentSchemas();
+	optional_ptr<DuckLakeSchemaEntry> parent;
+	if (!parents.empty()) {
+		if (!SupportsV1_1Metadata()) {
+			throw InvalidInputException("DuckLake 1.0 does not support nested schemas");
+		}
+		auto parent_entry = GetSchema(transaction, parents, OnEntryNotFound::THROW_EXCEPTION);
+		parent = &parent_entry->Cast<DuckLakeSchemaEntry>();
 	}
-	auto schema = GetSchema(transaction, info.GetQualifiedName().Schema(), OnEntryNotFound::RETURN_NULL);
-	if (schema) {
+	bool exists;
+	if (parent) {
+		EntryLookupInfo existing_lookup(CatalogType::SCHEMA_ENTRY, QualifiedName(schema_name));
+		exists = parent->LookupEntry(transaction, existing_lookup) != nullptr;
+	} else {
+		exists = GetSchema(transaction, schema_name, OnEntryNotFound::RETURN_NULL) != nullptr;
+	}
+	if (exists) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
 			return nullptr;
 		}
 		if (info.on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
-			throw CatalogException::EntryAlreadyExists(CatalogType::SCHEMA_ENTRY, info.GetQualifiedName().Schema());
+			throw CatalogException::EntryAlreadyExists(CatalogType::SCHEMA_ENTRY, schema_name);
 		}
 		// drop the existing entry
 		DropInfo drop_info;
 		drop_info.type = CatalogType::SCHEMA_ENTRY;
-		drop_info.SetName(info.GetQualifiedName().Schema());
+		drop_info.SetQualifiedName(parent ? parent->GetQualifiedName(schema_name)
+		                                  : QualifiedName(GetName(), Identifier(), schema_name));
 		DropSchema(transaction.GetContext(), drop_info);
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	//! get a local table-id
 	auto schema_id = SchemaIndex(duck_transaction.GetLocalCatalogId());
 	auto schema_uuid = duck_transaction.GenerateUUID();
-	auto schema_data_path = DataPath() + DuckLakeCatalog::GeneratePathFromName(
-	                                         schema_uuid, info.GetQualifiedName().Schema().GetIdentifierName());
-	auto schema_entry =
-	    make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid), std::move(schema_data_path));
+	auto schema_data_path = DataPath() + (parent ? schema_uuid + separator
+	                                             : GeneratePathFromName(schema_uuid, schema_name.GetIdentifierName()));
+	auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid),
+	                                                   std::move(schema_data_path), parent);
 	auto result = schema_entry.get();
 	duck_transaction.CreateEntry(std::move(schema_entry));
 	return result;

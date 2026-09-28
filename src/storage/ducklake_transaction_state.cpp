@@ -1672,11 +1672,23 @@ NewTableInfo DuckLakeTransactionState::GetNewTables(DuckLakeCommitState &commit_
 
 vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeSchemaInfo> schemas;
+	vector<reference<DuckLakeSchemaEntry>> ordered_schemas;
 	for (auto &entry : new_schemas->GetEntries()) {
-		auto &schema_entry = entry.second->Cast<DuckLakeSchemaEntry>();
+		ordered_schemas.push_back(entry.second->Cast<DuckLakeSchemaEntry>());
+	}
+	std::stable_sort(ordered_schemas.begin(), ordered_schemas.end(),
+	                 [](const reference<DuckLakeSchemaEntry> &a, const reference<DuckLakeSchemaEntry> &b) {
+		                 return a.get().SchemaDepth() < b.get().SchemaDepth();
+	                 });
+	for (auto &schema_ref : ordered_schemas) {
+		auto &schema_entry = schema_ref.get();
 		auto old_id = schema_entry.GetSchemaId();
 		DuckLakeSchemaInfo schema_info;
 		schema_info.id = SchemaIndex(commit_state.commit_snapshot.next_catalog_id++);
+		auto parent = schema_entry.ParentDuckLakeSchema();
+		if (parent) {
+			schema_info.parent_id = commit_state.GetSchemaId(*parent);
+		}
 		schema_info.uuid = schema_entry.GetSchemaUUID();
 		schema_info.name = schema_entry.name.GetIdentifierName();
 		schema_info.path = schema_entry.DataPath();
@@ -1741,7 +1753,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		for (auto &schema : new_schemas_result) {
 			resolved_schema_paths.push_back(GetRelativePath(schema.path));
 		}
-		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, resolved_schema_paths);
+		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, resolved_schema_paths,
+		                                                          context.supports_v1_1_metadata);
 	}
 
 	// write new tables

@@ -2872,7 +2872,8 @@ string DuckLakeMetadataManager::DropMacros(const set<MacroIndex> &ids) {
 	return FlushDrop("ducklake_macro", "macro_id", ids);
 }
 string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-                                                const vector<DuckLakePath> &resolved_paths) {
+                                                const vector<DuckLakePath> &resolved_paths,
+                                                bool supports_v1_1_metadata) {
 	if (new_schemas.empty()) {
 		throw InternalException("No schemas to create - should be handled elsewhere");
 	}
@@ -2887,13 +2888,20 @@ string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo>
 			schema_insert_sql += ",";
 		}
 		auto schema_id = new_schema.id.index;
-		schema_insert_sql += StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %s, %s, %s)", schema_id,
+		schema_insert_sql += StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %s, %s, %s", schema_id,
 		                                        new_schema.uuid, SQLString(new_schema.name), SQLString(path.path),
 		                                        path.path_is_relative ? "true" : "false");
+		if (supports_v1_1_metadata) {
+			schema_insert_sql += new_schema.parent_id.IsValid() ? StringUtil::Format(", %d", new_schema.parent_id.index)
+			                                                    : string(", NULL");
+		}
+		schema_insert_sql += ")";
 	}
-	return "INSERT INTO {METADATA_CATALOG}.ducklake_schema "
-	       "(schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES " +
-	       schema_insert_sql + ";";
+	string columns = "schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative";
+	if (supports_v1_1_metadata) {
+		columns += ", parent_schema_id";
+	}
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_schema (" + columns + ") VALUES " + schema_insert_sql + ";";
 }
 
 string GetExpressionType(ParsedExpression &expression) {
