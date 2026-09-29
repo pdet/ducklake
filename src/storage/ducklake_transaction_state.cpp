@@ -289,6 +289,14 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
 	}
+	for (auto &table_id : renamed_tables) {
+		ConflictCheck(table_id, other_changes.dropped_tables, "rename table", "dropped it");
+		ConflictCheck(table_id, other_changes.altered_tables, "rename table", "altered it");
+	}
+	for (auto &view_id : renamed_views) {
+		ConflictCheck(view_id, other_changes.dropped_views, "rename view", "dropped it");
+		ConflictCheck(view_id, other_changes.altered_views, "rename view", "altered it");
+	}
 }
 
 namespace {
