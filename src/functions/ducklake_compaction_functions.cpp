@@ -1,5 +1,4 @@
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
-#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -120,7 +119,7 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	auto files_created = gstate.written_files.size();
 
-	chunk.data[0].Append(Value(DuckLakeUtil::SchemaPathToDisplay(table.schema.GetSchemaPath())));
+	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
@@ -913,8 +912,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (schema_entry != input.named_parameters.end()) {
 		schema = StringValue::Get(schema_entry->second);
 	}
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-	                             DuckLakeUtil::QualifiedEntryName(context, catalog, schema, table), nullptr,
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, catalog.ResolveEntryName(context, schema, table), nullptr,
 	                             QueryErrorContext());
 	CatalogEntryRetriever retriever(context);
 	auto table_entry = catalog.LookupEntry(retriever, table_lookup, OnEntryNotFound::THROW_EXCEPTION).entry;

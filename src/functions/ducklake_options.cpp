@@ -1,4 +1,3 @@
-#include "common/ducklake_util.hpp"
 #include "duckdb/parser/qualified_name.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -128,8 +127,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 		option_info.scope = "SCHEMA";
 		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
 		if (schema_entry) {
-			option_info.scope_entry =
-			    DuckLakeUtil::SchemaPathToDisplay(schema_entry->Cast<SchemaCatalogEntry>().GetSchemaPath());
+			option_info.scope_entry = schema_entry->Cast<SchemaCatalogEntry>().GetSchemaName();
 		}
 		result->options.push_back(std::move(option_info));
 	}

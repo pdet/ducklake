@@ -1676,9 +1676,10 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 	for (auto &entry : new_schemas->GetEntries()) {
 		ordered_schemas.push_back(entry.second->Cast<DuckLakeSchemaEntry>());
 	}
+	// a child's path key extends its parent's, so shorter keys sort parents first
 	std::stable_sort(ordered_schemas.begin(), ordered_schemas.end(),
 	                 [](const reference<DuckLakeSchemaEntry> &a, const reference<DuckLakeSchemaEntry> &b) {
-		                 return a.get().SchemaDepth() < b.get().SchemaDepth();
+		                 return a.get().PathKey().size() < b.get().PathKey().size();
 	                 });
 	for (auto &schema_ref : ordered_schemas) {
 		auto &schema_entry = schema_ref.get();

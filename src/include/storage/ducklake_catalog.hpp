@@ -262,6 +262,9 @@ public:
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
 	}
+	bool SupportsNestedSchemas() const override {
+		return SupportsV1_1Metadata();
+	}
 	//! Whether the catalog has the v1.1 metadata features
 	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1_DEV_1;

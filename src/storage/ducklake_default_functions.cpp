@@ -1,6 +1,4 @@
-#include "common/ducklake_util.hpp"
 #include "duckdb/catalog/default/default_table_functions.hpp"
-#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
@@ -29,9 +27,7 @@ static const DefaultTableMacro ducklake_table_macros[] = {
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LoadBuiltInFunction(DefaultTableMacro macro) {
 	string macro_def = macro.macro;
 	macro_def = StringUtil::Replace(macro_def, "{CATALOG}", SQLString::ToString(catalog.GetName().GetIdentifierName()));
-	auto schema_name = catalog.Cast<DuckLakeCatalog>().SupportsV1_1Metadata()
-	                       ? DuckLakeUtil::SchemaPathToDisplay(GetSchemaPath())
-	                       : name.GetIdentifierName();
+	auto schema_name = catalog.SupportsNestedSchemas() ? GetSchemaName() : name.GetIdentifierName();
 	macro_def = StringUtil::Replace(macro_def, "{SCHEMA}", SQLString::ToString(schema_name));
 	macro.macro = macro_def.c_str();
 	auto info = DefaultTableFunctionGenerator::CreateTableMacroInfo(macro);
