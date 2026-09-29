@@ -1,5 +1,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -468,7 +469,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
-	MigrateInlinedColumnNames();
+	MigrateInlinedColumnNames(allow_failures);
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
@@ -484,7 +485,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		                                          error.RawMessage()));
 	}
 	try {
-		MigrateInlinedColumnNames();
+		MigrateInlinedColumnNames(true);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
@@ -493,7 +494,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 	}
 }
 
-void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
+void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
 	auto tables = Query(R"(
 SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
@@ -523,9 +524,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (inlined_tables.empty()) {
 		return;
 	}
-	// probe all inlined tables in one statement so an already migrated catalog costs a single round trip
-	auto probe_all = Query(renamed_probe);
-	if (!probe_all->HasError()) {
+	// on a re-run one probe over all inlined tables detects an already migrated catalog
+	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
 	for (auto &inlined_table : inlined_tables) {
@@ -2643,7 +2643,8 @@ WITH %ssnapshot_ranges AS (
 SELECT %s
 FROM %s
 LEFT JOIN snapshot_ranges sr
-	ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
+	ON COALESCE(data.partial_max, data.begin_snapshot) >= sr.begin_snapshot
+	AND COALESCE(data.partial_max, data.begin_snapshot) < sr.end_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
 	ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
 LEFT JOIN snapshot_ranges partition_sr
@@ -4881,7 +4882,8 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
-unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result) {
+unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
+                                                                    optional_ptr<string> catalog_version) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -4892,12 +4894,18 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		auto next_catalog_id = row.GetValue<idx_t>(2);
 		auto next_file_id = row.GetValue<idx_t>(3);
 		snapshot = make_uniq<DuckLakeSnapshot>(snapshot_id, schema_version, next_catalog_id, next_file_id);
+		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
+			*catalog_version = row.GetValue<string>(4);
+		}
 	}
 	return snapshot;
 }
 
 string DuckLakeMetadataManager::LatestSnapshotQuery() {
-	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
@@ -4909,9 +4917,16 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
-	auto snapshot = ParseSnapshot(*result);
+	string catalog_version;
+	auto snapshot = ParseSnapshot(*result, &catalog_version);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
+	}
+	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
+	if (!catalog_version.empty() && catalog_version != attached_version) {
+		throw InvalidInputException("The catalog was migrated by another connection from version %s to %s, reattach "
+		                            "to pick up the new version",
+		                            attached_version, catalog_version);
 	}
 	return snapshot;
 }
@@ -5491,62 +5506,47 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		known_files_res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
 	}
 
-	vector<string> known_files;
-	for (auto &row : *known_files_res) {
-		known_files.push_back(row.GetValue<string>(0));
-	}
-
-	const string temp_table = "__ducklake_known_cleanup_files";
-	auto temp_table_identifier = DuckLakeUtil::SQLIdentifierToString(temp_table);
-
-	auto create_temp_query =
-	    StringUtil::Format("CREATE OR REPLACE TEMPORARY TABLE %s(full_path VARCHAR)", temp_table_identifier);
-	auto create_temp_res = transaction.ExecuteRaw(create_temp_query);
-	if (create_temp_res->HasError()) {
-		create_temp_res->GetErrorObject().Throw("Failed to create temporary file list for DuckLake cleanup: ");
-	}
-
-	auto drop_temp_table = [&]() {
-		try {
-			auto drop_temp_query = StringUtil::Format("DROP TABLE IF EXISTS %s", temp_table_identifier);
-			transaction.ExecuteRaw(drop_temp_query);
-		} catch (...) {
+	// compare canonical paths so differently spelled paths to the same file match
+	auto &fs = GetFileSystem();
+	auto canonical_path = [&](const string &path) {
+		auto normalized = StringUtil::Replace(path, "\\", "/");
+		auto parsed = Path::FromString(normalized);
+		if (parsed.IsLocal()) {
+			return fs.CanonicalizePath(normalized);
 		}
+		// key remote paths by authority and path so scheme aliases and query strings match
+		auto path_start = parsed.GetScheme().size();
+		auto query_start = normalized.find('?', path_start);
+		auto path_end = query_start == string::npos ? normalized.size() : query_start;
+		return normalized.substr(path_start, path_end - path_start);
 	};
+	unordered_set<string> known_files;
+	for (auto &row : *known_files_res) {
+		known_files.insert(canonical_path(row.GetValue<string>(0)));
+	}
 
-	try {
-		Appender appender(transaction.GetConnection(), Identifier(temp_table));
-		for (auto &known_file : known_files) {
-			appender.AppendRow(known_file.c_str());
-		}
-		appender.Close();
-
-		auto query = StringUtil::Format(R"(SELECT filename
+	auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**') files
 WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
-AND NOT EXISTS (
-	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
-)
 %s)",
-		                                temp_table_identifier, filter);
-		SubstituteCatalogPlaceholders(query);
-		auto res = transaction.ExecuteRaw(query);
-		if (res->HasError()) {
-			res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
-		}
-
-		vector<DuckLakeFileForCleanup> result;
-		for (auto &row : *res) {
-			DuckLakeFileForCleanup info;
-			info.path = row.GetValue<string>(0);
-			result.push_back(std::move(info));
-		}
-		drop_temp_table();
-		return result;
-	} catch (...) {
-		drop_temp_table();
-		throw;
+	                                filter);
+	SubstituteCatalogPlaceholders(query);
+	auto res = transaction.ExecuteRaw(query);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
 	}
+
+	vector<DuckLakeFileForCleanup> result;
+	for (auto &row : *res) {
+		auto path = row.GetValue<string>(0);
+		if (known_files.count(canonical_path(path))) {
+			continue;
+		}
+		DuckLakeFileForCleanup info;
+		info.path = std::move(path);
+		result.push_back(std::move(info));
+	}
+	return result;
 }
 
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetFilesForCleanup(const string &filter, CleanupType type,
@@ -5699,6 +5699,8 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 }
 
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
+	GetSnapshot();
 	unique_ptr<QueryResult> result;
 	// first delete the actual snapshots
 	string snapshot_ids;

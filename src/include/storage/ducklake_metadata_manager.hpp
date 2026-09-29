@@ -290,7 +290,8 @@ public:
 	static string LatestSnapshotQuery();
 	static string GlobalTableStatsQuery(bool include_exactness);
 	//! Pure parsers for the results of the above queries.
-	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
@@ -502,7 +503,7 @@ public:
 	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
 	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
-	virtual void MigrateInlinedColumnNames();
+	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
