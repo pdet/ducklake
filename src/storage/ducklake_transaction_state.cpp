@@ -517,8 +517,13 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
 					                              parameter.parameter_name);
 				}
+				auto default_type = default_value.type();
+				if (default_value.IsNull() && (DuckLakeTypes::IsStringType(default_type) || default_type.IsNested())) {
+					// the text NULL is a valid string and nested types are stored without their children
+					default_type = LogicalType::SQLNULL;
+				}
 				parameter.default_value = default_value.ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
+				parameter.default_value_type = DuckLakeTypes::ToString(default_type);
 			} else {
 				parameter.default_value_type = "unknown";
 			}

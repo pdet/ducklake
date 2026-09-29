@@ -156,7 +156,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 		for (auto &entry : macro->default_parameters) {
 			Value default_value;
 			if (DuckLakeUtil::TryGetLiteralValue(*entry.second, default_value)) {
-				DuckLakeTypes::CheckSupportedType(default_value.type(), version);
+				DuckLakeTypes::CheckSupportedType(default_value.IsNull() ? LogicalType::SQLNULL : default_value.type(),
+				                                  version);
 			}
 		}
 	}
