@@ -5471,62 +5471,39 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		known_files_res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
 	}
 
-	vector<string> known_files;
-	for (auto &row : *known_files_res) {
-		known_files.push_back(row.GetValue<string>(0));
-	}
-
-	const string temp_table = "__ducklake_known_cleanup_files";
-	auto temp_table_identifier = DuckLakeUtil::SQLIdentifierToString(temp_table);
-
-	auto create_temp_query =
-	    StringUtil::Format("CREATE OR REPLACE TEMPORARY TABLE %s(full_path VARCHAR)", temp_table_identifier);
-	auto create_temp_res = transaction.ExecuteRaw(create_temp_query);
-	if (create_temp_res->HasError()) {
-		create_temp_res->GetErrorObject().Throw("Failed to create temporary file list for DuckLake cleanup: ");
-	}
-
-	auto drop_temp_table = [&]() {
-		try {
-			auto drop_temp_query = StringUtil::Format("DROP TABLE IF EXISTS %s", temp_table_identifier);
-			transaction.ExecuteRaw(drop_temp_query);
-		} catch (...) {
-		}
+	// compare canonical paths so differently spelled paths to the same local file match
+	auto &fs = GetFileSystem();
+	auto canonical_path = [&](const string &path) {
+		auto normalized = StringUtil::Replace(path, "\\", "/");
+		return fs.IsRemoteFile(normalized) ? normalized : fs.CanonicalizePath(normalized);
 	};
+	unordered_set<string> known_files;
+	for (auto &row : *known_files_res) {
+		known_files.insert(canonical_path(row.GetValue<string>(0)));
+	}
 
-	try {
-		Appender appender(transaction.GetConnection(), Identifier(temp_table));
-		for (auto &known_file : known_files) {
-			appender.AppendRow(known_file.c_str());
-		}
-		appender.Close();
-
-		auto query = StringUtil::Format(R"(SELECT filename
+	auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob({DATA_PATH} || '**') files
 WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
-AND NOT EXISTS (
-	SELECT 1 FROM %s known_files WHERE known_files.full_path = REPLACE(files.filename, '\', '/')
-)
 %s)",
-		                                temp_table_identifier, filter);
-		SubstituteCatalogPlaceholders(query);
-		auto res = transaction.ExecuteRaw(query);
-		if (res->HasError()) {
-			res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
-		}
-
-		vector<DuckLakeFileForCleanup> result;
-		for (auto &row : *res) {
-			DuckLakeFileForCleanup info;
-			info.path = row.GetValue<string>(0);
-			result.push_back(std::move(info));
-		}
-		drop_temp_table();
-		return result;
-	} catch (...) {
-		drop_temp_table();
-		throw;
+	                                filter);
+	SubstituteCatalogPlaceholders(query);
+	auto res = transaction.ExecuteRaw(query);
+	if (res->HasError()) {
+		res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
 	}
+
+	vector<DuckLakeFileForCleanup> result;
+	for (auto &row : *res) {
+		auto path = row.GetValue<string>(0);
+		if (known_files.count(canonical_path(path))) {
+			continue;
+		}
+		DuckLakeFileForCleanup info;
+		info.path = std::move(path);
+		result.push_back(std::move(info));
+	}
+	return result;
 }
 
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetFilesForCleanup(const string &filter, CleanupType type,
