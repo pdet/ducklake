@@ -1,6 +1,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -1622,14 +1623,19 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
+			// some writers report zero values and zero nulls for files with rows, keep those files
 			referenced_stats.insert("null_count");
-			return StatsColumn(stats_alias, "null_count") + " > 0";
+			referenced_stats.insert("value_count");
+			return "(" + StatsColumn(stats_alias, "null_count") + " > 0 OR " + StatsColumn(stats_alias, "value_count") +
+			       " = 0)";
 		case ExpressionType::OPERATOR_IS_NOT_NULL:
 			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
+			referenced_stats.insert("null_count");
 			referenced_stats.insert("value_count");
-			return StatsColumn(stats_alias, "value_count") + " > 0";
+			return "(" + StatsColumn(stats_alias, "value_count") + " > 0 OR " + StatsColumn(stats_alias, "null_count") +
+			       " = 0)";
 		case ExpressionType::COMPARE_IN: {
 			if (op_expr.GetChildren().size() < 2 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
@@ -1741,6 +1747,16 @@ static void AddCTERequirement(map<idx_t, CTERequirement> &requirements, idx_t co
 	entry->second.referenced_stats.insert(referenced_stats.begin(), referenced_stats.end());
 }
 
+static bool ContainsIsNull(const Expression &expr) {
+	if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		return true;
+	}
+	bool contains_is_null = false;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { contains_is_null = contains_is_null || ContainsIsNull(child); });
+	return contains_is_null;
+}
+
 string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter,
                                                               FilterSQLResult &result) {
 	auto cte_name = StatsCteName(column_filter.column_field_index);
@@ -1759,7 +1775,8 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 
 	// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
 	// min/max are absent - only a purely value-based filter may use the guard
-	const bool matches_null_rows = referenced_stats.count("null_count") > 0;
+	const bool matches_null_rows =
+	    column_filter.table_filter->expr && ContainsIsNull(*column_filter.table_filter->expr);
 	const bool needs_value_count_guard =
 	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
 	if (needs_value_count_guard) {

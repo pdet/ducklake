@@ -1,0 +1,31 @@
+# name: test/sql/stats/interval_null_filter.test
+# description: IS NULL and IS NOT NULL on INTERVAL columns do not prune files with rows
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/interval_null_filter', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, iv INTERVAL);
+
+# parquet reports zero values and zero nulls for INTERVAL
+statement ok
+INSERT INTO ducklake.t VALUES (1, INTERVAL 1 HOUR), (2, NULL);
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t WHERE iv IS NULL
+----
+[2]
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t WHERE iv IS NOT NULL
+----
+[1]
