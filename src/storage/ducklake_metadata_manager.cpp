@@ -464,7 +464,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
-	MigrateInlinedColumnNames();
+	MigrateInlinedColumnNames(allow_failures);
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
@@ -480,7 +480,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		                                          error.RawMessage()));
 	}
 	try {
-		MigrateInlinedColumnNames();
+		MigrateInlinedColumnNames(true);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
@@ -489,7 +489,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 	}
 }
 
-void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
+void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
 	auto tables = Query(R"(
 SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
@@ -519,9 +519,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (inlined_tables.empty()) {
 		return;
 	}
-	// probe all inlined tables in one statement so an already migrated catalog costs a single round trip
-	auto probe_all = Query(renamed_probe);
-	if (!probe_all->HasError()) {
+	// on a re-run one probe over all inlined tables detects an already migrated catalog
+	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
 	for (auto &inlined_table : inlined_tables) {
