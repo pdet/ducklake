@@ -1,0 +1,46 @@
+# name: test/sql/migration/dev_rerun_skips_ddl.test
+# description: attaching an up to date catalog does not rerun the migration DDL, a partially migrated one is healed
+# group: [migration]
+
+require ducklake
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/dev_rerun_skips_ddl.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/dev_rerun_skips_ddl', METADATA_CATALOG 'meta')
+
+statement ok
+DETACH ducklake
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (METADATA_CATALOG 'meta')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query ILIKE '%ALTER TABLE%' OR query ILIKE '%CREATE TABLE%' OR query ILIKE '%UPDATE%ducklake_metadata%'
+----
+0
+
+# a later addition is missing from one of two tables that share its name
+statement ok
+ALTER TABLE meta.ducklake_delete_file DROP COLUMN row_group_count
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (METADATA_CATALOG 'meta')
+
+statement ok
+SELECT row_group_count FROM meta.ducklake_delete_file

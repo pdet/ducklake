@@ -463,17 +463,35 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 
+// binds only when every addition of V1_1_DEV1_MIGRATION_QUERY exists, keep both in sync
+static constexpr const char *V1_1_DEV1_ADDITIONS_PROBE = R"(
+SELECT 1
+FROM (SELECT df.row_group_count FROM {METADATA_CATALOG}.ducklake_data_file df LIMIT 0),
+     (SELECT dlf.row_group_count FROM {METADATA_CATALOG}.ducklake_delete_file dlf LIMIT 0),
+     (SELECT fcs.min_is_exact, fcs.max_is_exact FROM {METADATA_CATALOG}.ducklake_file_column_stats fcs LIMIT 0),
+     (SELECT tcs.min_is_exact, tcs.max_is_exact FROM {METADATA_CATALOG}.ducklake_table_column_stats tcs LIMIT 0),
+     (SELECT vct.view_id FROM {METADATA_CATALOG}.ducklake_view_column_tag vct LIMIT 0)
+	)";
+
+void DuckLakeMetadataManager::MigrateV10Additions(bool allow_failures) {
+	// a rerun skips the DDL when nothing is missing as Postgres DDL needs table ownership
+	if (allow_failures && !Query(V1_1_DEV1_ADDITIONS_PROBE)->HasError()) {
+		return;
+	}
+	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
-	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
+	MigrateV10Additions(allow_failures);
 }
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
 	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
 	try {
-		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
+		MigrateV10Additions(true);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
