@@ -310,6 +310,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		if (schema_version == latest_schema_version) {
 			return true;
 		}
+		if (!catalog.SupportsV1_1Metadata()) {
+			// DuckLake 1.0 compaction derives the schema of a file from its begin snapshot
+			return false;
+		}
 		auto cached = merges_into_latest_schema.find(schema_version);
 		if (cached != merges_into_latest_schema.end()) {
 			return cached->second;
@@ -524,11 +528,13 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
-	// Cross-schema groups bind to the latest snapshot so the merged file is written under the current schema (the
-	// reader projects each source via its own mapping_id); same-schema groups bind to the source schema_version.
-	DuckLakeSnapshot snapshot = bind_to_latest_schema ? transaction.GetSnapshot()
-	                                                  : DuckLakeSnapshot(source_files[0].file.begin_snapshot,
-	                                                                     source_files[0].schema_version, 0, 0);
+	// cross-schema groups bind to the latest snapshot and others to the start of their schema version
+	auto schema_version = source_files[0].schema_version;
+	DuckLakeSnapshot snapshot =
+	    bind_to_latest_schema
+	        ? transaction.GetSnapshot()
+	        : DuckLakeSnapshot(catalog.GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+	                           schema_version, 0, 0);
 
 	auto entry = catalog.GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {

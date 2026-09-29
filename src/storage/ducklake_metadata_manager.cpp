@@ -2634,7 +2634,8 @@ WITH %ssnapshot_ranges AS (
 SELECT %s
 FROM %s
 LEFT JOIN snapshot_ranges sr
-	ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
+	ON COALESCE(data.partial_max, data.begin_snapshot) >= sr.begin_snapshot
+	AND COALESCE(data.partial_max, data.begin_snapshot) < sr.end_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
 	ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
 LEFT JOIN snapshot_ranges partition_sr

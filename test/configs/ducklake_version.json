@@ -69,6 +69,14 @@
       ]
     },
     {
+      "reason": "Merging files across schema versions requires 1.1-dev1 and is disabled when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/compaction/compaction_alter_table.test",
+        "test/sql/compaction/compaction_schema_version_per_table.test",
+        "test/sql/compaction/merge_adjacent_cross_schema.test"
+      ]
+    },
+    {
       "reason": "Epoch partition transforms were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_file_epoch_partitioned.test",
