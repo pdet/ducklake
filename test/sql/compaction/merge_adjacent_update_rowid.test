@@ -1,0 +1,37 @@
+# name: test/sql/compaction/merge_adjacent_update_rowid.test
+# description: merge_adjacent_files keeps the row ids that updated files store in the file
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_update_rowid', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'a' FROM range(10);
+
+statement ok
+UPDATE ducklake.t SET s = 'u1' WHERE id < 3;
+
+# the insert file has deletes and is skipped so two update files are needed to merge
+statement ok
+UPDATE ducklake.t SET s = 'u2' WHERE id > 7;
+
+query IIII
+CALL ducklake_merge_adjacent_files('ducklake');
+----
+main	t	2	1
+
+query I
+SELECT list(rowid ORDER BY id) FROM ducklake.t
+----
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

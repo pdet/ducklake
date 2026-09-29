@@ -104,6 +104,8 @@ private:
 	optional_ptr<DuckLakeTableEntry> ResolvePartitionSpecTable(DuckLakeTableEntry &table,
 	                                                           const DuckLakeCompactionFileEntry &source_file,
 	                                                           idx_t partition_id);
+	//! Whether a file stores row ids that differ from its row_id_start range
+	bool HasNonPositionalRowIds(const vector<DuckLakeCompactionFileEntry> &source_files);
 
 	ClientContext &context;
 	DuckLakeCatalog &catalog;

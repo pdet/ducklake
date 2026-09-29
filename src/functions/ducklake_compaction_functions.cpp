@@ -1,5 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -525,6 +526,65 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 	return &partition_table;
 }
 
+bool DuckLakeCompactor::HasNonPositionalRowIds(const vector<DuckLakeCompactionFileEntry> &source_files) {
+	vector<string> paths;
+	for (auto &source : source_files) {
+		if (!source.file.data.encryption_key.empty()) {
+			// the metadata of an encrypted file cannot be read without its key
+			return true;
+		}
+		paths.push_back(SQLString::ToString(source.file.data.path));
+	}
+	auto result = transaction.ExecuteRaw(StringUtil::Format(R"(
+SELECT file_name,
+       bool_or(is_row_id),
+       bool_and(NOT is_row_id OR (row_id_min IS NOT NULL AND row_id_max IS NOT NULL)),
+       min(row_id_min) FILTER (WHERE is_row_id),
+       max(row_id_max) FILTER (WHERE is_row_id)
+FROM (
+	SELECT file_name, path_in_schema = '_ducklake_internal_row_id' AS is_row_id,
+	       TRY_CAST(COALESCE(stats_min, stats_min_value) AS BIGINT) AS row_id_min,
+	       TRY_CAST(COALESCE(stats_max, stats_max_value) AS BIGINT) AS row_id_max
+	FROM parquet_metadata([%s])
+)
+GROUP BY file_name)",
+	                                                        StringUtil::Join(paths, ", ")));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read the metadata of the files to compact: ");
+	}
+	struct StoredRowIds {
+		bool has_row_ids;
+		bool has_stats;
+		Value min;
+		Value max;
+	};
+	unordered_map<string, StoredRowIds> stored_row_ids;
+	for (auto &row : *result) {
+		stored_row_ids[row.GetValue<string>(0)] =
+		    StoredRowIds {row.GetValue<bool>(1), row.GetValue<bool>(2), row.GetValue<Value>(3), row.GetValue<Value>(4)};
+	}
+	for (auto &source : source_files) {
+		auto entry = stored_row_ids.find(source.file.data.path);
+		if (entry == stored_row_ids.end()) {
+			return true;
+		}
+		auto &stored = entry->second;
+		if (!stored.has_row_ids) {
+			continue;
+		}
+		// stored row ids are positional only when they cover exactly the range of row_id_start
+		if (!stored.has_stats || stored.min.IsNull() || stored.max.IsNull()) {
+			return true;
+		}
+		auto row_id_start = NumericCast<int64_t>(source.file.row_id_start.GetIndex());
+		auto row_id_end = row_id_start + NumericCast<int64_t>(source.file.row_count) - 1;
+		if (stored.min.GetValue<int64_t>() != row_id_start || stored.max.GetValue<int64_t>() != row_id_end) {
+			return true;
+		}
+	}
+	return false;
+}
+
 unique_ptr<LogicalOperator>
 DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
                                              bool bind_to_latest_schema) {
@@ -631,8 +691,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// if files are adjacent, we don't need to write the row-id to the file
-		write_row_id = !files_are_adjacent;
+		// adjacent files with positional row ids do not need to write the row-id to the file
+		write_row_id = !files_are_adjacent || HasNonPositionalRowIds(actionable_source_files);
 		write_snapshot_id = true;
 		break;
 	}
