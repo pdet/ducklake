@@ -188,11 +188,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
-	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	auto catalog_version = DuckLakeVersion::UNSET;
+	auto target_version = DuckLakeVersion::UNSET;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
-			auto catalog_version = DuckLakeVersionFromString(tag.value);
-			auto target_version = ResolveTargetVersion(catalog_version, tag.value);
+			catalog_version = DuckLakeVersionFromString(tag.value);
+			target_version = ResolveTargetVersion(catalog_version, tag.value);
 			if (catalog_version > target_version) {
 				// catalog is newer than the requested version, no FWC
 				throw InvalidInputException(
@@ -206,53 +207,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value, DuckLakeVersionToString(target_version));
 			}
-			if (catalog_version == DuckLakeVersion::V0_1) {
-				metadata_manager.MigrateV01();
-				catalog_version = DuckLakeVersion::V0_2;
-			}
-			if (catalog_version == DuckLakeVersion::V0_2) {
-				metadata_manager.MigrateV02();
-				catalog_version = DuckLakeVersion::V0_3;
-			}
-			if (catalog_version == DuckLakeVersion::V0_3_DEV1) {
-				metadata_manager.MigrateV02(true);
-				catalog_version = DuckLakeVersion::V0_3;
-			}
-			if (catalog_version == DuckLakeVersion::V0_3) {
-				metadata_manager.MigrateV03();
-				catalog_version = DuckLakeVersion::V0_4;
-			}
-			if (catalog_version == DuckLakeVersion::V0_4_DEV1) {
-				metadata_manager.MigrateV03(true);
-				catalog_version = DuckLakeVersion::V0_4;
-			}
-			if (catalog_version == DuckLakeVersion::V0_4) {
-				metadata_manager.MigrateV04();
-				catalog_version = DuckLakeVersion::V1_0;
-			}
-			if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
-				// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
-				if (options.automatic_migration) {
-					// an explicitly requested migration fails loudly
-					metadata_manager.MigrateV10(true);
-				} else if (options.access_mode != AccessMode::READ_ONLY) {
-					// a plain attach is best-effort and never fails the attach
-					metadata_manager.MigrateV10Dev();
-				}
-			}
-			if (catalog_version >= target_version) {
-				resolved_version = catalog_version;
-				continue;
-			}
-			if (catalog_version == DuckLakeVersion::V1_0) {
-				metadata_manager.MigrateV10();
-				catalog_version = DuckLakeVersion::V1_1_DEV_1;
-			}
-			if (catalog_version != DUCKLAKE_LATEST_VERSION) {
-				throw NotImplementedException("Unsupported DuckLake version '%s'",
-				                              DuckLakeVersionToString(catalog_version));
-			}
-			resolved_version = catalog_version;
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
@@ -285,10 +239,66 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// set correct version metadata manager
-	if (resolved_version != DuckLakeVersion::UNSET) {
+	// migrate only after every metadata tag is validated
+	if (catalog_version != DuckLakeVersion::UNSET) {
+		auto resolved_version = MigrateCatalog(metadata_manager, catalog_version, target_version);
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
+}
+
+DuckLakeVersion DuckLakeInitializer::MigrateCatalog(DuckLakeMetadataManager &metadata_manager,
+                                                    DuckLakeVersion catalog_version, DuckLakeVersion target_version) {
+	bool read_only_attach = options.access_mode == AccessMode::READ_ONLY || options.at_clause;
+	if (catalog_version < target_version && read_only_attach) {
+		throw InvalidInputException("Cannot migrate DuckLake catalog version %s to %s in a READ_ONLY attach or an "
+		                            "attach at a snapshot, attach without them to migrate first",
+		                            DuckLakeVersionToString(catalog_version), DuckLakeVersionToString(target_version));
+	}
+	if (catalog_version == DuckLakeVersion::V0_1) {
+		metadata_manager.MigrateV01();
+		catalog_version = DuckLakeVersion::V0_2;
+	}
+	if (catalog_version == DuckLakeVersion::V0_2) {
+		metadata_manager.MigrateV02();
+		catalog_version = DuckLakeVersion::V0_3;
+	}
+	if (catalog_version == DuckLakeVersion::V0_3_DEV1) {
+		metadata_manager.MigrateV02(true);
+		catalog_version = DuckLakeVersion::V0_3;
+	}
+	if (catalog_version == DuckLakeVersion::V0_3) {
+		metadata_manager.MigrateV03();
+		catalog_version = DuckLakeVersion::V0_4;
+	}
+	if (catalog_version == DuckLakeVersion::V0_4_DEV1) {
+		metadata_manager.MigrateV03(true);
+		catalog_version = DuckLakeVersion::V0_4;
+	}
+	if (catalog_version == DuckLakeVersion::V0_4) {
+		metadata_manager.MigrateV04();
+		catalog_version = DuckLakeVersion::V1_0;
+	}
+	if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
+		// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
+		if (options.automatic_migration && !read_only_attach) {
+			// an explicitly requested migration fails loudly
+			metadata_manager.MigrateV10(true);
+		} else if (options.access_mode != AccessMode::READ_ONLY) {
+			// a plain attach is best-effort and never fails the attach
+			metadata_manager.MigrateV10Dev();
+		}
+	}
+	if (catalog_version >= target_version) {
+		return catalog_version;
+	}
+	if (catalog_version == DuckLakeVersion::V1_0) {
+		metadata_manager.MigrateV10();
+		catalog_version = DuckLakeVersion::V1_1_DEV_1;
+	}
+	if (catalog_version != DUCKLAKE_LATEST_VERSION) {
+		throw NotImplementedException("Unsupported DuckLake version '%s'", DuckLakeVersionToString(catalog_version));
+	}
+	return catalog_version;
 }
 
 DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalog_version,

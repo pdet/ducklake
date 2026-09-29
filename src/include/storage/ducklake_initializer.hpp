@@ -14,6 +14,7 @@
 #include "duckdb/main/connection.hpp"
 
 namespace duckdb {
+class DuckLakeMetadataManager;
 class DuckLakeTransaction;
 
 class DuckLakeInitializer {
@@ -31,6 +32,8 @@ private:
 	void CheckAndAutoloadedRequiredExtension(const string &pattern);
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
+	DuckLakeVersion MigrateCatalog(DuckLakeMetadataManager &metadata_manager, DuckLakeVersion catalog_version,
+	                               DuckLakeVersion target_version);
 
 private:
 	ClientContext &context;

@@ -524,6 +524,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
+	// check every table before renaming any so a collision leaves the catalog unchanged
+	string renames;
 	for (auto &inlined_table : inlined_tables) {
 		auto &table_name = inlined_table.first;
 		auto &user_table_name = inlined_table.second;
@@ -539,7 +541,6 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 		for (idx_t i = col_renames.size(); i < names.size(); i++) {
 			user_columns.insert(names[i].GetIdentifierName());
 		}
-		string renames;
 		bool unexpected_layout = names.size() < col_renames.size();
 		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
 			auto &entry = col_renames[i];
@@ -567,14 +568,13 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 			    "an unexpected column layout",
 			    table_name);
 		}
-		if (renames.empty()) {
-			continue;
-		}
-		auto result = Execute(renames);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw(StringUtil::Format(
-			    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
-		}
+	}
+	if (renames.empty()) {
+		return;
+	}
+	auto result = Execute(renames);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: ");
 	}
 }
 

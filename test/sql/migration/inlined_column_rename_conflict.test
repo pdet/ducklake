@@ -14,6 +14,12 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlc (DATA_PATH '{DATA_PATH}/inlined_conflict_files', METADATA_CATALOG 'dlcmeta', DUCKLAKE_VERSION '1.0')
 
 statement ok
+CREATE TABLE dlc.a(i INTEGER);
+
+statement ok
+INSERT INTO dlc.a VALUES (42);
+
+statement ok
 CREATE TABLE dlc.c(_ducklake_row_id INTEGER, _ducklake_begin_snapshot INTEGER, _ducklake_end_snapshot INTEGER);
 
 statement ok
@@ -35,6 +41,11 @@ query III
 SELECT * FROM dlc.c
 ----
 1	2	3
+
+query I
+SELECT * FROM dlc.a
+----
+42
 
 statement ok
 DETACH dlc

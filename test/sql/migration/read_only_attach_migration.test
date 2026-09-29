@@ -1,0 +1,54 @@
+# name: test/sql/migration/read_only_attach_migration.test
+# description: a READ_ONLY, snapshot or failing attach does not migrate the catalog
+# group: [migration]
+
+require ducklake
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_attach_migration.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/read_only_attach_migration', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+DETACH ducklake
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+----
+Cannot migrate DuckLake catalog version 1.0
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (SNAPSHOT_VERSION 1, AUTOMATIC_MIGRATION TRUE)
+----
+Cannot migrate DuckLake catalog version 1.0
+
+# an attach that fails after reading the version does not migrate
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (AUTOMATIC_MIGRATION TRUE, ENCRYPTED TRUE)
+----
+the database is not encrypted
+
+# the catalog is still at 1.0
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.0')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH ducklake
+
+# a READ_ONLY attach of an up to date catalog does not rerun the migration
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH ducklake
