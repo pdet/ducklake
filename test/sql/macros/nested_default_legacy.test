@@ -1,0 +1,50 @@
+# name: test/sql/macros/nested_default_legacy.test
+# description: macros with nested defaults written by DuckLake 1.0 load without their default
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_macro_nested_default_legacy.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_default_legacy', METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE MACRO ducklake.list_default(x := 0) AS x
+
+statement ok
+CREATE MACRO ducklake.map_default(x := 0) AS x
+
+# DuckLake 1.0 stored nested defaults as text with a type name that has no child types
+query I
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '[2020-01-01]', default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
+----
+1
+
+query I
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '{a=1}', default_value_type = 'map' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'map_default')
+----
+1
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/macro_nested_default_legacy', METADATA_CATALOG 'ducklake_meta')
+
+statement error
+SELECT ducklake.list_default()
+----
+does not support the supplied arguments
+
+query I
+SELECT ducklake.list_default([1, 2])
+----
+[1, 2]
+
+statement ok
+DROP MACRO ducklake.map_default

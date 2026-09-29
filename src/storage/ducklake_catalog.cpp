@@ -438,6 +438,23 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
+static unique_ptr<ParsedExpression> LoadMacroDefault(ClientContext &context, const DuckLakeMacroParameters &param) {
+	auto type = DuckLakeTypes::FromString(param.default_value_type);
+	if (type.id() == LogicalTypeId::UNKNOWN) {
+		return nullptr;
+	}
+	// typed NULL defaults are stored as the text NULL
+	bool is_null = StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(type);
+	if (type.IsNested()) {
+		// nested types are stored without their child types so only NULL defaults can be rebuilt
+		return is_null ? ConstantExpression::FromValue(Value()) : nullptr;
+	}
+	if (is_null) {
+		return ConstantExpression::FromValue(Value(type));
+	}
+	return ConstantExpression::FromValue(param.default_value.CastAs(context, type));
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -473,25 +490,11 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
-		vector<unique_ptr<ParsedExpression>> expr_list;
 		for (auto &param : impl.parameters) {
-			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
-			if (expr_list.size() != 1) {
-				throw InternalException("Expected a single expression");
-			}
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(Identifier(param.parameter_name)));
-			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
-			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
-				Value casted_value;
-				// typed NULL defaults are stored as the text NULL
-				if (StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(expr_type)) {
-					// nested types are stored without their child types
-					casted_value = expr_type.IsNested() ? Value() : Value(expr_type);
-				} else {
-					casted_value = param.default_value.CastAs(context, expr_type);
-				}
-				auto casted_expr = ConstantExpression::FromValue(casted_value);
-				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(casted_expr));
+			auto default_expr = LoadMacroDefault(context, param);
+			if (default_expr) {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(default_expr));
 			}
 			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
 		}
