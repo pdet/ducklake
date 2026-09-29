@@ -4863,7 +4863,8 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
 }
 
-unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result) {
+unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
+                                                                    optional_ptr<string> catalog_version) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -4874,12 +4875,18 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		auto next_catalog_id = row.GetValue<idx_t>(2);
 		auto next_file_id = row.GetValue<idx_t>(3);
 		snapshot = make_uniq<DuckLakeSnapshot>(snapshot_id, schema_version, next_catalog_id, next_file_id);
+		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
+			*catalog_version = row.GetValue<string>(4);
+		}
 	}
 	return snapshot;
 }
 
 string DuckLakeMetadataManager::LatestSnapshotQuery() {
-	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
@@ -4891,9 +4898,16 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
 	}
-	auto snapshot = ParseSnapshot(*result);
+	string catalog_version;
+	auto snapshot = ParseSnapshot(*result, &catalog_version);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
+	}
+	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
+	if (!catalog_version.empty() && catalog_version != attached_version) {
+		throw InvalidInputException("The catalog was migrated by another connection from version %s to %s, reattach "
+		                            "to pick up the new version",
+		                            attached_version, catalog_version);
 	}
 	return snapshot;
 }
@@ -5666,6 +5680,8 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 }
 
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
+	GetSnapshot();
 	unique_ptr<QueryResult> result;
 	// first delete the actual snapshots
 	string snapshot_ids;

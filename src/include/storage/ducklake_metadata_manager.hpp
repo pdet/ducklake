@@ -289,7 +289,8 @@ public:
 	static string LatestSnapshotQuery();
 	static string GlobalTableStatsQuery(bool include_exactness);
 	//! Pure parsers for the results of the above queries.
-	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
