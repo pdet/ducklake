@@ -1,5 +1,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -5471,11 +5472,19 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		known_files_res->GetErrorObject().Throw("Failed to get files scheduled for deletion from DuckLake: ");
 	}
 
-	// compare canonical paths so differently spelled paths to the same local file match
+	// compare canonical paths so differently spelled paths to the same file match
 	auto &fs = GetFileSystem();
 	auto canonical_path = [&](const string &path) {
 		auto normalized = StringUtil::Replace(path, "\\", "/");
-		return fs.IsRemoteFile(normalized) ? normalized : fs.CanonicalizePath(normalized);
+		auto parsed = Path::FromString(normalized);
+		if (parsed.IsLocal()) {
+			return fs.CanonicalizePath(normalized);
+		}
+		// key remote paths by authority and path so scheme aliases and query strings match
+		auto path_start = parsed.GetScheme().size();
+		auto query_start = normalized.find('?', path_start);
+		auto path_end = query_start == string::npos ? normalized.size() : query_start;
+		return normalized.substr(path_start, path_end - path_start);
 	};
 	unordered_set<string> known_files;
 	for (auto &row : *known_files_res) {
