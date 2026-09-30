@@ -5,7 +5,6 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
-#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
@@ -134,15 +133,9 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
 }
 
 unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
-	Parser parser;
 	// switcharoo of generic {DUCKLAKE_CATALOG}. with actual catalog name
 	auto resolved_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, "{DUCKLAKE_CATALOG}.", catalog.GetName() + ".");
-	parser.ParseQuery(resolved_sql);
-	if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
-		throw InvalidInputException("Invalid input for view - view must have a single SELECT statement: \"%s\"",
-		                            query_sql);
-	}
-	return unique_ptr_cast<SQLStatement, SelectStatement>(std::move(parser.statements[0]));
+	return CreateViewInfo::ParseSelect(resolved_sql);
 }
 
 const SelectStatement &DuckLakeViewEntry::GetQuery() {
