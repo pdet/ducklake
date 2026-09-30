@@ -191,23 +191,9 @@ struct DuckLakeCompactionGroupHash {
 
 struct DuckLakeCompactionGroupEquality {
 	bool operator()(const DuckLakeCompactionGroup &a, const DuckLakeCompactionGroup &b) const {
-		if (a.schema_version != b.schema_version || a.partition_id != b.partition_id) {
-			return false;
-		}
-		if (a.partition_values.size() != b.partition_values.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < a.partition_values.size(); i++) {
-			const auto &av = a.partition_values[i];
-			const auto &bv = b.partition_values[i];
-			if (av.IsNull() != bv.IsNull()) {
-				return false;
-			}
-			if (!av.IsNull() && av.ToString() != bv.ToString()) {
-				return false;
-			}
-		}
-		return true;
+		return a.schema_version == b.schema_version && a.partition_id == b.partition_id &&
+		       std::equal(a.partition_values.begin(), a.partition_values.end(), b.partition_values.begin(),
+		                  b.partition_values.end(), ValueEquality());
 	}
 };
 
