@@ -356,20 +356,14 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	for (auto &chunk : existing.Chunks()) {
 		DataChunk new_chunk;
 		new_chunk.Initialize(context, new_types);
-
-		// Copy existing columns
-		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
-			new_chunk.data[col_idx].Reference(chunk.data[col_idx]);
-		}
+		new_chunk.Reference(chunk);
 
 		// New column: use default value or NULL
 		auto &new_col_vector = new_chunk.data[chunk.ColumnCount()];
 		if (has_default) {
 			new_col_vector.Reference(default_value, count_t(chunk.size()));
 		} else {
-			new_col_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-			FlatVector::SetSize(new_col_vector, chunk.size());
-			ConstantVector::SetNull(new_col_vector, true);
+			ConstantVector::SetNull(new_col_vector, count_t(chunk.size()));
 		}
 
 		new_chunk.SetChildCardinality(chunk.size());
@@ -422,11 +416,13 @@ void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context,
 	auto &existing = *table_changes.new_inlined_data->data;
 
 	// New types: existing minus the removed column
+	vector<column_t> column_ids;
 	vector<LogicalType> new_types;
-	for (idx_t col_idx = 0; col_idx < existing.Types().size(); col_idx++) {
+	for (idx_t col_idx = 0; col_idx < existing.ColumnCount(); col_idx++) {
 		if (col_idx == removed_column_index.index) {
 			continue;
 		}
+		column_ids.push_back(col_idx);
 		new_types.push_back(existing.Types()[col_idx]);
 	}
 
@@ -435,21 +431,8 @@ void LocalTableChanges::RemoveColumnFromLocalInlinedData(ClientContext &context,
 	ColumnDataAppendState append_state;
 	new_data->InitializeAppend(append_state);
 
-	for (auto &chunk : existing.Chunks()) {
-		DataChunk new_chunk;
-		new_chunk.Initialize(context, new_types);
-
-		idx_t new_col_idx = 0;
-		for (idx_t col_idx = 0; col_idx < chunk.ColumnCount(); col_idx++) {
-			if (col_idx == removed_column_index.index) {
-				continue;
-			}
-			new_chunk.data[new_col_idx].Reference(chunk.data[col_idx]);
-			new_col_idx++;
-		}
-
-		new_chunk.SetChildCardinality(chunk.size());
-		new_data->Append(append_state, new_chunk);
+	for (auto &chunk : existing.Chunks(column_ids)) {
+		new_data->Append(append_state, chunk);
 	}
 
 	// Remove stats for the dropped field and all its children
