@@ -16,8 +16,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/parser/parsed_data/create_function_info.hpp"
-#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "common/ducklake_util.hpp"
 
@@ -180,7 +179,6 @@ bool DuckLakeSchemaEntry::CatalogTypeIsSupported(CatalogType type) {
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransaction transaction,
                                                                CreateFunctionInfo &info) {
-	unique_ptr<CatalogEntry> macro_entry;
 	auto &create_macro_info = info.Cast<CreateMacroInfo>();
 	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
 	for (auto &macro : create_macro_info.macros) {
@@ -194,16 +192,10 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 			}
 		}
 	}
-	switch (info.type) {
-	case CatalogType::MACRO_ENTRY:
-		macro_entry = make_uniq<ScalarMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
-		break;
-	case CatalogType::TABLE_MACRO_ENTRY:
-		macro_entry = make_uniq<TableMacroCatalogEntry>(ParentCatalog(), *this, create_macro_info);
-		break;
-	default:
+	if (info.type != CatalogType::MACRO_ENTRY && info.type != CatalogType::TABLE_MACRO_ENTRY) {
 		throw NotImplementedException("DuckLake does not support %s functions", CatalogTypeToString(info.type));
 	}
+	auto macro_entry = MacroCatalogEntry::Create(ParentCatalog(), *this, create_macro_info);
 	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
 	if (!HandleCreateConflict(transaction, info.type, info.GetFunctionName().GetIdentifierName(), info.on_conflict)) {
 		return nullptr;
