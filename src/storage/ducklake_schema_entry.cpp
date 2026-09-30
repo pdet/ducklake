@@ -250,26 +250,6 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateSequence(CatalogTransactio
 	throw NotImplementedException("DuckLake does not support sequences");
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateTableFunction(CatalogTransaction transaction,
-                                                                    CreateTableFunctionInfo &info) {
-	throw NotImplementedException("DuckLake does not support table functions");
-}
-
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateCopyFunction(CatalogTransaction transaction,
-                                                                   CreateCopyFunctionInfo &info) {
-	throw NotImplementedException("DuckLake does not support copy functions");
-}
-
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreatePragmaFunction(CatalogTransaction transaction,
-                                                                     CreatePragmaFunctionInfo &info) {
-	throw NotImplementedException("DuckLake does not support pragma functions");
-}
-
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateCollation(CatalogTransaction transaction,
-                                                                CreateCollationInfo &info) {
-	throw NotImplementedException("DuckLake does not support collations");
-}
-
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {
 	throw NotImplementedException("DuckLake does not support user-defined types");
 }
