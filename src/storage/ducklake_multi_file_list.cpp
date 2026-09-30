@@ -18,7 +18,6 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "storage/ducklake_table_entry.hpp"
 
@@ -265,16 +264,9 @@ bool DuckLakeMultiFileList::FilterTreeState::AddLeaves(const DuckLakeFilterNode 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::CombineFilterNode(ClientContext &context,
                                                                         MultiFilePushdownInfo &info,
                                                                         const Expression &expr) const {
-	// the optimizer splits the conjuncts it hands us, but an OR branch reached by recursion arrives whole
-	vector<unique_ptr<Expression>> conjuncts;
-	conjuncts.push_back(expr.Copy());
-	LogicalFilter::SplitPredicates(conjuncts);
-
 	FilterCombiner combiner(context);
-	for (auto &conjunct : conjuncts) {
-		if (combiner.AddFilter(std::move(conjunct)) == FilterResult::UNSATISFIABLE) {
-			return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
-		}
+	if (combiner.AddConjuncts(expr.Copy()) == FilterResult::UNSATISFIABLE) {
+		return make_uniq<DuckLakeFilterNode>(DuckLakeFilterNodeType::MATCH_NONE);
 	}
 	vector<FilterPushdownResult> pushdown_results;
 	auto table_filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
