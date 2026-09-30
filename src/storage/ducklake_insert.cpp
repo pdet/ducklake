@@ -36,7 +36,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
-#include "duckdb/main/extension_helper.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -316,17 +315,8 @@ InsertionOrderPreservingMap<string> DuckLakeInsert::ParamsToString() const {
 // Plan
 //===--------------------------------------------------------------------===//
 CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &context, const Identifier &name) {
-	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
-	// name), but that do not offer enough control
-	auto &db = *context.db;
-	string extension_name = ExtensionHelper::FindExtensionInEntries(name, EXTENSION_COPY_FUNCTIONS);
-	if (!extension_name.empty() && Settings::Get<AutoloadKnownExtensionsSetting>(context) &&
-	    ExtensionHelper::CanAutoloadExtension(extension_name)) {
-		// This will either succeed or throw
-		ExtensionHelper::AutoLoadExtension(db, extension_name);
-	}
 	D_ASSERT(!name.empty());
-	auto &system_catalog = Catalog::GetSystemCatalog(db);
+	auto &system_catalog = Catalog::GetSystemCatalog(context);
 
 	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(
 	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), name),
