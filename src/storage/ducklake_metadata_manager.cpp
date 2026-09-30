@@ -1783,24 +1783,13 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx_t, CTE
 		return "";
 	}
 
-	string cte_section = "WITH ";
-	bool first_cte = true;
-
+	vector<string> ctes;
 	for (const auto &entry : requirements) {
 		const auto &req = entry.second;
-
-		if (!first_cte) {
-			cte_section += ",\n";
-		}
-		first_cte = false;
-
 		// each CTE is referenced by exactly one join, so there is nothing for a materialization hint to buy
-		cte_section += StatsCteName(req.column_field_index) + " AS (\n";
-		cte_section += generate_body(req, table_id);
-		cte_section += ")";
+		ctes.push_back(StatsCteName(req.column_field_index) + " AS (\n" + generate_body(req, table_id) + ")");
 	}
-
-	return cte_section + "\n";
+	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
 }
 
 //! Fold a single constant through the bucket() transform, returning the resulting partition_value

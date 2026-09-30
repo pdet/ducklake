@@ -38,16 +38,8 @@ bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	    R"({"xmin": %s, "xmax": %s, "ymin": %s, "ymax": %s, "zmin": %s, "zmax": %s, "mmin": %s, "mmax": %s})", xmin_val,
 	    xmax_val, ymin_val, ymax_val, zmin_val, zmax_val, mmin_val, mmax_val);
 
-	string types = "[";
-	for (auto &type : geo_types) {
-		if (types.size() > 1) {
-			types += ", ";
-		}
-		types += StringUtil::Format("\"%s\"", type);
-	}
-	types += "]";
-
-	result = StringUtil::Format(R"('{"bbox": %s, "types": %s}')", bbox, types);
+	auto types = geo_types.empty() ? "" : "\"" + StringUtil::Join(geo_types, "\", \"") + "\"";
+	result = StringUtil::Format(R"('{"bbox": %s, "types": [%s]}')", bbox, types);
 	return true;
 }
 
