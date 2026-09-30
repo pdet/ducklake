@@ -19,10 +19,7 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/operator/logical_get.hpp"
-#include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 namespace duckdb {
 
@@ -260,45 +257,7 @@ void DuckLakeTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, 
                                                LogicalUpdate &update, ClientContext &context) {
 	// all updates in DuckLake are deletes + inserts
 	update.update_is_del_and_insert = true;
-
-	// push projections for all columns that are not projected yet
-	// FIXME: this is almost a copy of LogicalUpdate::BindExtraColumns aside from the duplicate elimination
-	// add that to main DuckDB
-	auto &column_ids = get.GetColumnIds();
-	for (auto &column : columns.Physical()) {
-		auto physical_index = column.Physical();
-		bool found = false;
-		for (auto &col : update.columns) {
-			if (col == physical_index) {
-				found = true;
-				break;
-			}
-		}
-		if (found) {
-			// already updated
-			continue;
-		}
-		// check if the column is already projected
-		optional_idx column_id_index;
-		for (idx_t i = 0; i < column_ids.size(); i++) {
-			if (column_ids[i].GetPrimaryIndex() == physical_index.index) {
-				column_id_index = i;
-				break;
-			}
-		}
-		if (!column_id_index.IsValid()) {
-			// not yet projected - add to a projection list
-			column_id_index = column_ids.size();
-			get.AddColumnId(physical_index.index);
-		}
-		// column is not projected yet: project it by adding the clause "i=i" to the set of updated columns
-		update.expressions.push_back(make_uniq<BoundColumnRefExpression>(
-		    column.Type(), ColumnBinding(proj.table_index, ProjectionIndex(proj.expressions.size()))));
-		proj.expressions.push_back(make_uniq<BoundColumnRefExpression>(
-		    column.Type(), ColumnBinding(get.table_index, ProjectionIndex(column_id_index.GetIndex()))));
-		get.AddColumnId(physical_index.index);
-		update.columns.push_back(physical_index);
-	}
+	LogicalUpdate::BindAllColumns(*this, get, proj, update, true);
 }
 
 } // namespace duckdb
