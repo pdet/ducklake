@@ -66,30 +66,10 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 }
 
 //===--------------------------------------------------------------------===//
-// Source State
-//===--------------------------------------------------------------------===//
-class DuckLakeFlushDataSourceState : public GlobalSourceState {
-public:
-	DuckLakeFlushDataSourceState() : returned_result(false) {
-	}
-	bool returned_result;
-};
-
-unique_ptr<GlobalSourceState> DuckLakeFlushData::GetGlobalSourceState(ClientContext &context) const {
-	return make_uniq<DuckLakeFlushDataSourceState>();
-}
-
-//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
-	auto &source_state = input.global_state.Cast<DuckLakeFlushDataSourceState>();
-	if (source_state.returned_result) {
-		return SourceResultType::FINISHED;
-	}
-	source_state.returned_result = true;
-
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
 	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
 	chunk.data[1].Append(Value(table.name.GetIdentifierName()));

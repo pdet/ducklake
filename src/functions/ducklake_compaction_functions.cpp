@@ -88,31 +88,10 @@ DuckLakeCompaction::DuckLakeCompaction(PhysicalPlan &physical_plan, const vector
 }
 
 //===--------------------------------------------------------------------===//
-// Source State
-//===--------------------------------------------------------------------===//
-class DuckLakeCompactionSourceState : public GlobalSourceState {
-public:
-	DuckLakeCompactionSourceState() : returned_result(false) {
-	}
-
-	bool returned_result;
-};
-
-//===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-unique_ptr<GlobalSourceState> DuckLakeCompaction::GetGlobalSourceState(ClientContext &context) const {
-	return make_uniq<DuckLakeCompactionSourceState>();
-}
-
 SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                      OperatorSourceInput &input) const {
-	auto &source_state = input.global_state.Cast<DuckLakeCompactionSourceState>();
-	if (source_state.returned_result) {
-		return SourceResultType::FINISHED;
-	}
-	source_state.returned_result = true;
-
 	if (!this->sink_state) {
 		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
 	}
