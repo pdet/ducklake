@@ -284,8 +284,8 @@ string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, c
 string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const {
 	string sql;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		idx_t file_order = 0;
 		for (auto &file : table_changes.new_data_files) {
 			EmitDataFileRow(sql, file, local_file_id, table_id, file_order, "NULL");
@@ -304,8 +304,8 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 	string sql;
 
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		if (!table_changes.new_inlined_data) {
 			continue;
 		}
@@ -338,8 +338,8 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 string DuckLakeStagedCommit::EmitInlinedDeletes(const LocalTableChanges &local_changes) const {
 	string sql;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		for (auto &deletes_entry : table_changes.new_inlined_data_deletes) {
 			auto &inlined_table_name = deletes_entry.first;
 			auto &deletes = *deletes_entry.second;
@@ -356,8 +356,8 @@ string DuckLakeStagedCommit::EmitInlinedDeletes(const LocalTableChanges &local_c
 string DuckLakeStagedCommit::EmitInlinedFileDeletes(const LocalTableChanges &local_changes) const {
 	string sql;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		if (!table_changes.new_inlined_file_deletes) {
 			continue;
 		}
@@ -376,8 +376,8 @@ string DuckLakeStagedCommit::EmitInlinedFileDeletes(const LocalTableChanges &loc
 string DuckLakeStagedCommit::EmitDeleteFiles(const LocalTableChanges &local_changes) const {
 	string sql;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		for (auto &delete_entry : table_changes.new_delete_files) {
 			auto &data_file_path = delete_entry.first;
 			for (auto &file : delete_entry.second) {
@@ -392,8 +392,8 @@ string DuckLakeStagedCommit::EmitCompactions(const LocalTableChanges &local_chan
 	string sql;
 	idx_t compaction_id = 0;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		for (auto &compaction : table_changes.compactions) {
 			idx_t output_order = 0;
 			for (auto &written_file : compaction.written_files) {

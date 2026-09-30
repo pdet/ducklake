@@ -152,7 +152,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
-		DuckLakeTransaction::AddTableChanges(entry.GetTableIndex(), entry.GetTableChanges(), transaction_changes);
+		DuckLakeTransaction::AddTableChanges(entry.first, entry.second, transaction_changes);
 	}
 	// Mirror whole-file drops into the conflict-detection set.
 	for (auto &table_id : state->tables_deleted_from) {

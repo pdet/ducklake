@@ -292,8 +292,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 			// If we have deletes on the tables, check for files being deleted
 			const auto deleted_files = GetFilesDeletedOrDroppedAfterSnapshot(executor);
 			for (auto &entry : local_changes.Changes()) {
-				auto &table_changes = entry.GetTableChanges();
-				for (auto &file_entry : table_changes.new_delete_files) {
+				for (auto &file_entry : entry.second.new_delete_files) {
 					for (auto &file : file_entry.second) {
 						ConflictCheck(file.data_file_id, deleted_files.deleted_from_files, "delete from file",
 						              "deleted from it");
@@ -371,9 +370,7 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
-		DuckLakeTransaction::AddTableChanges(table_id, table_changes, changes);
+		DuckLakeTransaction::AddTableChanges(commit_state.GetTableId(entry.first), entry.second, changes);
 	}
 	vector<string> changes_made;
 	for (auto &entry : changes.dropped_schemas) {
@@ -598,8 +595,8 @@ DuckLakeTransactionState::GetNewDeleteFiles(const DuckLakeCommitState &commit_st
 	vector<DuckLakeDeleteFileInfo> result;
 	// handle delete files made to existing files
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
 				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
@@ -631,8 +628,8 @@ vector<DuckLakeDeletedInlinedDataInfo>
 DuckLakeTransactionState::GetNewInlinedDeletes(DuckLakeCommitState &commit_state) const {
 	vector<DuckLakeDeletedInlinedDataInfo> result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		for (auto &delete_entry : table_changes.new_inlined_data_deletes) {
 			DuckLakeDeletedInlinedDataInfo info;
 			info.table_id = table_id;
@@ -650,8 +647,8 @@ vector<DuckLakeInlinedFileDeletionInfo>
 DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_state) {
 	vector<DuckLakeInlinedFileDeletionInfo> result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = commit_state.GetTableId(entry.first);
+		auto &table_changes = entry.second;
 		if (!table_changes.new_inlined_file_deletes) {
 			continue;
 		}
@@ -672,8 +669,8 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 	auto &commit_snapshot = commit_state.commit_snapshot;
 	CompactionInformation result;
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = entry.GetTableIndex();
-		auto &table_changes = entry.GetTableChanges();
+		auto table_id = entry.first;
+		auto &table_changes = entry.second;
 		for (auto &compaction : table_changes.compactions) {
 			if (type != compaction.type) {
 				continue;
@@ -744,7 +741,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
-				file_info.table_index = entry.GetTableIndex();
+				file_info.table_index = table_id;
 				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
 				if (has_new_files) {
 					file_info.new_id = DataFileIndex(first_new_id.GetIndex());
@@ -1138,11 +1135,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		dl_stats = context.build_stats_map(*stats);
 	}
 	for (auto &entry : local_changes.Changes()) {
-		auto table_id = commit_state.GetTableId(entry.GetTableIndex());
+		auto table_id = commit_state.GetTableId(entry.first);
 		if (IsTransactionLocal(table_id)) {
 			throw InternalException("Cannot commit transaction local files - these should have been cleaned up before");
 		}
-		auto &table_changes = entry.GetTableChanges();
+		auto &table_changes = entry.second;
 		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data) {
 			// no new data - skip this entry
 			continue;
