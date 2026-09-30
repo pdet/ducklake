@@ -58,8 +58,6 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 			}
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
-		} else {
-			throw InternalException("Unsupported named parameter for ducklake_expire_snapshots");
 		}
 	}
 	if (has_versions && has_timestamp) {

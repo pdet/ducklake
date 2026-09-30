@@ -31,9 +31,6 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
-		} else {
-			throw BinderException("Unknown named parameter \"%s\" for ducklake_commit",
-			                      entry.first.GetIdentifierName());
 		}
 	}
 	names.emplace_back("committed_snapshot_id");

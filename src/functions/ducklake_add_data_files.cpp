@@ -64,16 +64,13 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 		throw InvalidInputException("File list must be a string or a list of strings");
 	}
 	for (auto &entry : input.named_parameters) {
-		auto lower = StringUtil::Lower(entry.first.GetIdentifierName());
-		if (lower == "allow_missing") {
+		if (entry.first == "allow_missing") {
 			result->allow_missing = BooleanValue::Get(entry.second);
-		} else if (lower == "ignore_extra_columns") {
+		} else if (entry.first == "ignore_extra_columns") {
 			result->ignore_extra_columns = BooleanValue::Get(entry.second);
-		} else if (lower == "hive_partitioning") {
+		} else if (entry.first == "hive_partitioning") {
 			result->hive_partitioning =
 			    BooleanValue::Get(entry.second) ? HivePartitioningType::YES : HivePartitioningType::NO;
-		} else if (lower != "schema") {
-			throw InternalException("Unknown named parameter %s for add_files", entry.first);
 		}
 	}
 
