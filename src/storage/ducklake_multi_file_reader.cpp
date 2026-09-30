@@ -114,10 +114,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!file_max) {
 			return false;
 		}
-		if (comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-			return !(*file_max > *casted_constant);
-		}
-		return !(*file_max >= *casted_constant);
+		return !DynamicFilterData::CompareValue(comparison_type, *casted_constant, *file_max);
 	}
 	case ExpressionType::COMPARE_LESSTHAN:
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
@@ -128,10 +125,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!file_min) {
 			return false;
 		}
-		if (comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-			return !(*file_min < *casted_constant);
-		}
-		return !(*file_min <= *casted_constant);
+		return !DynamicFilterData::CompareValue(comparison_type, *casted_constant, *file_min);
 	}
 	default:
 		return false;
