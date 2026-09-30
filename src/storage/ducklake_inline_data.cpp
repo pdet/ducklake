@@ -55,11 +55,7 @@ public:
 			target = std::move(source);
 			return;
 		}
-		ColumnDataAppendState append_state;
-		target->InitializeAppend(append_state);
-		for (auto &chunk : source->Chunks()) {
-			target->Append(append_state, chunk);
-		}
+		target->Append(*source);
 	}
 
 	const DuckLakeInlineData &op;

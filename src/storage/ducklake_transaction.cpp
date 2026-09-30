@@ -138,9 +138,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	auto &inlined = *table_changes.new_inlined_data;
 	auto result = make_shared_ptr<DuckLakeInlinedData>();
 	result->data = make_uniq<ColumnDataCollection>(context, inlined.data->Types());
-	for (auto &chunk : inlined.data->Chunks()) {
-		result->data->Append(chunk);
-	}
+	result->data->Append(*inlined.data);
 	result->row_ids = inlined.row_ids;
 	return result;
 }
@@ -236,11 +234,7 @@ void LocalTableChanges::AppendInlinedData(ClientContext &context, TableIndex tab
 			}
 			existing_data.data = std::move(casted_data);
 		}
-		ColumnDataAppendState append_state;
-		existing_data.data->InitializeAppend(append_state);
-		for (auto &chunk : new_data->data->Chunks()) {
-			existing_data.data->Append(chunk);
-		}
+		existing_data.data->Append(*new_data->data);
 		// merge preserved row_ids from update inlining
 		existing_data.MergeRowIds(*new_data, new_data->data->Count());
 		for (auto &entry : new_data->column_stats) {
