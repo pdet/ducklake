@@ -2835,11 +2835,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 			if (value.empty()) {
 				default_val = "''";
 			} else {
-				auto sql_expr = Parser::ParseExpressionList(column.default_value.GetValue<string>());
-				if (sql_expr.size() != 1) {
-					throw InternalException("Expected a single expression");
-				}
-				default_val = SQLString::ToString(sql_expr[0]->ToString());
+				default_val = SQLString::ToString(Parser::ParseSingleExpression(value)->ToString());
 			}
 		} else {
 			throw InvalidInputException("Expression type %s not implemented for default value",
