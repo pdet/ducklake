@@ -161,34 +161,6 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return value.ToSQLString();
 	}
-	case LogicalTypeId::STRUCT: {
-		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
-			// Stored as VARCHAR text - use ToString() which produces parseable format
-			return value.ToString();
-		}
-		auto &child_types = StructType::GetChildTypes(value.type());
-		auto &struct_values = StructValue::GetChildren(value);
-		if (struct_values.empty()) {
-			return "NULL";
-		}
-		bool is_unnamed = StructType::IsUnnamed(value.type());
-		string ret = is_unnamed ? "(" : "{";
-		for (idx_t i = 0; i < struct_values.size(); i++) {
-			auto &name = child_types[i].first;
-			auto &child = struct_values[i];
-			if (is_unnamed) {
-				ret += ToSQLString(metadata_manager, child);
-			} else {
-				ret += "'" + StringUtil::Replace(name.GetIdentifierName(), "'", "''") +
-				       "': " + ToSQLString(metadata_manager, child);
-			}
-			if (i < struct_values.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += is_unnamed ? ")" : "}";
-		return ret;
-	}
 	case LogicalTypeId::FLOAT: {
 		float fval = FloatValue::Get(value);
 		if (!Value::FloatIsFinite(fval) || (fval == 0.0f && std::signbit(fval))) {
@@ -203,23 +175,14 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return value.ToString();
 	}
+	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::ARRAY: {
-		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
-			// Stored as VARCHAR text - use ToString() which produces parseable format
+		if (!use_native_type) {
 			return value.ToString();
 		}
-		auto &children =
-		    value.type().id() == LogicalTypeId::LIST ? ListValue::GetChildren(value) : ArrayValue::GetChildren(value);
-		string ret = "[";
-		for (idx_t i = 0; i < children.size(); i++) {
-			ret += ToSQLString(metadata_manager, children[i]);
-			if (i < children.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += "]";
-		return ret;
+		return Value::NestedToSQLString(value,
+		                                [&](const Value &child) { return ToSQLString(metadata_manager, child); });
 	}
 	case LogicalTypeId::MAP: {
 		if (!metadata_manager.TypeIsNativelySupported(value.type())) {
