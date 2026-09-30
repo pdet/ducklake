@@ -256,10 +256,8 @@ shared_ptr<DuckLakeFunctionInfo>
 DuckLakeFunctionInfo::Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto result = make_shared_ptr<DuckLakeFunctionInfo>(table, transaction, snapshot);
 	result->table_name = table.name.GetIdentifierName();
-	for (auto &col : table.GetColumns().Logical()) {
-		result->column_names.push_back(col.Name().GetIdentifierName());
-		result->column_types.push_back(col.Type());
-	}
+	result->column_names = table.GetColumns().GetColumnNames();
+	result->column_types = table.GetColumns().GetColumnTypes();
 	result->table_id = table.GetTableId();
 	return result;
 }
