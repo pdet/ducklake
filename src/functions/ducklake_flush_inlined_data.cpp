@@ -26,7 +26,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
@@ -663,22 +663,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	groups.push_back(make_uniq<BoundColumnRefExpression>(child->types[1], child_bindings[1]));
 
 	// Create SUM(rows_flushed) aggregate
-	auto &system_catalog = Catalog::GetSystemCatalog(context);
-	auto &sum_entry = system_catalog.GetEntry<AggregateFunctionCatalogEntry>(
-	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), "sum"));
-
 	vector<unique_ptr<Expression>> sum_args;
 	sum_args.push_back(make_uniq<BoundColumnRefExpression>(child->types[2], child_bindings[2]));
-
-	// Pick the right sum overload
-	auto sum_func = sum_entry.functions.GetFunctionByArguments(context, {sum_args[0]->GetReturnType()});
+	auto sum_func = GetBuiltinAggregateFunction(context, "sum", {sum_args[0]->GetReturnType()});
 	FunctionBinder function_binder(context);
-	auto sum_aggregate =
-	    function_binder.BindAggregateFunction(sum_func,            // The SUM(BIGINT) -> HUGEINT function
-	                                          std::move(sum_args), // Arguments: [rows_flushed column ref]
-	                                          nullptr,             // No FILTER clause (e.g., SUM(x) FILTER (WHERE ...))
-	                                          AggregateType::NON_DISTINCT // Not SUM(DISTINCT ...)
-	    );
+	auto sum_aggregate = function_binder.BindAggregateFunction(std::move(sum_func), std::move(sum_args));
 
 	// Create LogicalAggregate with GROUP BY schema_name, table_name and SUM(rows_flushed)
 	auto group_index = input.binder->GenerateTableIndex();
