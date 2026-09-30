@@ -1,5 +1,4 @@
 #include "metadata_manager/quack_metadata_manager.hpp"
-#include "common/ducklake_util.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -15,11 +14,11 @@ QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : D
 unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	lock_guard<std::recursive_mutex> guard(ducklake_catalog.GetMetadataQueryLock());
-	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
+	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
 	SubstituteCatalogPlaceholders(query);
 
-	auto metadata_catalog_name_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
+	auto metadata_catalog_name_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
 	                                  SQLString(query));
 	auto result = transaction.ExecuteRaw(std::move(wrapper));
@@ -67,7 +66,7 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto query = StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
 	                                "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-	                                DuckLakeUtil::SQLLiteralToString(table_name));
+	                                SQLString::ToString(table_name));
 	auto result = Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");

@@ -1,5 +1,4 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
-#include "common/ducklake_util.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -100,7 +99,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (type.IsNumeric()) {
 		return value.ToString();
 	}
-	auto literal = DuckLakeUtil::SQLLiteralToString(value.ToString());
+	auto literal = SQLString::ToString(value.ToString());
 	if (type.id() == LogicalTypeId::VARCHAR) {
 		return WithPostgresBinaryCollation(literal);
 	}
@@ -239,13 +238,12 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query =
-	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	                       DuckLakeUtil::SQLLiteralToString(catalog.MetadataSchemaName().GetIdentifierName()),
-	                       DuckLakeUtil::SQLLiteralToString(table_name));
+	auto remote_query = StringUtil::Format(
+	    "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
+	    SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()), SQLString::ToString(table_name));
 	auto query =
 	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	                       DuckLakeUtil::SQLLiteralToString(remote_query));
+	                       SQLString::ToString(remote_query));
 	auto result = DuckLakeMetadataManager::Query(query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
@@ -267,13 +265,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteQuery(DuckLakeSnapshot s
 
 	auto &connection = transaction.GetConnection();
 	auto &ducklake_catalog = transaction.GetCatalog();
-	auto catalog_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataDatabaseName());
-	auto catalog_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataDatabaseName());
-	auto schema_identifier = DuckLakeUtil::SQLIdentifierToString(ducklake_catalog.MetadataSchemaName());
+	auto catalog_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName());
+	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
+	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
 	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
-	auto schema_literal = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
-	auto metadata_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.MetadataPath());
-	auto data_path = DuckLakeUtil::SQLLiteralToString(ducklake_catalog.DataPath());
+	auto schema_literal = SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
+	auto metadata_path = SQLString::ToString(ducklake_catalog.MetadataPath());
+	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
 
 	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_LITERAL}", catalog_literal);
 	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier);

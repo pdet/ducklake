@@ -2,7 +2,6 @@
 
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_types.hpp"
-#include "common/ducklake_util.hpp"
 #include "common/ducklake_version.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -128,7 +127,7 @@ void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
                                                    int64_t schema_version_p)
     : context(context_p), metadata_schema_name(std::move(metadata_schema_name_p)),
-      schema_id(DuckLakeUtil::SQLIdentifierToString(metadata_schema_name)), schema_version(schema_version_p),
+      schema_id(SQLQuotedIdentifier::ToString(metadata_schema_name)), schema_version(schema_version_p),
       fresh_conn(*context_p.db) {
 }
 
@@ -811,7 +810,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		auto probe_sql = SubstitutePlaceholders(
 		    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
 		                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-		                       DuckLakeUtil::SQLLiteralToString(inlined_deletion_table)),
+		                       SQLString::ToString(inlined_deletion_table)),
 		    transaction_snapshot);
 		auto probe = fresh_conn.Query(probe_sql);
 		if (!probe || probe->HasError() || probe->RowCount() == 0) {
@@ -851,8 +850,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
 	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
-	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}",
-	                          DuckLakeUtil::SQLLiteralToString(metadata_schema_name));
+	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}", SQLString::ToString(metadata_schema_name));
 	sql = StringUtil::Replace(sql, "{SNAPSHOT_ID}", std::to_string(snapshot.snapshot_id));
 	sql = StringUtil::Replace(sql, "{SCHEMA_VERSION}", std::to_string(snapshot.schema_version));
 	sql = StringUtil::Replace(sql, "{NEXT_CATALOG_ID}", std::to_string(snapshot.next_catalog_id));

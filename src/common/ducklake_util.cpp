@@ -83,25 +83,13 @@ ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
 	return result_data;
 }
 
-string DuckLakeUtil::SQLIdentifierToString(const string &text) {
-	return SQLQuotedIdentifier::ToString(text);
-}
-
-string DuckLakeUtil::SQLIdentifierToString(const Identifier &identifier) {
-	return SQLQuotedIdentifier::ToString(identifier);
-}
-
-string DuckLakeUtil::SQLLiteralToString(const string &text) {
-	return SQLString::ToString(text);
-}
-
 string DuckLakeUtil::StatsToString(const string &text) {
 	for (auto c : text) {
 		if (c == '\0') {
 			return "NULL";
 		}
 	}
-	return DuckLakeUtil::SQLLiteralToString(text);
+	return SQLString::ToString(text);
 }
 
 static string EscapeVarcharForSQL(const string &str_val) {
@@ -599,7 +587,7 @@ const char *DuckLakeUtil::BoolLiteral(bool v) {
 }
 
 string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
-	return v.IsNull() ? string("NULL") : SQLLiteralToString(v.ToString());
+	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
 static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
@@ -648,7 +636,7 @@ string DuckLakeUtil::InlinedVariantExpression(const string &expression, const Lo
 		for (idx_t i = 0; i < children.size(); i++) {
 			auto &child = children[i];
 			auto name =
-			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLLiteralToString(child.first.GetIdentifierName());
+			    StructType::IsUnnamed(type) ? to_string(i + 1) : SQLString::ToString(child.first.GetIdentifierName());
 			auto field = InlinedVariantExpression("struct_extract(" + expression + ", " + name + ")", child.second,
 			                                      encode, depth);
 			fields.push_back(StructType::IsUnnamed(type) ? field : name + ": " + field);

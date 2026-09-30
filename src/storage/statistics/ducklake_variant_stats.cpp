@@ -11,7 +11,6 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "storage/ducklake_metadata_info.hpp"
-#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
@@ -188,7 +187,7 @@ bool DuckLakeColumnVariantStats::TrySerialize(string &result) const {
 		root.Append(SerializeShreddedStats(writer, entry.first, entry.second));
 	}
 	writer.SetRoot(root);
-	result = DuckLakeUtil::SQLLiteralToString(writer.ToString());
+	result = SQLString::ToString(writer.ToString());
 	return true;
 }
 
@@ -378,10 +377,6 @@ bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vect
 	return false;
 }
 
-string QuoteVariantFieldName(const string &field_name) {
-	return SQLQuotedIdentifier::ToString(field_name);
-}
-
 vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {
 	vector<string> field_names;
 	for (idx_t i = variant_field_start; i + 1 < path.size(); i += 2) {
@@ -438,7 +433,7 @@ LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<str
 					if (!variant_field_name.empty()) {
 						variant_field_name += ".";
 					}
-					variant_field_name += QuoteVariantFieldName(field_name);
+					variant_field_name += SQLQuotedIdentifier::ToString(field_name);
 					return ExtractVariantType(typed_child.second, field_names, variant_field_name, field_idx + 1);
 				}
 			}

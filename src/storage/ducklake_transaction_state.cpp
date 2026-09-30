@@ -358,7 +358,7 @@ void AddCreatedChangeInfo(vector<string> &changes_made,
 			auto &catalog_entry = created_entry.get();
 			auto entry_type = catalog_entry.type == CatalogType::VIEW_ENTRY ? "created_view" : change_type;
 			changes_made.push_back(entry_type + ":" + entry.first + "." +
-			                       DuckLakeUtil::SQLIdentifierToString(catalog_entry.name.GetIdentifierName()));
+			                       SQLQuotedIdentifier::ToString(catalog_entry.name.GetIdentifierName()));
 		}
 	}
 }
@@ -799,7 +799,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
 		string select_list = "COUNT(*)";
 		for (auto &col : columns) {
-			auto col_ident = DuckLakeUtil::SQLIdentifierToString(col.column_name);
+			auto col_ident = SQLQuotedIdentifier::ToString(col.column_name);
 			bool is_float =
 			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
 			string nan_expr =
@@ -808,7 +808,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 			                                  col_ident, col_ident, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
-		    DuckLakeUtil::SQLIdentifierToString(inlined_table_name), select_list, context.InlinedColNames());
+		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");

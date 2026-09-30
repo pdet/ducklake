@@ -12,7 +12,6 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
-#include "common/ducklake_util.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
@@ -46,8 +45,7 @@ string DuckLakeInitializer::GetAttachOptions() {
 	bool is_postgres = metadata_type == "postgres" || metadata_type == "postgres_scanner";
 	bool user_set_schema = options.metadata_parameters.find("schema") != options.metadata_parameters.end();
 	if (is_postgres && !user_set_schema && !options.metadata_schema.empty()) {
-		attach_options.push_back("SCHEMA " +
-		                         DuckLakeUtil::SQLLiteralToString(options.metadata_schema.GetIdentifierName()));
+		attach_options.push_back("SCHEMA " + SQLString::ToString(options.metadata_schema.GetIdentifierName()));
 	}
 	if (options.hide_metadata_catalog) {
 		attach_options.push_back("HIDDEN true");
