@@ -5208,12 +5208,6 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 	return batch_query;
 }
 
-template <class T>
-static timestamp_tz_t GetTimestampTZFromRow(ClientContext &context, const T &row, idx_t col_idx) {
-	auto val = row.GetChunk().GetValue(col_idx, row.GetRowInChunk());
-	return val.CastAs(context, LogicalType::TIMESTAMP_TZ).template GetValue<timestamp_tz_t>();
-}
-
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
@@ -5232,13 +5226,13 @@ ORDER BY snapshot_id
 	for (auto &row : *res) {
 		DuckLakeSnapshotInfo snapshot_info;
 		snapshot_info.id = row.GetValue<idx_t>(0);
-		snapshot_info.time = GetTimestampTZFromRow(*context, row, 1);
+		snapshot_info.time = row.GetBaseValue(1).CastAs(*context, LogicalType::TIMESTAMP_TZ).GetValue<timestamp_tz_t>();
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
 		snapshot_info.next_file_id = row.GetValue<idx_t>(3);
 		snapshot_info.change_info.changes_made = row.IsNull(4) ? string() : row.GetValue<string>(4);
-		snapshot_info.author = row.GetChunk().GetValue(5, row.GetRowInChunk());
-		snapshot_info.commit_message = row.GetChunk().GetValue(6, row.GetRowInChunk());
-		snapshot_info.commit_extra_info = row.GetChunk().GetValue(7, row.GetRowInChunk());
+		snapshot_info.author = row.GetBaseValue(5);
+		snapshot_info.commit_message = row.GetBaseValue(6);
+		snapshot_info.commit_extra_info = row.GetBaseValue(7);
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;
@@ -5262,7 +5256,7 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 		path.path = row.GetValue<string>(1);
 		path.path_is_relative = row.GetValue<bool>(2);
 		info.path = FromRelativePath(path);
-		info.time = GetTimestampTZFromRow(*context, row, 3);
+		info.time = row.GetBaseValue(3).CastAs(*context, LogicalType::TIMESTAMP_TZ).GetValue<timestamp_tz_t>();
 		result.push_back(std::move(info));
 	}
 	return result;
