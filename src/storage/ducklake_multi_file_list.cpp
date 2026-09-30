@@ -5,6 +5,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/extension_helper.hpp"
@@ -52,16 +53,18 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 	if (IsVirtualColumn(column_id)) {
 		return nullptr;
 	}
-	vector<string> path;
-	auto &root = DuckLakeUtil::GetFilterSubjectPath(subject, path);
+	vector<StructExtractPathEntry> path;
+	auto &root = PeelStructExtractPath(subject, path);
 	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
 	    root.GetExpressionClass() != ExpressionClass::BOUND_REF) {
 		return nullptr;
 	}
-	// the path was collected from the outside in, so walk it backwards from the containing column
 	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
-	for (auto it = path.rbegin(); it != path.rend(); it++) {
-		field_id = field_id->GetChildByName(*it);
+	for (auto &entry : path) {
+		if (entry.child_name.empty()) {
+			return nullptr;
+		}
+		field_id = field_id->GetChildByName(entry.child_name.GetIdentifierName());
 		if (!field_id) {
 			return nullptr;
 		}
@@ -126,8 +129,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 		return nullptr;
 	}
 	// the reference underneath identifies the column, in the same projection space the filter set uses
-	vector<string> path;
-	auto &root = DuckLakeUtil::GetFilterSubjectPath(*subject, path);
+	vector<StructExtractPathEntry> path;
+	auto &root = PeelStructExtractPath(*subject, path);
 	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return nullptr;
 	}

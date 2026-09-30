@@ -61,8 +61,6 @@ public:
 	//! A leaf filter is evaluated against a single column's stats, so it may only read one column. Returns
 	//! that sub-expression, or nullptr when the filter reads none or several.
 	static optional_ptr<const Expression> GetFilterSubject(const Expression &expr);
-	//! Peel the struct fields a subject reads through, outermost first, and return the reference underneath
-	static const Expression &GetFilterSubjectPath(const Expression &subject, vector<string> &path);
 	//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
 	static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
 	                                                   const LogicalType &type);

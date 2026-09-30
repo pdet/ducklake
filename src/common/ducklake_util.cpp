@@ -336,8 +336,7 @@ unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expressio
 	return std::move(result);
 }
 
-//! Resolve which child of the input struct a struct_extract reads, rejecting a position the type cannot hold
-static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position) {
+bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return false;
 	}
@@ -350,15 +349,8 @@ static bool TryResolveStructExtractChild(const Expression &expr, idx_t &position
 	if (input_type.id() != LogicalTypeId::STRUCT) {
 		return false;
 	}
-	if (!TryGetStructExtractChildIndex(func, position)) {
-		return false;
-	}
-	return position < StructType::GetChildCount(input_type);
-}
-
-bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
 	idx_t position;
-	return TryResolveStructExtractChild(expr, position);
+	return TryGetStructExtractChildIndex(func, position) && position < StructType::GetChildCount(input_type);
 }
 
 //! Walk to the sub-expressions a filter reads a column through, without descending into them
@@ -384,19 +376,6 @@ optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &
 	bool conflict = false;
 	FindFilterSubject(expr, subject, conflict);
 	return conflict ? nullptr : subject;
-}
-
-const Expression &DuckLakeUtil::GetFilterSubjectPath(const Expression &subject, vector<string> &path) {
-	reference<const Expression> current = subject;
-	idx_t position;
-	while (TryResolveStructExtractChild(current.get(), position)) {
-		auto &func = current.get().Cast<BoundFunctionExpression>();
-		auto &input_type = func.GetChildren()[0]->GetReturnType();
-		// the key is matched case-insensitively at bind time, so take the name from the struct type
-		path.push_back(StructType::GetChildName(input_type, position).GetIdentifierName());
-		current = *func.GetChildren()[0];
-	}
-	return current.get();
 }
 
 //! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
