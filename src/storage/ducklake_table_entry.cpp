@@ -1119,7 +1119,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	if (!ColumnExists(info.column_name)) {
 		throw BinderException("Table %s does not have a column with name %s", name, info.column_name);
 	}
-	auto &col = table_info.columns.GetColumn(info.column_name);
+	auto &col = table_info.columns.GetColumnMutable(info.column_name);
 	auto &field_id = GetFieldId(col.Physical());
 	if (!IsSimpleCast(*info.expression)) {
 		throw NotImplementedException("Column type cannot be modified using an expression");
@@ -1130,17 +1130,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-
-	// generate a new column list with the modified type
-	ColumnList new_columns;
-	for (auto &col : columns.Logical()) {
-		auto copy = col.Copy();
-		if (copy.Name() == info.column_name) {
-			copy.SetType(info.target_type);
-		}
-		new_columns.AddColumn(std::move(copy));
-	}
-	table_info.columns = std::move(new_columns);
+	col.SetType(info.target_type);
+	table_info.columns.SetAllowDuplicates(false);
 
 	// generate the new field ids for the table
 	auto &current_field_ids = field_data->GetFieldIds();
