@@ -1,7 +1,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
-#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_variant_stats.hpp"
@@ -464,7 +464,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 
-// binds only when every addition of V1_1_DEV1_MIGRATION_QUERY exists, keep both in sync
+// Keep this probe in sync with the migration additions.
 static constexpr const char *V1_1_DEV1_ADDITIONS_PROBE = R"(
 SELECT 1
 FROM (SELECT df.row_group_count FROM {METADATA_CATALOG}.ducklake_data_file df LIMIT 0),
@@ -475,7 +475,7 @@ FROM (SELECT df.row_group_count FROM {METADATA_CATALOG}.ducklake_data_file df LI
 	)";
 
 void DuckLakeMetadataManager::MigrateV10Additions(bool allow_failures) {
-	// a rerun skips the DDL when nothing is missing as Postgres DDL needs table ownership
+	// PostgreSQL DDL requires table ownership even when every addition already exists.
 	if (allow_failures && !Query(V1_1_DEV1_ADDITIONS_PROBE)->HasError()) {
 		return;
 	}
@@ -483,14 +483,12 @@ void DuckLakeMetadataManager::MigrateV10Additions(bool allow_failures) {
 }
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
-	// rename first so a conflict aborts while the catalog is still at v1.0
-	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedColumnNames();
 	MigrateV10Additions(allow_failures);
 }
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
-	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
 	try {
 		MigrateV10Additions(true);
 	} catch (std::exception &ex) {
@@ -500,7 +498,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		                                          error.RawMessage()));
 	}
 	try {
-		MigrateInlinedColumnNames(true);
+		MigrateInlinedColumnNames();
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
@@ -509,7 +507,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 	}
 }
 
-void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
+void DuckLakeMetadataManager::MigrateInlinedColumnNames() {
 	auto tables = Query(R"(
 SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
@@ -522,32 +520,17 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
 	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
 	                                          {old_names.end_snapshot, new_names.end_snapshot}};
-	// a query result can only be iterated once, so collect the (inlined table name, user table name) pairs
 	vector<pair<string, string>> inlined_tables;
-	string renamed_probe;
 	for (auto &row : *tables) {
 		auto table_name = row.GetValue<string>(0);
 		auto user_table_name = row.IsNull(1) ? table_name : row.GetValue<string>(1);
-		if (!renamed_probe.empty()) {
-			renamed_probe += " UNION ALL ";
-		}
-		renamed_probe +=
-		    StringUtil::Format("(SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s LIMIT 0)", new_names.row_id,
-		                       new_names.begin_snapshot, new_names.end_snapshot, SQLIdentifier(table_name));
 		inlined_tables.emplace_back(std::move(table_name), std::move(user_table_name));
 	}
-	if (inlined_tables.empty()) {
-		return;
-	}
-	// on a re-run one probe over all inlined tables detects an already migrated catalog
-	if (probe_renamed && !Query(renamed_probe)->HasError()) {
-		return;
-	}
-	// check every table before renaming any so a collision leaves the catalog unchanged
+	// Validate all tables before applying any renames.
 	string renames;
-	for (auto &inlined_table : inlined_tables) {
-		auto &table_name = inlined_table.first;
-		auto &user_table_name = inlined_table.second;
+	for (const auto &inlined_table : inlined_tables) {
+		const auto &table_name = inlined_table.first;
+		const auto &user_table_name = inlined_table.second;
 		auto probe =
 		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		if (probe->HasError()) {
@@ -562,7 +545,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 		}
 		bool unexpected_layout = names.size() < col_renames.size();
 		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
-			auto &entry = col_renames[i];
+			const auto &entry = col_renames[i];
 			auto name = names[i].GetIdentifierName();
 			if (StringUtil::CIEquals(name, entry.second)) {
 				continue;
@@ -1620,22 +1603,18 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		switch (expr.GetExpressionType()) {
 		case ExpressionType::OPERATOR_IS_NULL:
-			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
-				return string();
-			}
-			// some writers report zero values and zero nulls for files with rows, keep those files
-			referenced_stats.insert("null_count");
-			referenced_stats.insert("value_count");
-			return "(" + StatsColumn(stats_alias, "null_count") + " > 0 OR " + StatsColumn(stats_alias, "value_count") +
-			       " = 0)";
-		case ExpressionType::OPERATOR_IS_NOT_NULL:
+		case ExpressionType::OPERATOR_IS_NOT_NULL: {
 			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			referenced_stats.insert("null_count");
 			referenced_stats.insert("value_count");
-			return "(" + StatsColumn(stats_alias, "value_count") + " > 0 OR " + StatsColumn(stats_alias, "null_count") +
-			       " = 0)";
+			const bool is_null = expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL;
+			auto matching_count = StatsColumn(stats_alias, is_null ? "null_count" : "value_count");
+			auto other_count = StatsColumn(stats_alias, is_null ? "value_count" : "null_count");
+			// Zero counts can indicate missing statistics.
+			return "(" + matching_count + " > 0 OR " + other_count + " = 0)";
+		}
 		case ExpressionType::COMPARE_IN: {
 			if (op_expr.GetChildren().size() < 2 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
 				return string();
@@ -1747,16 +1726,6 @@ static void AddCTERequirement(map<idx_t, CTERequirement> &requirements, idx_t co
 	entry->second.referenced_stats.insert(referenced_stats.begin(), referenced_stats.end());
 }
 
-static bool ContainsIsNull(const Expression &expr) {
-	if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
-		return true;
-	}
-	bool contains_is_null = false;
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { contains_is_null = contains_is_null || ContainsIsNull(child); });
-	return contains_is_null;
-}
-
 string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter,
                                                               FilterSQLResult &result) {
 	auto cte_name = StatsCteName(column_filter.column_field_index);
@@ -1773,12 +1742,13 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 		null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
 	}
 
-	// a filter that a NULL row can satisfy must not prune files that only hold NULLs, even though their
-	// min/max are absent - only a purely value-based filter may use the guard
-	const bool matches_null_rows =
-	    column_filter.table_filter->expr && ContainsIsNull(*column_filter.table_filter->expr);
-	const bool needs_value_count_guard =
-	    !matches_null_rows && (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0);
+	bool needs_value_count_guard = false;
+	if (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0) {
+		auto null_stats = BaseStatistics::FromConstant(Value(column_filter.column_type));
+		auto null_result = column_filter.table_filter->CheckStatistics(null_stats);
+		needs_value_count_guard = null_result == FilterPropagateResult::FILTER_ALWAYS_FALSE ||
+		                          null_result == FilterPropagateResult::FILTER_FALSE_OR_NULL;
+	}
 	if (needs_value_count_guard) {
 		referenced_stats.insert("value_count");
 	}

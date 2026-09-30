@@ -97,6 +97,8 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 	}
 	if (!row.IsNull(base + 12) && s.extra_stats) {
 		s.extra_stats->Deserialize(row.template GetValue<string>(base + 12));
+	} else {
+		s.extra_stats.reset();
 	}
 	if (has_exactness) {
 		s.min_is_exact = OptBoolFalse(row, base + 13);

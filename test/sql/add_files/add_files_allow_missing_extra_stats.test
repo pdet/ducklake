@@ -1,0 +1,71 @@
+# name: test/sql/add_files/add_files_allow_missing_extra_stats.test
+# description: Missing columns with defaults invalidate geometry and variant statistics
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/allow_missing_extra_stats.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/allow_missing_extra_stats', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN v VARIANT DEFAULT 5::VARIANT
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN g GEOMETRY DEFAULT 'POINT (5 5)'::GEOMETRY
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 10::VARIANT, 'POINT (10 10)'::GEOMETRY)
+
+statement ok
+COPY (SELECT 1::INTEGER AS id) TO '{DATA_PATH}/allow_missing_extra_stats/id_only.parquet'
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/allow_missing_extra_stats/id_only.parquet', allow_missing => true)
+
+query I
+SELECT count(*) FROM ducklake.t WHERE v::INTEGER < 8
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE g && 'POLYGON ((4 4, 6 4, 6 6, 4 6, 4 4))'::GEOMETRY
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_table_column_stats WHERE column_id IN (2, 3) AND extra_stats IS NOT NULL
+----
+0
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, 20::VARIANT, 'POINT (20 20)'::GEOMETRY)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/allow_missing_extra_stats', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM ducklake.t WHERE v::INTEGER < 8
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t WHERE g && 'POLYGON ((4 4, 6 4, 6 6, 4 6, 4 4))'::GEOMETRY
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_table_column_stats WHERE column_id IN (2, 3) AND extra_stats IS NOT NULL
+----
+0

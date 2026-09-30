@@ -47,3 +47,13 @@ query I
 SELECT COUNT(*) FROM ducklake.t WHERE a IS NULL;
 ----
 1
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE (a >= 30 AND a IS NOT NULL) OR a IS NULL;
+----
+172
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE a = 50 AND a IS NOT NULL;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

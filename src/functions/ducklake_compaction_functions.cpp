@@ -1,6 +1,6 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
-#include "duckdb/common/sql_identifier.hpp"
+#include "common/parquet_file_scanner.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -526,59 +526,10 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 	return &partition_table;
 }
 
-bool DuckLakeCompactor::HasNonPositionalRowIds(const vector<DuckLakeCompactionFileEntry> &source_files) {
-	vector<string> paths;
-	for (auto &source : source_files) {
-		if (!source.file.data.encryption_key.empty()) {
-			// the metadata of an encrypted file cannot be read without its key
-			return true;
-		}
-		paths.push_back(SQLString::ToString(source.file.data.path));
-	}
-	auto result = transaction.ExecuteRaw(StringUtil::Format(R"(
-SELECT file_name,
-       bool_or(is_row_id),
-       bool_and(NOT is_row_id OR (row_id_min IS NOT NULL AND row_id_max IS NOT NULL)),
-       min(row_id_min) FILTER (WHERE is_row_id),
-       max(row_id_max) FILTER (WHERE is_row_id)
-FROM (
-	SELECT file_name, path_in_schema = '_ducklake_internal_row_id' AS is_row_id,
-	       TRY_CAST(COALESCE(stats_min, stats_min_value) AS BIGINT) AS row_id_min,
-	       TRY_CAST(COALESCE(stats_max, stats_max_value) AS BIGINT) AS row_id_max
-	FROM parquet_metadata([%s])
-)
-GROUP BY file_name)",
-	                                                        StringUtil::Join(paths, ", ")));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to read the metadata of the files to compact: ");
-	}
-	struct StoredRowIds {
-		bool has_row_ids;
-		bool has_stats;
-		Value min;
-		Value max;
-	};
-	unordered_map<string, StoredRowIds> stored_row_ids;
-	for (auto &row : *result) {
-		stored_row_ids[row.GetValue<string>(0)] =
-		    StoredRowIds {row.GetValue<bool>(1), row.GetValue<bool>(2), row.GetValue<Value>(3), row.GetValue<Value>(4)};
-	}
-	for (auto &source : source_files) {
-		auto entry = stored_row_ids.find(source.file.data.path);
-		if (entry == stored_row_ids.end()) {
-			return true;
-		}
-		auto &stored = entry->second;
-		if (!stored.has_row_ids) {
-			continue;
-		}
-		// stored row ids are positional only when they cover exactly the range of row_id_start
-		if (!stored.has_stats || stored.min.IsNull() || stored.max.IsNull()) {
-			return true;
-		}
-		auto row_id_start = NumericCast<int64_t>(source.file.row_id_start.GetIndex());
-		auto row_id_end = row_id_start + NumericCast<int64_t>(source.file.row_count) - 1;
-		if (stored.min.GetValue<int64_t>() != row_id_start || stored.max.GetValue<int64_t>() != row_id_end) {
+bool DuckLakeCompactor::HasStoredRowIds(const vector<DuckLakeCompactionFileEntry> &source_files) {
+	for (const auto &source : source_files) {
+		ParquetFileScanner scanner(context, source.file.data);
+		if (scanner.FindColumn("_ducklake_internal_row_id").IsValid()) {
 			return true;
 		}
 	}
@@ -687,12 +638,25 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
+	auto latest_entry = transaction.GetTransactionLocalEntry(
+	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
+	if (!latest_entry) {
+		auto latest_snapshot = transaction.GetSnapshot();
+		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
+		if (!latest_entry) {
+			throw InternalException("DuckLakeCompactor: failed to find local table entry");
+		}
+	}
+	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
+
+	auto sort_data = latest_table.GetSortData();
+
 	bool write_row_id = false;
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// adjacent files with positional row ids do not need to write the row-id to the file
-		write_row_id = !files_are_adjacent || HasNonPositionalRowIds(actionable_source_files);
+		// Sorting or stored row ids require explicit row ids
+		write_row_id = sort_data || !files_are_adjacent || HasStoredRowIds(actionable_source_files);
 		write_snapshot_id = true;
 		break;
 	}
@@ -746,23 +710,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
-	// If compaction should be ordered, add Order By (and projection) to logical plan
-	// Do not pull the sort setting at the time of the creation of the files being compacted,
-	// and instead pull the latest sort setting
-	// First, see if there are transaction local changes to the table
-	// Then fall back to latest snapshot if no local changes
-	auto latest_entry = transaction.GetTransactionLocalEntry(
-	    CatalogType::TABLE_ENTRY, table.schema.name.GetIdentifierName(), table.name.GetIdentifierName());
-	if (!latest_entry) {
-		auto latest_snapshot = transaction.GetSnapshot();
-		latest_entry = catalog.GetEntryById(transaction, latest_snapshot, table_id);
-		if (!latest_entry) {
-			throw InternalException("DuckLakeCompactor: failed to find local table entry");
-		}
-	}
-	auto &latest_table = latest_entry->Cast<DuckLakeTableEntry>();
-
-	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
@@ -775,7 +722,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	                                         std::move(copy_options.info), binder.GenerateTableIndex());
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (write_row_id) {
+	bool preserve_order = type == CompactionType::MERGE_ADJACENT_TABLES && files_are_adjacent;
+	if (!preserve_order) {
 		copy->file_path = copy_options.file_path;
 		copy->batch_size = configured_row_group_size;
 		copy->file_size_bytes = copy_options.file_size_bytes;

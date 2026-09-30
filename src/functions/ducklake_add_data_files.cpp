@@ -132,7 +132,7 @@ static void CollectMissingColumns(const DuckLakeFieldId &field_id, bool reads_nu
 		result.push_back(MissingColumn {field_id.GetFieldIndex(), field_id.Type(), reads_null});
 		return;
 	}
-	// nested columns have no defaults so the fields of a missing nested column are NULL
+	// A missing parent makes every child NULL
 	for (auto &child : field_id.Children()) {
 		CollectMissingColumns(*child, true, result);
 	}
@@ -168,7 +168,6 @@ struct ParquetFileMetadata {
 	unordered_map<idx_t, pair<FieldIndex, LogicalType>> column_id_to_field_map;
 	// Map from field ID to hive partition statistics (for partition columns)
 	vector<HivePartition> hive_partition_values;
-	// Columns absent from the file and the value they read as
 	vector<MissingColumn> missing_columns;
 };
 
@@ -1189,7 +1188,6 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 			    ConstantColumnStats(file_metadata, missing.field_index, missing.field_type, Value(missing.field_type)));
 			continue;
 		}
-		// the statistics of a non NULL default are left unknown
 		DuckLakeColumnStats unknown_stats(missing.field_type);
 		unknown_stats.extra_stats.reset();
 		result.column_stats.emplace(missing.field_index, std::move(unknown_stats));
@@ -1200,17 +1198,13 @@ DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFile
                                                                FieldIndex field_index, const LogicalType &field_type,
                                                                const Value &value) const {
 	DuckLakeColumnStats column_stats(field_type);
-	// num_values and null_count both needed to write count
-	// metadata in DuckLakeColumnStatsInfo::FromColumnStats
 	column_stats.has_num_values = true;
 	column_stats.num_values = file_metadata.row_count.GetIndex();
 	column_stats.has_null_count = true;
 	if (value.IsNull()) {
-		// All rows in this file have NULL for this column
 		column_stats.null_count = file_metadata.row_count.GetIndex();
 		column_stats.any_valid = false;
 	} else if (!skipped_fields.count(field_index.index)) {
-		// a skipped column records counts but not the value
 		column_stats.min = column_stats.max = value.ToString();
 		column_stats.has_min = column_stats.has_max = true;
 		column_stats.min_is_exact = column_stats.max_is_exact = true;

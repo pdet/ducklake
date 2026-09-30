@@ -106,6 +106,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	stats.bounds_unknown = !stats.any_valid && table_has_rows;
 	if (col.has_extra_stats && stats.extra_stats) {
 		stats.extra_stats->Deserialize(col.extra_stats);
+	} else {
+		stats.extra_stats.reset();
 	}
 	return stats;
 }
@@ -130,6 +132,7 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
+	auto had_valid_values = AnyValid();
 	bool types_differ = type != new_stats.type;
 	bool bounds_survive = !types_differ || BoundsSurviveTypePromotion(type, new_stats.type);
 	if (types_differ) {
@@ -165,6 +168,13 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			bounds_unknown = true;
 		}
 		return;
+	}
+	if (!had_valid_values && !bounds_unknown) {
+		extra_stats = new_stats.extra_stats ? new_stats.extra_stats->Copy() : nullptr;
+	} else if (!new_stats.extra_stats) {
+		extra_stats.reset();
+	} else if (extra_stats) {
+		extra_stats->Merge(*new_stats.extra_stats);
 	}
 	if (!AnyValid()) {
 		if (bounds_unknown) {
@@ -233,14 +243,6 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			}
 		}
 	}
-
-	if (new_stats.extra_stats) {
-		if (extra_stats) {
-			extra_stats->Merge(*new_stats.extra_stats);
-		} else {
-			extra_stats = new_stats.extra_stats->Copy();
-		}
-	}
 }
 
 void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats) {
@@ -298,7 +300,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 	if (!extra_stats) {
-		throw InternalException("Variant DuckLakeColumnStats without extra_stats?");
+		return nullptr;
 	}
 	auto &variant_stats = extra_stats->Cast<DuckLakeColumnVariantStats>();
 	return variant_stats.ToStats();
@@ -306,7 +308,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	if (!extra_stats) {
-		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
+		return nullptr;
 	}
 	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
 	auto stats = geometry_stats.ToStats();

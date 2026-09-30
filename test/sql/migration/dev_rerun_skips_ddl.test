@@ -1,8 +1,10 @@
 # name: test/sql/migration/dev_rerun_skips_ddl.test
-# description: attaching an up to date catalog does not rerun the migration DDL, a partially migrated one is healed
+# description: an unchanged catalog skips migration DDL and a missing addition is restored
 # group: [migration]
 
 require ducklake
+
+require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/dev_rerun_skips_ddl.db
 
@@ -10,6 +12,12 @@ test-env DATA_PATH {TEST_DIR}
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/dev_rerun_skips_ddl', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (42)
 
 statement ok
 DETACH ducklake
@@ -32,7 +40,6 @@ WHERE query ILIKE '%ALTER TABLE%' OR query ILIKE '%CREATE TABLE%' OR query ILIKE
 ----
 0
 
-# a later addition is missing from one of two tables that share its name
 statement ok
 ALTER TABLE meta.ducklake_delete_file DROP COLUMN row_group_count
 

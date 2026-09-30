@@ -239,7 +239,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// migrate only after every metadata tag is validated
 	if (catalog_version != DuckLakeVersion::UNSET) {
 		auto resolved_version = MigrateCatalog(metadata_manager, catalog_version, target_version);
 		SetVersionedMetadataManager(transaction, resolved_version);
@@ -248,11 +247,14 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 
 DuckLakeVersion DuckLakeInitializer::MigrateCatalog(DuckLakeMetadataManager &metadata_manager,
                                                     DuckLakeVersion catalog_version, DuckLakeVersion target_version) {
-	bool read_only_attach = options.access_mode == AccessMode::READ_ONLY || options.at_clause;
-	if (catalog_version < target_version && read_only_attach) {
-		throw InvalidInputException("Cannot migrate DuckLake catalog version %s to %s in a READ_ONLY attach or an "
-		                            "attach at a snapshot, attach without them to migrate first",
-		                            DuckLakeVersionToString(catalog_version), DuckLakeVersionToString(target_version));
+	if (options.access_mode == AccessMode::READ_ONLY || options.at_clause) {
+		if (catalog_version < target_version) {
+			throw InvalidInputException("Cannot migrate DuckLake catalog version %s to %s in a READ_ONLY attach or an "
+			                            "attach at a snapshot, attach without them to migrate first",
+			                            DuckLakeVersionToString(catalog_version),
+			                            DuckLakeVersionToString(target_version));
+		}
+		return catalog_version;
 	}
 	if (catalog_version == DuckLakeVersion::V0_1) {
 		metadata_manager.MigrateV01();
@@ -279,12 +281,9 @@ DuckLakeVersion DuckLakeInitializer::MigrateCatalog(DuckLakeMetadataManager &met
 		catalog_version = DuckLakeVersion::V1_0;
 	}
 	if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
-		// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
-		if (options.automatic_migration && !read_only_attach) {
-			// an explicitly requested migration fails loudly
+		if (options.automatic_migration) {
 			metadata_manager.MigrateV10(true);
-		} else if (options.access_mode != AccessMode::READ_ONLY) {
-			// a plain attach is best-effort and never fails the attach
+		} else {
 			metadata_manager.MigrateV10Dev();
 		}
 	}

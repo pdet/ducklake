@@ -971,6 +971,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		}
 		if (!row.IsNull(9) && col_stats.extra_stats) {
 			col_stats.extra_stats->Deserialize(row.GetValue<string>(9));
+		} else {
+			col_stats.extra_stats.reset();
 		}
 		if (has_exactness) {
 			col_stats.min_is_exact = !row.IsNull(10) && row.GetValue<bool>(10);

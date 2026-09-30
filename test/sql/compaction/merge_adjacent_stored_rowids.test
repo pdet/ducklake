@@ -1,0 +1,87 @@
+# name: test/sql/compaction/merge_adjacent_stored_rowids.test
+# description: Merging sorted files preserves row ids
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_stored_rowids', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.flushed(id INTEGER)
+
+statement ok
+INSERT INTO ducklake.flushed VALUES (0), (1), (2)
+
+statement ok
+ALTER TABLE ducklake.flushed SET SORTED BY (id DESC)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flushed')
+
+statement ok
+ALTER TABLE ducklake.flushed RESET SORTED BY
+
+statement ok
+INSERT INTO ducklake.flushed VALUES (3), (4), (5)
+
+statement ok
+ALTER TABLE ducklake.flushed SET SORTED BY (id DESC)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flushed')
+
+statement ok
+ALTER TABLE ducklake.flushed RESET SORTED BY
+
+query I
+SELECT list(rowid ORDER BY id) FROM ducklake.flushed
+----
+[0, 1, 2, 3, 4, 5]
+
+query IIII
+CALL ducklake_merge_adjacent_files('ducklake', 'flushed')
+----
+main	flushed	2	1
+
+query I
+SELECT list(rowid ORDER BY id) FROM ducklake.flushed
+----
+[0, 1, 2, 3, 4, 5]
+
+# Sorting positional files must also preserve row ids
+statement ok
+CALL ducklake_set_option('ducklake', 'data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE ducklake.sorted(id INTEGER)
+
+statement ok
+INSERT INTO ducklake.sorted VALUES (0), (1), (2)
+
+statement ok
+INSERT INTO ducklake.sorted VALUES (3), (4), (5)
+
+statement ok
+ALTER TABLE ducklake.sorted SET SORTED BY (id DESC)
+
+query IIII
+CALL ducklake_merge_adjacent_files('ducklake', 'sorted')
+----
+main	sorted	2	1
+
+query I
+SELECT list(rowid ORDER BY id) FROM ducklake.sorted
+----
+[0, 1, 2, 3, 4, 5]
+
+query I
+SELECT list(id) FROM ducklake.sorted
+----
+[5, 4, 3, 2, 1, 0]

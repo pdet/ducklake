@@ -19,9 +19,17 @@ CREATE MACRO ducklake.list_default(x := 0) AS x
 statement ok
 CREATE MACRO ducklake.map_default(x := 0) AS x
 
-# DuckLake 1.0 stored nested defaults as text with a type name that has no child types
+statement ok
+CREATE MACRO ducklake.struct_default(x := 0) AS x
+
+# Legacy nested defaults omit child types
 query I
 UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '[2020-01-01]', default_value_type = 'list' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'list_default')
+----
+1
+
+query I
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '{a: 1}', default_value_type = 'struct' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'struct_default')
 ----
 1
 
@@ -45,6 +53,21 @@ query I
 SELECT ducklake.list_default(42)
 ----
 42
+
+statement error
+SELECT ducklake.map_default()
+----
+does not support the supplied arguments
+
+statement error
+SELECT ducklake.struct_default()
+----
+does not support the supplied arguments
+
+query II
+SELECT ducklake.map_default(42), ducklake.struct_default(42)
+----
+42	42
 
 statement ok
 DROP MACRO ducklake.map_default
