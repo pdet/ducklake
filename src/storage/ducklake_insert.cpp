@@ -369,10 +369,6 @@ static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns
 	return Value::STRUCT(std::move(values));
 }
 
-DuckLakeCopyOptions::DuckLakeCopyOptions(unique_ptr<CopyInfo> info_p, CopyFunction copy_function_p)
-    : info(std::move(info_p)), copy_function(std::move(copy_function_p)) {
-}
-
 DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, const string &hive_partition)
     : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()),
       data_path(table.DataPath() + hive_partition) {
@@ -457,7 +453,7 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		for (auto &field : copy_input.partition_data->fields) {
 			optional_idx col_idx;
 			DuckLakeInsert::GetTopLevelColumn(copy_input, field.field_id, col_idx);
-			copy_options.partition_columns.push_back(col_idx.GetIndex());
+			copy_options.copy->partition_columns.push_back(col_idx.GetIndex());
 		}
 		return;
 	}
@@ -477,9 +473,9 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	// if we have partition columns that are NOT identity, we need to compute them separately, and NOT write them
 	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
 	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
-		copy_options.partition_columns.push_back(partition_column_start++);
+		copy_options.copy->partition_columns.push_back(partition_column_start++);
 	}
-	copy_options.write_partition_columns = false;
+	copy_options.copy->write_partition_columns = false;
 
 	idx_t col_idx = 0;
 	for (auto &col : copy_input.columns.Physical()) {
@@ -493,9 +489,9 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	case_insensitive_set_t names;
 	for (auto &field : copy_input.partition_data->fields) {
 		auto expr = GetPartitionExpression(context, copy_input, field);
-		copy_options.names.push_back(Identifier(GetPartitionExpressionName(copy_input, field, names)));
-		names.insert(copy_options.names.back().GetIdentifierName());
-		copy_options.expected_types.push_back(expr->GetReturnType());
+		copy_options.copy->names.push_back(Identifier(GetPartitionExpressionName(copy_input, field, names)));
+		names.insert(copy_options.copy->names.back().GetIdentifierName());
+		copy_options.copy->expected_types.push_back(expr->GetReturnType());
 		copy_options.projection_list.push_back(std::move(expr));
 	}
 }
@@ -533,16 +529,6 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (catalog.TryGetConfigOption("parquet_compression_level", parquet_compression_level, schema_id, table_id,
 	                               &copy_input.table_options)) {
 		info->options["compression_level"].emplace_back(parquet_compression_level);
-	}
-	string row_group_size;
-	if (catalog.TryGetConfigOption("parquet_row_group_size", row_group_size, schema_id, table_id,
-	                               &copy_input.table_options)) {
-		info->options["row_group_size"].emplace_back(row_group_size);
-	}
-	string row_group_size_bytes;
-	if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id,
-	                               &copy_input.table_options)) {
-		info->options["row_group_size_bytes"].emplace_back(row_group_size_bytes + " bytes");
 	}
 	string per_thread_output_str;
 	bool per_thread_output = false;
@@ -587,29 +573,34 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	auto function_data =
 	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), casted_types);
 
-	DuckLakeCopyOptions result(std::move(info), copy_fun.function);
-	result.bind_data = std::move(function_data);
-
-	result.use_tmp_file = false;
-	result.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
+	DuckLakeCopyOptions result;
+	result.copy =
+	    make_uniq<LogicalCopyToFile>(copy_fun.function, std::move(function_data), std::move(info), TableIndex());
+	auto &copy = *result.copy;
+	copy.use_tmp_file = false;
+	copy.filename_pattern.SetFilenamePattern("ducklake-{uuidv7}");
 	static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
-	result.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
-	result.rotate = true;
+	copy.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
+	copy.rotate = true;
+	copy.batch_size = catalog.GetConfigOption<idx_t>("parquet_row_group_size", schema_id, table_id,
+	                                                 DEFAULT_ROW_GROUP_SIZE, &copy_input.table_options);
 	if (copy_input.partition_data) {
-		result.partition_output = true;
-		result.write_empty_file = true;
+		copy.partition_output = true;
+		copy.write_empty_file = true;
 	} else {
-		result.partition_output = false;
-		result.write_empty_file = false;
+		copy.partition_output = false;
+		copy.write_empty_file = false;
 	}
-	result.file_path = PhysicalCopyToFile::GetTrimmedPath(context, copy_input.data_path);
-	result.file_extension = "parquet";
-	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-	result.per_thread_output = per_thread_output;
-	result.write_partition_columns = true;
-	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-	result.names = StringsToIdentifiers(names_to_write);
-	result.expected_types = types_to_write;
+	copy.file_path = PhysicalCopyToFile::GetTrimmedPath(context, copy_input.data_path);
+	copy.file_extension = "parquet";
+	copy.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
+	copy.per_thread_output = per_thread_output;
+	copy.write_partition_columns = true;
+	copy.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
+	copy.hive_file_pattern =
+	    catalog.UseHiveFilePattern(copy_input.encryption_key.empty(), schema_id, table_id, &copy_input.table_options);
+	copy.names = StringsToIdentifiers(names_to_write);
+	copy.expected_types = types_to_write;
 
 	if (copy_input.partition_data) {
 		// we are partitioning - generate partition expressions (if any)
@@ -672,34 +663,26 @@ unique_ptr<LogicalOperator> DuckLakeInsert::InsertCasts(Binder &binder, unique_p
 	return std::move(result);
 }
 
-idx_t DuckLakeInsert::GetCopyBatchSize(const DuckLakeCopyOptions &copy_options) {
-	auto rgs_entry = copy_options.info->options.find("row_group_size");
-	if (rgs_entry != copy_options.info->options.end() && !rgs_entry->second.empty()) {
-		return std::stoull(rgs_entry->second[0].ToString());
-	}
-	return DEFAULT_ROW_GROUP_SIZE;
-}
-
 PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                     DuckLakeCopyInput &copy_input,
                                                     optional_ptr<PhysicalOperator> plan) {
-	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = GetCopyOptions(context, copy_input);
+	auto &copy = *copy_options.copy;
 	if (!copy_options.projection_list.empty() && plan) {
 		// generate a projection
 		GenerateProjection(context, planner, copy_options.projection_list, plan);
 	}
 
-	if (DuckLakeTypes::RequiresCast(copy_options.expected_types)) {
+	if (DuckLakeTypes::RequiresCast(copy.expected_types)) {
 		// Insert a cast projection
 		if (plan) {
-			InsertCasts(copy_options.expected_types, context, planner, plan);
+			InsertCasts(copy.expected_types, context, planner, plan);
 			// Update the expected types to match the cast types
-			copy_options.expected_types = plan->types;
+			copy.expected_types = plan->types;
 		} else {
 			// Still update types. If there is no child-plan node, we expect that whoever inserts chunks (e.g.
 			// DuckLakeUpdate, DuckLakeMergeInsert) directly into the physical copy operator will pre-cast the data.
-			for (auto &type : copy_options.expected_types) {
+			for (auto &type : copy.expected_types) {
 				if (DuckLakeTypes::RequiresCast(type)) {
 					type = DuckLakeTypes::GetCastedType(type);
 				}
@@ -708,35 +691,34 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	}
 
 	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
-	auto &physical_copy = planner
-	                          .Make<PhysicalCopyToFile>(copy_return_types, std::move(copy_options.copy_function),
-	                                                    std::move(copy_options.bind_data), 1)
-	                          .Cast<PhysicalCopyToFile>();
+	auto &physical_copy =
+	    planner.Make<PhysicalCopyToFile>(copy_return_types, std::move(copy.function), std::move(copy.bind_data), 1)
+	        .Cast<PhysicalCopyToFile>();
 
-	physical_copy.file_path = std::move(copy_options.file_path);
-	physical_copy.use_tmp_file = copy_options.use_tmp_file;
-	physical_copy.filename_pattern = std::move(copy_options.filename_pattern);
-	physical_copy.file_extension = std::move(copy_options.file_extension);
-	physical_copy.overwrite_mode = copy_options.overwrite_mode;
-	physical_copy.per_thread_output = copy_options.per_thread_output;
-	physical_copy.file_size_bytes = copy_options.file_size_bytes;
-	physical_copy.batch_size = GetCopyBatchSize(copy_options);
-	auto rgsb_entry = copy_options.info->options.find("row_group_size_bytes");
-	if (rgsb_entry != copy_options.info->options.end() && !rgsb_entry->second.empty()) {
-		auto bytes_str = rgsb_entry->second[0].ToString();
-		physical_copy.batch_size_bytes = DBConfig::ParseMemoryLimit(bytes_str);
+	physical_copy.file_path = std::move(copy.file_path);
+	physical_copy.use_tmp_file = copy.use_tmp_file;
+	physical_copy.filename_pattern = std::move(copy.filename_pattern);
+	physical_copy.file_extension = std::move(copy.file_extension);
+	physical_copy.overwrite_mode = copy.overwrite_mode;
+	physical_copy.per_thread_output = copy.per_thread_output;
+	physical_copy.file_size_bytes = copy.file_size_bytes;
+	physical_copy.batch_size = copy.batch_size;
+	string row_group_size_bytes;
+	if (copy_input.catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes,
+	                                          copy_input.schema_id, copy_input.table_id, &copy_input.table_options)) {
+		copy.batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
 	}
-	physical_copy.return_type = copy_options.return_type;
+	physical_copy.batch_size_bytes = copy.batch_size_bytes;
+	physical_copy.return_type = copy.return_type;
 
-	physical_copy.partition_output = copy_options.partition_output;
-	physical_copy.write_partition_columns = copy_options.write_partition_columns;
-	physical_copy.write_empty_file = copy_options.write_empty_file;
-	physical_copy.partition_columns = std::move(copy_options.partition_columns);
-	physical_copy.names = copy_options.names;
-	physical_copy.expected_types = std::move(copy_options.expected_types);
+	physical_copy.partition_output = copy.partition_output;
+	physical_copy.write_partition_columns = copy.write_partition_columns;
+	physical_copy.write_empty_file = copy.write_empty_file;
+	physical_copy.partition_columns = std::move(copy.partition_columns);
+	physical_copy.names = copy.names;
+	physical_copy.expected_types = std::move(copy.expected_types);
 	physical_copy.parallel = true;
-	physical_copy.hive_file_pattern = copy_input.catalog.UseHiveFilePattern(
-	    !is_encrypted, copy_input.schema_id, copy_input.table_id, &copy_input.table_options);
+	physical_copy.hive_file_pattern = copy.hive_file_pattern;
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}

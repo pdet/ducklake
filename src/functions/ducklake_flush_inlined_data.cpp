@@ -306,13 +306,12 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy_input.get_table_index = table_idx.index;
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 
-	bool is_encrypted = !copy_input.encryption_key.empty();
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+	auto copy = std::move(copy_options.copy);
 
 	auto virtual_columns = table.GetVirtualColumns();
-	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	auto ducklake_scan = make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data),
+	                                           copy->expected_types, copy->names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -359,32 +358,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 
-	// generate the LogicalCopyToFile
-	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info), binder.GenerateTableIndex());
-
-	copy->file_path = std::move(copy_options.file_path);
-	copy->use_tmp_file = copy_options.use_tmp_file;
-	copy->filename_pattern = std::move(copy_options.filename_pattern);
-	copy->file_extension = std::move(copy_options.file_extension);
-	copy->overwrite_mode = copy_options.overwrite_mode;
-	copy->per_thread_output = copy_options.per_thread_output;
-	copy->file_size_bytes = copy_options.file_size_bytes;
-	copy->rotate = copy_options.rotate;
-	copy->return_type = copy_options.return_type;
-
+	copy->table_index = binder.GenerateTableIndex();
 	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
-
-	copy->partition_output = copy_options.partition_output;
-	copy->write_partition_columns = copy_options.write_partition_columns;
-	copy->write_empty_file = copy_options.write_empty_file;
-	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
-
-	copy->hive_file_pattern = copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id,
-	                                                                copy_input.table_id, &copy_input.table_options);
-
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the

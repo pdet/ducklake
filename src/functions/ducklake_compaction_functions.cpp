@@ -632,12 +632,11 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 
-	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
+	auto copy = DuckLakeInsert::GetCopyOptions(context, copy_input).copy;
 
 	auto virtual_columns = table.GetVirtualColumns();
-	auto ducklake_scan =
-	    make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data), copy_options.expected_types,
-	                          copy_options.names, std::move(virtual_columns));
+	auto ducklake_scan = make_uniq<LogicalGet>(table_idx, std::move(scan_function), std::move(bind_data),
+	                                           copy->expected_types, copy->names, std::move(virtual_columns));
 
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < columns.PhysicalColumnCount(); i++) {
@@ -682,39 +681,18 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
-	// read the configured row group size before copy_options.info is moved into the LogicalCopyToFile
-	idx_t configured_row_group_size = DuckLakeInsert::GetCopyBatchSize(copy_options);
-
-	// generate the LogicalCopyToFile
-	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
-	                                         std::move(copy_options.info), binder.GenerateTableIndex());
-
-	auto &fs = FileSystem::GetFileSystem(context);
+	copy->table_index = binder.GenerateTableIndex();
 	if (write_row_id) {
-		copy->file_path = copy_options.file_path;
-		copy->batch_size = configured_row_group_size;
-		copy->file_size_bytes = copy_options.file_size_bytes;
-		copy->rotate = copy_options.rotate;
 		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
-		copy->file_path = copy_options.filename_pattern.CreateFilename(fs, copy_options.file_path, "parquet", 0);
+		auto &fs = FileSystem::GetFileSystem(context);
+		copy->file_path = copy->filename_pattern.CreateFilename(fs, copy->file_path, "parquet", 0);
 		copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
 		copy->file_size_bytes = optional_idx();
 		copy->rotate = false;
 		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
 	}
-	copy->use_tmp_file = copy_options.use_tmp_file;
-	copy->filename_pattern = std::move(copy_options.filename_pattern);
-	copy->file_extension = std::move(copy_options.file_extension);
-	copy->overwrite_mode = copy_options.overwrite_mode;
 	copy->per_thread_output = false;
-	copy->return_type = copy_options.return_type;
-	copy->partition_output = copy_options.partition_output;
-	copy->write_partition_columns = copy_options.write_partition_columns;
-	copy->write_empty_file = false;
-	copy->partition_columns = std::move(copy_options.partition_columns);
-	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;
