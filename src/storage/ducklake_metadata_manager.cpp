@@ -1590,20 +1590,9 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		return result;
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
-			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
-			return data.child_filter_expr
-			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats, stats_alias)
-			           : string();
-		}
-		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
-			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
-			return data.child_filter_expr
-			           ? GenerateFilterFromExpression(*data.child_filter_expr, type, referenced_stats, stats_alias)
-			           : string();
-		}
-		return string();
+		auto optional_child = ExpressionFilter::GetOptionalFilterChild(expr);
+		return optional_child ? GenerateFilterFromExpression(*optional_child, type, referenced_stats, stats_alias)
+		                      : string();
 	}
 	default:
 		return string();
@@ -1863,19 +1852,8 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 		return !out.empty();
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
-		// unwrap optional-filter markers, same as GenerateFilterFromExpression
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
-			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
-			return data.child_filter_expr &&
-			       CollectBucketEqualityValues(context, *data.child_filter_expr, col_type, bucket_count, out);
-		}
-		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
-			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
-			return data.child_filter_expr &&
-			       CollectBucketEqualityValues(context, *data.child_filter_expr, col_type, bucket_count, out);
-		}
-		return false;
+		auto optional_child = ExpressionFilter::GetOptionalFilterChild(expr);
+		return optional_child && CollectBucketEqualityValues(context, *optional_child, col_type, bucket_count, out);
 	}
 	default:
 		return false;
