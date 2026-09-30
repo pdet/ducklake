@@ -112,8 +112,8 @@ public:
 	~DuckLakeCatalog() override;
 
 public:
-	void Initialize(bool load_builtin) override;
-	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
+	void Initialize(bool load_builtin) override {
+	}
 	void FinalizeLoad(optional_ptr<ClientContext> context) override;
 	string GetCatalogType() override {
 		return "ducklake";

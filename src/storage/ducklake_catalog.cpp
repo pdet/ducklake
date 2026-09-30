@@ -213,13 +213,6 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 DuckLakeCatalog::~DuckLakeCatalog() {
 }
 
-void DuckLakeCatalog::Initialize(bool load_builtin) {
-	throw InternalException("DuckLakeCatalog cannot be initialized without a client context");
-}
-
-void DuckLakeCatalog::Initialize(optional_ptr<ClientContext> context, bool load_builtin) {
-}
-
 void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 	// initialize the metadata database
 	unique_ptr<Connection> con;
