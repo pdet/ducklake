@@ -682,10 +682,8 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		Value value;
-		if (!from.TryGetCurrentSetting(entry.first, value)) {
-			continue;
-		}
-		to.config.user_settings.SetUserSetting(setting_index, value);
+		from.TryGetCurrentUserSetting(setting_index, value);
+		to.config.user_settings.SetUserSetting(setting_index, std::move(value));
 	}
 }
 
