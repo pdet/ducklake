@@ -69,9 +69,7 @@ bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) 
 	                                "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
 	                                SQLString::ToString(table_name));
 	auto result = Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
-	}
+	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 	return result->Fetch() != nullptr;
 }
 
@@ -122,12 +120,10 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	DuckLakeStagedCommit staged;
 	string batch = staged.Build(flush_transaction, transaction_snapshot, retry_config);
 	auto result = Query(batch);
-	if (!result || result->HasError()) {
-		if (result) {
-			result->GetErrorObject().Throw("Failed to invoke server-side ducklake_commit: ");
-		}
+	if (!result) {
 		throw IOException("Failed to invoke server-side ducklake_commit: empty result");
 	}
+	result->ThrowIfError("Failed to invoke server-side ducklake_commit: ");
 	auto row = result->begin();
 	if (row == result->end()) {
 		throw IOException("Server-side ducklake_commit returned no rows");
@@ -147,9 +143,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 bool QuackMetadataManager::MetadataExists() {
 	auto query = MetadataExistsQuery();
 	auto result = Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to probe DuckLake metadata: ");
-	}
+	result->ThrowIfError("Failed to probe DuckLake metadata: ");
 	return result->RowCount() > 0 && result->GetValue(0, 0).GetValue<int64_t>() > 0;
 }
 

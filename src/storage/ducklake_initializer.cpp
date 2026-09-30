@@ -65,11 +65,8 @@ void DuckLakeInitializer::Initialize() {
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
 	auto result = metadata_manager.AttachMetadata(attach_query);
-	if (result->HasError()) {
-		auto &error_obj = result->GetErrorObject();
-		error_obj.Throw("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-		                catalog.MetadataPath() + "\"");
-	}
+	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	                     catalog.MetadataPath() + "\"");
 	// explicitly load all secrets - work-around to secret initialization bug
 	transaction.Query("FROM duckdb_secrets()");
 

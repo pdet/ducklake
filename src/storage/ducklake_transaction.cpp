@@ -1300,16 +1300,9 @@ bool DuckLakeTransaction::RetryOnError(const string &original_message) {
 
 DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 	DuckLakeRetryConfig config;
-	Value setting_val;
-	if (context.TryGetCurrentSetting("ducklake_max_retry_count", setting_val)) {
-		config.max_retry_count = setting_val.GetValue<idx_t>();
-	}
-	if (context.TryGetCurrentSetting("ducklake_retry_wait_ms", setting_val)) {
-		config.retry_wait_ms = setting_val.GetValue<idx_t>();
-	}
-	if (context.TryGetCurrentSetting("ducklake_retry_backoff", setting_val)) {
-		config.retry_backoff = setting_val.GetValue<double>();
-	}
+	context.TryGetCurrentSetting("ducklake_max_retry_count", config.max_retry_count);
+	context.TryGetCurrentSetting("ducklake_retry_wait_ms", config.retry_wait_ms);
+	context.TryGetCurrentSetting("ducklake_retry_backoff", config.retry_backoff);
 	return config;
 }
 
@@ -1367,10 +1360,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to commit DuckLake transaction - failed to get snapshot and "
-			                               "snapshot changes for conflict resolution:");
-		}
+		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "
+		                     "snapshot changes for conflict resolution:");
 		return result;
 	};
 	context.get_snapshot = [&]() {

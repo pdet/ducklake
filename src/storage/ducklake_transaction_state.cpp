@@ -806,9 +806,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
 		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to read inlined-data aggregates from DuckLake: ");
-		}
+		result->ThrowIfError("Failed to read inlined-data aggregates from DuckLake: ");
 		for (auto &row : *result) {
 			auto total = static_cast<idx_t>(row.template GetValue<int64_t>(0));
 			if (total == 0) {
@@ -859,9 +857,7 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
 	                                table_id.index);
 	auto stats_option = context.query_metadata(query);
-	if (stats_option->HasError()) {
-		stats_option->GetErrorObject().Throw("Failed to read the skip_stats_columns option from DuckLake: ");
-	}
+	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
 	for (auto &row : *stats_option) {
 		if (row.IsNull(0)) {
 			continue;
@@ -906,9 +902,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
 	auto result = context.query_metadata_with_snapshot(
 	    snapshot, DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(table_id, context.supports_v1_1_metadata));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to read per-file column stats for rewrite from DuckLake: ");
-	}
+	result->ThrowIfError("Failed to read per-file column stats for rewrite from DuckLake: ");
 	bool has_exactness = DuckLakeMetadataManager::ResultHasColumn(*result, "min_is_exact");
 	bool have_file = false;
 	idx_t last_file_id = 0;
@@ -1911,10 +1905,8 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)";
 	auto result = executor(sql);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(
-		    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
-	}
+	result->ThrowIfError(
+	    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");
 	// parse changes made by other transactions
 	SnapshotDeletedFromFiles change_info;
 	for (auto &row : *result) {
@@ -1934,9 +1926,7 @@ WHERE idt.schema_version < (
     WHERE idt2.table_id = idt.table_id
 );)";
 	auto targets = context.query_metadata(find_targets_sql);
-	if (targets->HasError()) {
-		targets->GetErrorObject().Throw("Failed to identify superseded inlined-data tables in DuckLake: ");
-	}
+	targets->ThrowIfError("Failed to identify superseded inlined-data tables in DuckLake: ");
 	// Collect candidates before issuing the per-table emptiness queries on the same connection.
 	struct SupersededInlinedTable {
 		idx_t table_id;
@@ -1951,10 +1941,7 @@ WHERE idt.schema_version < (
 	for (auto &candidate : candidates) {
 		auto count_result = context.query_metadata(
 		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
-		if (count_result->HasError()) {
-			count_result->GetErrorObject().Throw(
-			    "Failed to check emptiness of superseded inlined-data table in DuckLake: ");
-		}
+		count_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
 		idx_t row_count = 0;
 		for (auto &row : *count_result) {
 			row_count = row.GetValue<idx_t>(0);
@@ -1971,15 +1958,11 @@ WHERE idt.schema_version < (
 		return;
 	}
 	auto res = context.query_metadata(drops_sql);
-	if (res->HasError()) {
-		res->GetErrorObject().Throw("Failed to drop superseded inlined-data tables in DuckLake: ");
-	}
+	res->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
 	// We also need to invalidate the existing schema versions in our catalog
 	string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
 	auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
-	if (snapshot_versions->HasError()) {
-		snapshot_versions->GetErrorObject().Throw("Failed to list schema versions for cache invalidation: ");
-	}
+	snapshot_versions->ThrowIfError("Failed to list schema versions for cache invalidation: ");
 	for (auto &row : *snapshot_versions) {
 		context.invalidate_schema_cache(row.GetValue<idx_t>(0));
 	}

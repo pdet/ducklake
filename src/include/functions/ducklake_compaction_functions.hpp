@@ -20,7 +20,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
-#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"

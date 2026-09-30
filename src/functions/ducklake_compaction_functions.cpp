@@ -13,7 +13,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
-#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -706,13 +705,7 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		compactions[0]->Cast<DuckLakeLogicalCompaction>().table_index = bind_index;
 		return std::move(compactions[0]);
 	}
-	auto union_op = input.binder->UnionOperators(std::move(compactions));
-	auto &set_op = union_op->Cast<LogicalSetOperation>();
-	set_op.table_index = bind_index;
-	// Manually set column_count - this is normally derived during optimization
-	// but we need it at bind time for column binding resolution
-	set_op.column_count = 4;
-	return union_op;
+	return input.binder->UnionOperators(std::move(compactions), 4, bind_index);
 }
 
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,

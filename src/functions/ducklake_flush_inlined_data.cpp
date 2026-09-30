@@ -14,7 +14,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
-#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "storage/ducklake_compaction.hpp"
 #include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -417,9 +416,7 @@ LEFT JOIN (
 ) existing_del ON del.file_id = existing_del.data_file_id
 	)",
 	                                                                            inlined_table_name, table_id.index));
-	if (deletions_result->HasError()) {
-		deletions_result->GetErrorObject().Throw("Failed to query inlined file deletions for flush: ");
-	}
+	deletions_result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;
 
@@ -537,9 +534,7 @@ LEFT JOIN (
 	// Delete the flushed inlined deletions
 	auto delete_result =
 	    metadata_manager.Execute(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
-	if (delete_result->HasError()) {
-		delete_result->GetErrorObject().Throw("Failed to delete inlined file deletions after flush: ");
-	}
+	delete_result->ThrowIfError("Failed to delete inlined file deletions after flush: ");
 }
 
 //===--------------------------------------------------------------------===//
@@ -631,17 +626,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 
-	// Get the child operator (either single flush or union of flushes)
-	unique_ptr<LogicalOperator> child;
-	if (flushes.size() == 1) {
-		child = std::move(flushes[0]);
-	} else {
-		child = input.binder->UnionOperators(std::move(flushes));
-		// Manually set column_count - this is normally derived during optimization
-		// but we need it at bind time for column binding resolution
-		auto &set_op = child->Cast<LogicalSetOperation>();
-		set_op.column_count = 3;
-	}
+	auto child = input.binder->UnionOperators(std::move(flushes), 3);
 	// We want to construct the query tree equivalent to the SQL query below.
 	// That way we can return the number of rows that were flushed for each table
 	//

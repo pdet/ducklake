@@ -1111,11 +1111,9 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex 
 		return Value(value_str).GetValue<idx_t>();
 	}
 	// No explicit catalog/schema/table option set, we read the global DuckDB setting
-	Value setting_val;
-	if (context.TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", setting_val)) {
-		return setting_val.GetValue<idx_t>();
-	}
-	return 10;
+	idx_t row_limit = 10;
+	context.TryGetCurrentSetting("ducklake_default_data_inlining_row_limit", row_limit);
+	return row_limit;
 }
 
 idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,

@@ -242,9 +242,7 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	                       SQLString::ToString(remote_query));
 	auto result = DuckLakeMetadataManager::Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to probe for DuckLake inlined-deletion table: ");
-	}
+	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 	return result->Fetch() != nullptr;
 }
 
@@ -292,9 +290,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Query(DuckLakeSnapshot snapshot
 
 void PostgresMetadataManager::ClearCache() {
 	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to clear the PostgreSQL metadata cache: ");
-	}
+	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {

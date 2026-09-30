@@ -861,9 +861,7 @@ string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLa
 
 unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
 	auto result = fresh_conn.Query(query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
-	}
+	result->ThrowIfError(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
 	return result;
 }
 

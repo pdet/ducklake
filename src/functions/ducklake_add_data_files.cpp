@@ -226,9 +226,7 @@ SELECT
 FROM parquet_full_metadata(%s)
 )",
 	                                                        SQLString(glob)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
-	}
+	result->ThrowIfError("Failed to add data files to DuckLake: ");
 
 	using ParquetFileRow = VectorStructType<string_t, int64_t, uint64_t, uint64_t, int64_t>;
 	using ParquetBBoxRow = VectorStructType<double, double, double, double, double, double, double, double>;
