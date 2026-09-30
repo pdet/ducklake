@@ -1,7 +1,6 @@
 """Runs DuckDB's regression runner and fails when any benchmark regresses in two runs in a row"""
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -9,13 +8,12 @@ import tempfile
 from pathlib import Path
 
 RUNNER = Path(__file__).resolve().parents[2] / "duckdb" / "scripts" / "regression" / "test_runner.py"
-# With verbose output the runner ends each confirmed verdict with the outcome
-REGRESSED = re.compile(r"^confirm: (\S+): .*\| regression$", re.MULTILINE)
+REGRESSED = re.compile(r"^(?:confirm|samples): (\S+): .*\| regression$", re.MULTILINE)
 COLOR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def run(passthrough, benchmarks):
-    command = [sys.executable, str(RUNNER), *passthrough, "--verbose", "--benchmarks", benchmarks]
+    command = [sys.executable, str(RUNNER), *passthrough, "--verbose", "--nofail", "--benchmarks", benchmarks]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     output = []
     for line in process.stdout:
@@ -30,19 +28,15 @@ def main():
     parser.add_argument("--benchmarks", required=True)
     known, passthrough = parser.parse_known_args()
 
-    # The runner itself fails only on errors and on the geometric mean
     code, regressed = run(passthrough, known.benchmarks)
     if code != 0 or not regressed:
         return code
 
-    # Runner noise rarely hits the same benchmark twice, so only a repeated regression fails
     print("Rerunning the regressed benchmarks " + ", ".join(sorted(regressed)), flush=True)
-    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as rerun:
-        rerun.write("\n".join(sorted(regressed)) + "\n")
-    try:
-        code, again = run(passthrough, rerun.name)
-    finally:
-        os.unlink(rerun.name)
+    with tempfile.TemporaryDirectory() as directory:
+        rerun = Path(directory) / "rerun.csv"
+        rerun.write_text("\n".join(sorted(regressed)) + "\n", encoding="utf-8")
+        code, again = run(passthrough, str(rerun))
     if code != 0:
         return code
     repeated = regressed & again

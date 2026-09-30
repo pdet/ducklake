@@ -472,7 +472,6 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
-	// no stats for transaction local tables or tables with transaction local inserts
 	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
 }
 

@@ -27,7 +27,6 @@ jobs:
       GEN: ninja
       BUILD_BENCHMARK: 1
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      # Paths are taken relative to the workspace so both checkouts share ccache objects
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: true
     steps:
@@ -44,7 +43,6 @@ jobs:
           submodules: 'true'
           persist-credentials: false
 
-      # A pull request is compared to its base, a push to main to the commit before it
       - name: Checkout base
         uses: actions/checkout@v4
         with:
@@ -80,8 +78,6 @@ jobs:
         working-directory: pr
         run: make release
 
-      # The benchmark files come from the PR checkout, so new benchmarks also run against the base.
-      # The geomean gate is not confirmed by a second pass, so nofail keeps it from failing the job.
       - name: Run regression benchmarks
         working-directory: pr
         run: |
@@ -89,7 +85,5 @@ jobs:
             --old ../base/build/release/benchmark/benchmark_runner \
             --new build/release/benchmark/benchmark_runner \
             --benchmarks .github/regression/micro.csv \
-            --verbose \
             --early-stop \
-            --nofail \
             --threads 2

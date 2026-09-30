@@ -11,7 +11,6 @@ require ducklake
 
 cache_file ducklake_show_all_tables_${tables}.db
 
-# IMPORT DATABASE runs the generated schema.sql, which creates the tables in a single snapshot
 load
 EXPORT DATABASE '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl';
 COPY (SELECT 'CREATE TABLE ducklake.tbl_' || i || ' (id INTEGER, random_data VARCHAR);' FROM range(${tables}) t(i)) TO '${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}_ddl/schema.sql' (HEADER false, QUOTE '');
@@ -28,7 +27,7 @@ ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS duck
 run
 SHOW ALL TABLES;
 
-# Re-attaching drops the cached catalog, so that every run starts cold
+# Reattaching clears the catalog cache
 cleanup
 DETACH ducklake;
 ATTACH 'ducklake:${BENCHMARK_DIR}/ducklake_show_all_tables_${tables}.db' AS ducklake;

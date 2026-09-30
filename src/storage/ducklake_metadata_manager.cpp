@@ -1303,25 +1303,29 @@ bool DuckLakeMetadataManager::ResultHasColumn(QueryResult &result, const string 
 	return false;
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness) {
-	// Pure all-tables template (only {METADATA_CATALOG} is substituted by the caller; it is NOT run
-	// through StringUtil::Format). It must NOT contain a printf placeholder such as `WHERE table_id =
-	// %llu` - the server-side commit path (DuckLakeServerSideCommit::ReadExistingTableStats) executes
-	// the returned SQL verbatim, so a stray %llu would reach the parser and fail every server-side
-	// commit. The single-table GetGlobalTableStats() below keeps its own StringUtil::Format query.
+static string TableStatsQuery(const string &select_list, bool include_column_stats, optional_idx table_id) {
+	auto query = "\nSELECT " + select_list + "\nFROM {METADATA_CATALOG}.ducklake_table_stats\n";
+	if (include_column_stats) {
+		query += "LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)\n";
+	}
+	query += "WHERE record_count IS NOT NULL\n  AND file_size_bytes IS NOT NULL\n";
+	if (table_id.IsValid()) {
+		query += StringUtil::Format("  AND table_id = %llu\n", table_id.GetIndex());
+	}
+	if (include_column_stats) {
+		query += "ORDER BY table_id\n";
+	}
+	return query + ";\n";
+}
+
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
 	if (include_exactness) {
 		select_list += ", min_is_exact, max_is_exact";
 	}
-	return "\nSELECT " + select_list + R"(
-FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
-WHERE record_count IS NOT NULL
-  AND file_size_bytes IS NOT NULL
-ORDER BY table_id;
-)";
+	return TableStatsQuery(select_list, true, table_id);
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(QueryResult &result) {
@@ -1330,33 +1334,13 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
                                                                              TableIndex table_id) {
-	string select_list =
-	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
-	    "max_value, extra_stats";
-	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
-		select_list += ", min_is_exact, max_is_exact";
-	}
-	string query = StringUtil::Format("\nSELECT " + select_list + R"(
-FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)
-WHERE table_id = %llu
-  AND record_count IS NOT NULL
-  AND file_size_bytes IS NOT NULL
-ORDER BY table_id;
-)",
-	                                  table_id.index);
-
-	auto result = Query(snapshot, query);
+	auto result =
+	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_id.index));
 	return TransformGlobalStats(*result);
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
-	auto result = Query(snapshot, R"(
-SELECT table_id, record_count
-FROM {METADATA_CATALOG}.ducklake_table_stats
-WHERE record_count IS NOT NULL
-  AND file_size_bytes IS NOT NULL;
-)");
+	auto result = Query(snapshot, TableStatsQuery("table_id, record_count", false, optional_idx()));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table record counts from DuckLake: ");
 	}

@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/duckdb_tables_record_counts.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -37,13 +37,12 @@ SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'ducklake'
 ----
 3
 
-# the stats are read once, not once per table
+# Cached counts avoid repeated queries
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_table_stats%'
 ----
 1
 
-# an insert is picked up
 statement ok
 INSERT INTO ducklake.empty_tbl VALUES (1), (2)
 
@@ -54,7 +53,7 @@ empty_tbl	2
 large_tbl	10000
 small_tbl	3
 
-# dropping data files is picked up as well, although it does not add files
+# Truncation does not allocate new file IDs
 statement ok
 TRUNCATE ducklake.large_tbl
 
@@ -64,3 +63,50 @@ SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'du
 empty_tbl	2
 large_tbl	0
 small_tbl	3
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.empty_tbl VALUES (3)
+
+statement ok
+CREATE TABLE ducklake.local_tbl AS SELECT 1 AS i
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	0
+large_tbl	0
+local_tbl	0
+small_tbl	3
+
+statement ok
+ROLLBACK
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	0
+small_tbl	3
+
+statement ok
+INSERT INTO ducklake.large_tbl SELECT i FROM range(10000) t(i)
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'large_tbl'
+----
+10000
+
+# Counts reflect changes made through another catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS writer (METADATA_CATALOG '__ducklake_metadata_ducklake')
+
+statement ok
+TRUNCATE writer.large_tbl
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'large_tbl'
+----
+0
