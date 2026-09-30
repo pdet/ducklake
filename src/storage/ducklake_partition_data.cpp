@@ -191,14 +191,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext
                                                                    unique_ptr<Expression> column_expr) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(column_expr));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name),
-	                                          std::move(children), error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name), std::move(children));
 }
 
 static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string &op, unique_ptr<Expression> left,
@@ -206,14 +200,8 @@ static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto result =
-	    binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children), error, false);
-	if (!result) {
-		error.Throw();
-	}
-	return result;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContext &context,
@@ -261,14 +249,8 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 	children.push_back(make_uniq<BoundConstantExpression>(Value(GetEpochTransformPart(transform_type))));
 	children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
 	children.push_back(std::move(column_expr));
-	ErrorData error;
 	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("date_diff"), std::move(children),
-	                                          error, false);
-	if (!function) {
-		error.Throw();
-	}
-	return function;
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientContext &context,

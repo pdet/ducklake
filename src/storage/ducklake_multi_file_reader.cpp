@@ -617,12 +617,7 @@ MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExp
 		children.push_back(std::move(file_row_number));
 
 		FunctionBinder binder(context);
-		ErrorData error;
-		auto function_expr =
-		    binder.BindScalarFunction(Identifier::DefaultSchema(), "+", std::move(children), error, true, nullptr);
-		if (error.HasError()) {
-			error.Throw();
-		}
+		auto function_expr = binder.BindScalarFunction(Identifier::DefaultSchema(), "+", std::move(children), true);
 		vector<column_t> column_ids;
 		column_ids.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 		return MultiFileReaderVirtualColumnBinding(std::move(function_expr), std::move(column_ids));
