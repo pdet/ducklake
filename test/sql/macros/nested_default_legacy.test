@@ -42,9 +42,9 @@ SELECT ducklake.list_default()
 does not support the supplied arguments
 
 query I
-SELECT ducklake.list_default([1, 2])
+SELECT ducklake.list_default(42)
 ----
-[1, 2]
+42
 
 statement ok
 DROP MACRO ducklake.map_default
