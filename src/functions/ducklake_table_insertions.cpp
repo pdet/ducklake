@@ -84,10 +84,6 @@ static unique_ptr<FunctionData> DuckLakeTableDeletionsBind(ClientContext &contex
 	return DuckLakeTableChangesBind(context, input, return_types, names, DuckLakeScanType::SCAN_DELETIONS);
 }
 
-static unique_ptr<GlobalTableFunctionState> DuckLakeChangesInit(ClientContext &context, TableFunctionInitInput &input) {
-	throw InternalException("DuckLakeChangesInit should never be called");
-}
-
 static void DuckLakeChangesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	throw InternalException("DuckLakeChangesExecute should never be called");
 }
@@ -97,7 +93,7 @@ TableFunctionSet DuckLakeTableInsertionsFunction::GetFunctions() {
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
 		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
-		                              DuckLakeChangesExecute, DuckLakeTableInsertionsBind, DuckLakeChangesInit));
+		                              DuckLakeChangesExecute, DuckLakeTableInsertionsBind));
 	}
 	return set;
 }
@@ -107,7 +103,7 @@ TableFunctionSet DuckLakeTableDeletionsFunction::GetFunctions() {
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
 	for (auto &type : at_types) {
 		set.AddFunction(TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, type, type},
-		                              DuckLakeChangesExecute, DuckLakeTableDeletionsBind, DuckLakeChangesInit));
+		                              DuckLakeChangesExecute, DuckLakeTableDeletionsBind));
 	}
 	return set;
 }
