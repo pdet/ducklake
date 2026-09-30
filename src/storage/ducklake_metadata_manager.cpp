@@ -112,36 +112,22 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	return true;
 }
 
-bool DuckLakeMetadataManager::SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns) {
-	for (auto &col : columns) {
-		auto col_type = DuckLakeTypes::FromString(col.type);
-		if (!SupportsInlining(col_type)) {
-			return false;
-		}
-		if (!col.children.empty() && !SupportsInliningColumns(col.children)) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool DuckLakeInlinedColNames::ConflictsWith(const string &name) const {
 	return StringUtil::CIEquals(name, row_id) || StringUtil::CIEquals(name, begin_snapshot) ||
 	       StringUtil::CIEquals(name, end_snapshot) || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||
 	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
 }
 
+bool DuckLakeMetadataManager::CanInlineColumn(const string &name, const LogicalType &type) {
+	if (InlinedColNames().ConflictsWith(name) || name.size() > MaxIdentifierLength()) {
+		return false;
+	}
+	return !TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); });
+}
+
 bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
-	auto max_identifier_length = MaxIdentifierLength();
-	auto col_names = InlinedColNames();
 	for (auto &col : columns.Logical()) {
-		if (col_names.ConflictsWith(col.Name().GetIdentifierName())) {
-			return false;
-		}
-		if (col.Name().size() > max_identifier_length) {
-			return false;
-		}
-		if (TypeVisitor::Contains(col.Type(), [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+		if (!CanInlineColumn(col.Name().GetIdentifierName(), col.Type())) {
 			return false;
 		}
 	}
@@ -149,17 +135,12 @@ bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
 }
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
-	auto max_identifier_length = MaxIdentifierLength();
-	auto col_names = InlinedColNames();
 	for (auto &col : columns) {
-		if (col_names.ConflictsWith(col.name)) {
-			return false;
-		}
-		if (col.name.size() > max_identifier_length) {
+		if (!CanInlineColumn(col.name, DuckLakeTypes::FromColumnInfo(col))) {
 			return false;
 		}
 	}
-	return SupportsInliningColumns(columns);
+	return true;
 }
 
 FileSystem &DuckLakeMetadataManager::GetFileSystem() {
@@ -2973,7 +2954,7 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 }
 
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
-	auto column_type = DuckLakeTypes::FromString(col.type);
+	auto column_type = DuckLakeTypes::FromColumnInfo(col);
 	if (!TypeIsNativelySupported(column_type)) {
 		// scalars including VARIANT get a backend type, nested types are stored as text
 		auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, column_type);
@@ -2982,24 +2963,7 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 		}
 		return "VARCHAR";
 	}
-	switch (column_type.id()) {
-	case LogicalTypeId::STRUCT: {
-		return "STRUCT(" + GetColumnDefinitions(col.children) + ")";
-	}
-	case LogicalTypeId::LIST: {
-		return GetColumnType(col.children[0]) + "[]";
-	}
-	case LogicalTypeId::MAP: {
-		return StringUtil::Format("MAP(%s, %s)", GetColumnType(col.children[0]), GetColumnType(col.children[1]));
-	}
-	default:
-		if (!col.children.empty()) {
-			// This is a nested structure that we currently do not support.
-			throw NotImplementedException("Unsupported nested type %s in DuckLakeMetadataManager::GetColumnType",
-			                              col.type);
-		}
-		return GetColumnTypeInternal(column_type);
-	}
+	return GetColumnTypeInternal(column_type);
 }
 
 string DuckLakeMetadataManager::InlinedTableNameFor(idx_t table_id, idx_t schema_version) {

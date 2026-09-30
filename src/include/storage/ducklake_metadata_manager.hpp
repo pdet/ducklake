@@ -233,8 +233,6 @@ public:
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
-	//! Check if columns (stored as DuckLakeColumnInfo) support inlining, recursing into children
-	bool SupportsInliningColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	//! Check whether a table with the given columns can be inlined
 	bool CanInlineColumns(const ColumnList &columns);
@@ -556,6 +554,7 @@ public:
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
+	bool CanInlineColumn(const string &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery(const string &separator) const;
