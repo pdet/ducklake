@@ -6,7 +6,6 @@
 #include "duckdb/storage/statistics/struct_stats.hpp"
 #include "duckdb/storage/statistics/variant_stats.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
-#include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -341,10 +340,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnVariantStats::ToStats() const {
 	}
 	// get the type
 	auto shredded_type = nested_stats.ToType(shredded_field_stats);
-	auto full_shredding_type = TypeVisitor::VisitReplace(shredded_type, [](const LogicalType &type) {
-		return LogicalType::STRUCT({{"typed_value", type}, {"untyped_value_index", LogicalType::UINTEGER}});
-	});
-	auto variant_stats = VariantStats::CreateShredded(full_shredding_type);
+	auto variant_stats = VariantStats::CreateShredded(VariantStats::GetShreddingType(shredded_type));
 
 	auto &shredded_stats = VariantStats::GetShreddedStats(variant_stats);
 	nested_stats.ConvertStats(shredded_field_stats, shredded_stats);
