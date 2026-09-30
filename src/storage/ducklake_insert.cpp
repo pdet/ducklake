@@ -716,14 +716,6 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
-class DuckLakeInsertColumnBindingResolver : public ColumnBindingResolver {
-public:
-	DuckLakeInsertColumnBindingResolver(TableIndex table_index, const vector<LogicalType> &input_types) {
-		bindings = LogicalOperator::GenerateColumnBindings(table_index, input_types.size());
-		types = input_types;
-	}
-};
-
 //! Wrap the plan in an ORDER BY on the sort keys, usable before the table entry exists (CTAS)
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      PhysicalOperator &plan, const ColumnList &columns,
@@ -740,7 +732,8 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	                               columns.GetColumnTypes(), pre_bound_orders);
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
-	DuckLakeInsertColumnBindingResolver resolver(table_index, plan.GetTypes());
+	auto bindings = LogicalOperator::GenerateColumnBindings(table_index, plan.GetTypes().size());
+	ColumnBindingResolver resolver(std::move(bindings), plan.GetTypes());
 	for (auto &order : orders) {
 		resolver.VisitExpression(&order.expression);
 	}
