@@ -1121,18 +1121,17 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 	return catalog;
 }
 
-template <class ROW>
-void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0,
-                             bool has_exactness = false) {
-	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
+static void TransformGlobalStatsRow(const QueryResultRow &row, vector<DuckLakeGlobalStatsInfo> &global_stats,
+                                    idx_t from_column = 0, bool has_exactness = false) {
+	auto table_id = TableIndex(row.GetValue<uint64_t>(0 + from_column));
 
 	if (global_stats.empty() || global_stats.back().table_id != table_id) {
 		DuckLakeGlobalStatsInfo new_entry;
 		new_entry.table_id = table_id;
 		new_entry.initialized = true;
-		new_entry.record_count = row.template GetValue<uint64_t>(2 + from_column);
-		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
-		new_entry.table_size_bytes = row.template GetValue<uint64_t>(4 + from_column);
+		new_entry.record_count = row.GetValue<uint64_t>(2 + from_column);
+		new_entry.next_row_id = row.GetValue<uint64_t>(3 + from_column);
+		new_entry.table_size_bytes = row.GetValue<uint64_t>(4 + from_column);
 		global_stats.push_back(std::move(new_entry));
 	}
 
@@ -1145,7 +1144,7 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 	}
 
 	DuckLakeGlobalColumnStatsInfo column_stats;
-	column_stats.column_id = FieldIndex(row.template GetValue<uint64_t>(1 + from_column));
+	column_stats.column_id = FieldIndex(row.GetValue<uint64_t>(1 + from_column));
 
 	const idx_t COLUMN_STATS_START = 5 + from_column;
 
@@ -1153,42 +1152,40 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		column_stats.has_contains_null = false;
 	} else {
 		column_stats.has_contains_null = true;
-		column_stats.contains_null = row.template GetValue<bool>(COLUMN_STATS_START);
+		column_stats.contains_null = row.GetValue<bool>(COLUMN_STATS_START);
 	}
 
 	if (row.IsNull(COLUMN_STATS_START + 1)) {
 		column_stats.has_contains_nan = false;
 	} else {
 		column_stats.has_contains_nan = true;
-		column_stats.contains_nan = row.template GetValue<bool>(COLUMN_STATS_START + 1);
+		column_stats.contains_nan = row.GetValue<bool>(COLUMN_STATS_START + 1);
 	}
 
 	if (row.IsNull(COLUMN_STATS_START + 2)) {
 		column_stats.has_min = false;
 	} else {
 		column_stats.has_min = true;
-		column_stats.min_val = row.template GetValue<string>(COLUMN_STATS_START + 2);
+		column_stats.min_val = row.GetValue<string>(COLUMN_STATS_START + 2);
 	}
 
 	if (row.IsNull(COLUMN_STATS_START + 3)) {
 		column_stats.has_max = false;
 	} else {
 		column_stats.has_max = true;
-		column_stats.max_val = row.template GetValue<string>(COLUMN_STATS_START + 3);
+		column_stats.max_val = row.GetValue<string>(COLUMN_STATS_START + 3);
 	}
 
 	if (row.IsNull(COLUMN_STATS_START + 4)) {
 		column_stats.has_extra_stats = false;
 	} else {
 		column_stats.has_extra_stats = true;
-		column_stats.extra_stats = row.template GetValue<string>(COLUMN_STATS_START + 4);
+		column_stats.extra_stats = row.GetValue<string>(COLUMN_STATS_START + 4);
 	}
 
 	if (has_exactness) {
-		column_stats.min_is_exact =
-		    !row.IsNull(COLUMN_STATS_START + 5) && row.template GetValue<bool>(COLUMN_STATS_START + 5);
-		column_stats.max_is_exact =
-		    !row.IsNull(COLUMN_STATS_START + 6) && row.template GetValue<bool>(COLUMN_STATS_START + 6);
+		column_stats.min_is_exact = OptBoolFalse(row, COLUMN_STATS_START + 5);
+		column_stats.max_is_exact = OptBoolFalse(row, COLUMN_STATS_START + 6);
 	}
 
 	stats_entry.column_stats.push_back(std::move(column_stats));
@@ -1284,9 +1281,8 @@ string DuckLakeMetadataManager::GetDeleteFileSelectList(const string &prefix) {
 	return GetFileSelectList(prefix) + ", " + prefix + ".format AS " + prefix + "_format";
 }
 
-template <class T>
-DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
-                                                       bool is_encrypted) {
+DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row,
+                                                       idx_t &col_idx, bool is_encrypted) {
 	DuckLakeFileData data;
 	if (row.IsNull(col_idx)) {
 		// file is not there
@@ -1297,13 +1293,13 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 		return data;
 	}
 	DuckLakePath path;
-	path.path = row.template GetValue<string>(col_idx++);
-	path.path_is_relative = row.template GetValue<bool>(col_idx++);
+	path.path = row.GetValue<string>(col_idx++);
+	path.path_is_relative = row.GetValue<bool>(col_idx++);
 
 	data.path = FromRelativePath(path, table.DataPath());
-	data.file_size_bytes = row.template GetValue<idx_t>(col_idx++);
+	data.file_size_bytes = row.GetValue<idx_t>(col_idx++);
 	if (!row.IsNull(col_idx)) {
-		data.footer_size = row.template GetValue<idx_t>(col_idx);
+		data.footer_size = row.GetValue<idx_t>(col_idx);
 	}
 	col_idx++;
 	if (is_encrypted) {
@@ -1311,17 +1307,16 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
 			throw InvalidInputException("Database is encrypted, but file %s does not have an encryption key",
 			                            data.path);
 		}
-		data.encryption_key = Blob::FromBase64(row.template GetValue<string>(col_idx++));
+		data.encryption_key = Blob::FromBase64(row.GetValue<string>(col_idx++));
 	}
 	return data;
 }
 
-template <class T>
-DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx,
-                                                         bool is_encrypted) {
+DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row,
+                                                         idx_t &col_idx, bool is_encrypted) {
 	auto data = ReadDataFile(table, row, col_idx, is_encrypted);
 	if (!row.IsNull(col_idx)) {
-		data.format = DeleteFileFormatFromString(row.template GetValue<string>(col_idx));
+		data.format = DeleteFileFormatFromString(row.GetValue<string>(col_idx));
 	}
 	col_idx++;
 	return data;

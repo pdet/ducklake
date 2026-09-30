@@ -15,6 +15,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
@@ -37,7 +38,6 @@ class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
 struct TransactionChangeInformation;
 class BoundAtClause;
-class QueryResult;
 class SQLStatement;
 class FileSystem;
 
@@ -270,8 +270,7 @@ public:
 
 	//! Rvalue sugar so call sites can pass `R"(...)"` and `StringUtil::Format(...)` directly.
 	//! Named-rvalue decays to an lvalue inside, so the virtual dispatch still picks up the
-	//! string-ref overrides without derived classes needing to add anything. Defined out-of-line
-	//! since QueryResult is only forward-declared here.
+	//! string-ref overrides without derived classes needing to add anything.
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &&query);
 	unique_ptr<QueryResult> Execute(string &&query);
 	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &&query);
@@ -587,10 +586,10 @@ protected:
 private:
 	template <class T>
 	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
-	template <class T>
-	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
-	template <class T>
-	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, T &row, idx_t &col_idx, bool is_encrypted);
+	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                              bool is_encrypted);
+	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
+	                                bool is_encrypted);
 
 	bool IsEncrypted() const;
 

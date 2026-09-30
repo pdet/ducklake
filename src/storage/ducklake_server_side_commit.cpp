@@ -65,8 +65,8 @@ unique_ptr<DuckLakeNameMapEntry> BuildNameMapEntry(idx_t id, const std::map<idx_
 	return entry;
 }
 
-template <class ROW>
-DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &type, bool has_exactness) {
+static DuckLakeColumnStats ReadColumnStatsRow(const QueryResultRow &row, idx_t base, const LogicalType &type,
+                                              bool has_exactness) {
 	DuckLakeColumnStats s(type);
 	if (!row.IsNull(base + 0)) {
 		s.column_size_bytes = AsIdx(row, base + 0);
@@ -81,21 +81,21 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 	}
 	if (OptBoolFalse(row, base + 5) && !row.IsNull(base + 6)) {
 		s.has_min = true;
-		s.min = row.template GetValue<string>(base + 6);
+		s.min = row.GetValue<string>(base + 6);
 	}
 	if (OptBoolFalse(row, base + 7) && !row.IsNull(base + 8)) {
 		s.has_max = true;
-		s.max = row.template GetValue<string>(base + 8);
+		s.max = row.GetValue<string>(base + 8);
 	}
 	s.has_contains_nan = OptBoolFalse(row, base + 9);
 	if (s.has_contains_nan && !row.IsNull(base + 10)) {
-		s.contains_nan = row.template GetValue<bool>(base + 10);
+		s.contains_nan = row.GetValue<bool>(base + 10);
 	}
 	if (!row.IsNull(base + 11)) {
-		s.any_valid = row.template GetValue<bool>(base + 11);
+		s.any_valid = row.GetValue<bool>(base + 11);
 	}
 	if (!row.IsNull(base + 12) && s.extra_stats) {
-		s.extra_stats->Deserialize(row.template GetValue<string>(base + 12));
+		s.extra_stats->Deserialize(row.GetValue<string>(base + 12));
 	}
 	if (has_exactness) {
 		s.min_is_exact = OptBoolFalse(row, base + 13);
@@ -107,10 +107,9 @@ DuckLakeColumnStats ReadColumnStatsRow(ROW &row, idx_t base, const LogicalType &
 //! Read the 9 shared DuckLakeDeleteFile fields starting at `base` column.
 //! Layout: file_name, format, delete_count, file_size_bytes, footer_size,
 //! encryption_key, begin_snapshot, max_snapshot, source.
-template <class ROW>
-void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
-	f.file_name = row.template GetValue<string>(base + 0);
-	f.format = DeleteFileFormatFromString(row.template GetValue<string>(base + 1));
+static void FillDeleteFileCommon(DuckLakeDeleteFile &f, const QueryResultRow &row, idx_t base) {
+	f.file_name = row.GetValue<string>(base + 0);
+	f.format = DeleteFileFormatFromString(row.GetValue<string>(base + 1));
 	f.delete_count = AsIdx(row, base + 2);
 	f.file_size_bytes = AsIdx(row, base + 3);
 	f.footer_size = AsIdx(row, base + 4);
@@ -121,7 +120,7 @@ void FillDeleteFileCommon(DuckLakeDeleteFile &f, ROW &row, idx_t base) {
 	if (!row.IsNull(base + 7)) {
 		f.max_snapshot = AsIdx(row, base + 7);
 	}
-	f.source = row.template GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
+	f.source = row.GetValue<string>(base + 8) == "FLUSH" ? DeleteFileSource::FLUSH : DeleteFileSource::REGULAR;
 }
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
