@@ -394,14 +394,6 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry
 	encryption_key = catalog.GenerateEncryptionKey(context);
 }
 
-static void StripTrailingSeparator(FileSystem &fs, string &path) {
-	auto sep = fs.PathSeparator(path);
-	if (!StringUtil::EndsWith(path, sep)) {
-		return;
-	}
-	path = path.substr(0, path.size() - sep.size());
-}
-
 const DuckLakeFieldId &DuckLakeInsert::GetTopLevelColumn(DuckLakeCopyInput &copy_input, FieldIndex field_id,
                                                          optional_idx &index) {
 	if (!copy_input.field_data) {
@@ -610,8 +602,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		result.partition_output = false;
 		result.write_empty_file = false;
 	}
-	result.file_path = copy_input.data_path;
-	StripTrailingSeparator(fs, result.file_path);
+	result.file_path = PhysicalCopyToFile::GetTrimmedPath(context, copy_input.data_path);
 	result.file_extension = "parquet";
 	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
 	result.per_thread_output = per_thread_output;
