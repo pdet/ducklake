@@ -262,14 +262,8 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 					continue;
 				}
 				auto column_id = entry.GetIndex().GetIndex();
-				auto &vec = chunk.data[column_id];
-
-				UnifiedVectorFormat vdata;
-				vec.ToUnifiedFormat(vdata);
-
 				auto filter_state = TableFilterState::Initialize(context, filter);
-
-				approved_tuple_count = ColumnSegment::FilterSelection(sel, vec, vdata, filter, *filter_state,
+				approved_tuple_count = ColumnSegment::FilterSelection(sel, chunk.data[column_id], *filter_state,
 				                                                      chunk.size(), approved_tuple_count);
 			}
 		}
