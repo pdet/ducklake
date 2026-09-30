@@ -2,7 +2,6 @@
 #include "storage/ducklake_geo_stats.hpp"
 
 #include "duckdb/common/types/value.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/json_document.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
@@ -118,50 +117,9 @@ unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 
 	GeometryStats::GetExtent(stats) = extent;
 
-	static const case_insensitive_map_t<pair<GeometryType, VertexType>> type_mapping = {
-	    // XY TYPES
-	    {"unknown", {GeometryType::INVALID, VertexType::XY}},
-	    {"point", {GeometryType::POINT, VertexType::XY}},
-	    {"linestring", {GeometryType::LINESTRING, VertexType::XY}},
-	    {"polygon", {GeometryType::POLYGON, VertexType::XY}},
-	    {"multipoint", {GeometryType::MULTIPOINT, VertexType::XY}},
-	    {"multilinestring", {GeometryType::MULTILINESTRING, VertexType::XY}},
-	    {"multipolygon", {GeometryType::MULTIPOLYGON, VertexType::XY}},
-	    {"geometrycollection", {GeometryType::GEOMETRYCOLLECTION, VertexType::XY}},
-	    // Z TYPES
-	    {"unknown_z", {GeometryType::INVALID, VertexType::XYZ}},
-	    {"point_z", {GeometryType::POINT, VertexType::XYZ}},
-	    {"linestring_z", {GeometryType::LINESTRING, VertexType::XYZ}},
-	    {"polygon_z", {GeometryType::POLYGON, VertexType::XYZ}},
-	    {"multipoint_z", {GeometryType::MULTIPOINT, VertexType::XYZ}},
-	    {"multilinestring_z", {GeometryType::MULTILINESTRING, VertexType::XYZ}},
-	    {"multipolygon_z", {GeometryType::MULTIPOLYGON, VertexType::XYZ}},
-	    {"geometrycollection_z", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYZ}},
-	    // M TYPES
-	    {"unknown_m", {GeometryType::INVALID, VertexType::XYM}},
-	    {"point_m", {GeometryType::POINT, VertexType::XYM}},
-	    {"linestring_m", {GeometryType::LINESTRING, VertexType::XYM}},
-	    {"polygon_m", {GeometryType::POLYGON, VertexType::XYM}},
-	    {"multipoint_m", {GeometryType::MULTIPOINT, VertexType::XYM}},
-	    {"multilinestring_m", {GeometryType::MULTILINESTRING, VertexType::XYM}},
-	    {"multipolygon_m", {GeometryType::MULTIPOLYGON, VertexType::XYM}},
-	    {"geometrycollection_m", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYM}},
-	    // ZM TYPES
-	    {"unknown_zm", {GeometryType::INVALID, VertexType::XYZM}},
-	    {"point_zm", {GeometryType::POINT, VertexType::XYZM}},
-	    {"linestring_zm", {GeometryType::LINESTRING, VertexType::XYZM}},
-	    {"polygon_zm", {GeometryType::POLYGON, VertexType::XYZM}},
-	    {"multipoint_zm", {GeometryType::MULTIPOINT, VertexType::XYZM}},
-	    {"multilinestring_zm", {GeometryType::MULTILINESTRING, VertexType::XYZM}},
-	    {"multipolygon_zm", {GeometryType::MULTIPOLYGON, VertexType::XYZM}},
-	    {"geometrycollection_zm", {GeometryType::GEOMETRYCOLLECTION, VertexType::XYZM}}};
-
 	auto &types = GeometryStats::GetTypes(stats);
 	for (auto &type : geo_types) {
-		auto entry = type_mapping.find(type);
-		if (entry != type_mapping.end()) {
-			types.Add(entry->second.first, entry->second.second);
-		}
+		types.TryAdd(type);
 	}
 
 	// DuckLake doesn't store flags for empty/non-empty geometry/parts, so assume the worst.
