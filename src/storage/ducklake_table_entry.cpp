@@ -686,20 +686,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(new_entry);
 }
 
-optional_idx FindNotNullConstraint(CreateTableInfo &table_info, LogicalIndex index) {
-	for (idx_t constraint_idx = 0; constraint_idx < table_info.constraints.size(); constraint_idx++) {
-		auto &constraint = table_info.constraints[constraint_idx];
-		if (constraint->type != ConstraintType::NOT_NULL) {
-			continue;
-		}
-		auto &not_null_constraint = constraint->Cast<NotNullConstraint>();
-		if (not_null_constraint.index == index) {
-			return constraint_idx;
-		}
-	}
-	return optional_idx();
-}
-
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         SetNotNullInfo &info) {
 	auto create_info = GetInfo();
@@ -711,7 +697,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	auto &field_id = GetFieldId(col.Physical());
 
 	// check if there is an existing constraint
-	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
+	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
 	if (existing_idx.IsValid()) {
 		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
 		                       col.GetName());
@@ -760,7 +746,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &field_id = GetFieldId(col.Physical());
 
 	// find the existing index
-	auto existing_idx = FindNotNullConstraint(table_info, col.Logical());
+	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
 	if (!existing_idx.IsValid()) {
 		throw CatalogException("Cannot DROP NULL on column %s - it has no NOT NULL constraint defined", col.GetName());
 	}
