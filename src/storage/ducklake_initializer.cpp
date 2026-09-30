@@ -6,6 +6,7 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "storage/ducklake_initializer.hpp"
@@ -123,11 +124,7 @@ void DuckLakeInitializer::InitializeDataPath() {
 	if (data_path.empty()) {
 		return;
 	}
-
-	// This functions will:
-	//	1. Check if a known extension pattern matches the start of the data_path
-	//	2. If so, either load the required extension or throw a relevant error message
-	CheckAndAutoloadedRequiredExtension(data_path);
+	ExtensionHelper::AutoLoadExtensionForPath(*context.db, data_path, "Data path");
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto separator = fs.PathSeparator(data_path);
