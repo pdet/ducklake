@@ -61,9 +61,6 @@ public:
 	//! A leaf filter is evaluated against a single column's stats, so it may only read one column. Returns
 	//! that sub-expression, or nullptr when the filter reads none or several.
 	static optional_ptr<const Expression> GetFilterSubject(const Expression &expr);
-	//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
-	static unique_ptr<Expression> ReplaceFilterSubject(const Expression &expr, const Expression &subject,
-	                                                   const LogicalType &type);
 
 	//! Create the data path directory if it does not yet exist
 	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);

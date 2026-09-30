@@ -14,7 +14,6 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -376,19 +375,6 @@ optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &
 	bool conflict = false;
 	FindFilterSubject(expr, subject, conflict);
 	return conflict ? nullptr : subject;
-}
-
-//! Rewrite the subject to the column placeholder an ExpressionFilter is evaluated against
-unique_ptr<Expression> DuckLakeUtil::ReplaceFilterSubject(const Expression &expr, const Expression &subject,
-                                                          const LogicalType &type) {
-	if (expr.Equals(subject)) {
-		return make_uniq<BoundReferenceExpression>(type, 0U);
-	}
-	auto result = expr.Copy();
-	ExpressionIterator::EnumerateChildren(*result, [&](unique_ptr<Expression> &child) {
-		child = DuckLakeUtil::ReplaceFilterSubject(*child, subject, type);
-	});
-	return result;
 }
 
 bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {

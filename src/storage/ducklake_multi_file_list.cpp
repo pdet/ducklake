@@ -86,7 +86,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column
 		if (!field_id) {
 			return nullptr;
 		}
-		auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+		auto rewritten =
+		    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
 		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 	}
@@ -148,7 +149,8 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 	if (!field_id) {
 		return nullptr;
 	}
-	auto rewritten = DuckLakeUtil::ReplaceFilterSubject(expr, *subject, field_id->Type());
+	auto rewritten =
+	    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
 	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
 	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 }
