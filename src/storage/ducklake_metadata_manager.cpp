@@ -1350,6 +1350,23 @@ ORDER BY table_id;
 	return TransformGlobalStats(*result);
 }
 
+map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
+	auto result = Query(snapshot, R"(
+SELECT table_id, record_count
+FROM {METADATA_CATALOG}.ducklake_table_stats
+WHERE record_count IS NOT NULL
+  AND file_size_bytes IS NOT NULL;
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get table record counts from DuckLake: ");
+	}
+	map<TableIndex, idx_t> record_counts;
+	for (auto &row : *result) {
+		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
+	}
+	return record_counts;
+}
+
 string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 	static const vector<string> column_list {
 	    "path", "path_is_relative", "file_size_bytes", "footer_size", "encryption_key",

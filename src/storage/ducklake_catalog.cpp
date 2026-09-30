@@ -179,6 +179,10 @@ optional_idx DuckLakeTableStatsCacheEntry::GetEstimatedCacheMemory() const {
 	return estimate;
 }
 
+optional_idx DuckLakeTableRecordCountCacheEntry::GetEstimatedCacheMemory() const {
+	return sizeof(DuckLakeTableRecordCountCacheEntry) + record_counts.size() * ESTIMATED_BYTES_PER_TABLE;
+}
+
 optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 	return EstimateCatalogSetMemory(catalog_set);
 }
@@ -987,6 +991,20 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
 
+idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
+	auto snapshot = transaction.GetSnapshot();
+	auto &cache = GetObjectCacheInstance();
+	auto key = RecordCountCacheKey(snapshot.next_file_id);
+	auto cached = cache.Get<DuckLakeTableRecordCountCacheEntry>(key);
+	if (!cached) {
+		auto record_counts = transaction.GetMetadataManager().GetTableRecordCounts(snapshot);
+		cached = make_shared_ptr<DuckLakeTableRecordCountCacheEntry>(std::move(record_counts));
+		cache.Put(std::move(key), cached);
+	}
+	auto entry = cached->record_counts.find(table_id);
+	return entry == cached->record_counts.end() ? 0 : entry->second;
+}
+
 optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransaction transaction,
                                                                const EntryLookupInfo &schema_lookup,
                                                                OnEntryNotFound if_not_found) {
@@ -1322,12 +1340,18 @@ string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) c
 	                          next_file_id, table_id.index);
 }
 
+string DuckLakeCatalog::RecordCountCacheKey(idx_t next_file_id) const {
+	return StringUtil::Format("ducklake:%s:%s:%s:record_counts:%llu", GetName(), MetadataPath(), instance_id,
+	                          next_file_id);
+}
+
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
 	GetObjectCacheInstance().Delete(StatsCacheKey(next_file_id, table_id));
+	GetObjectCacheInstance().Delete(RecordCountCacheKey(next_file_id));
 }
 
 void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {

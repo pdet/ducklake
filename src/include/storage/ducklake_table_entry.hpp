@@ -120,6 +120,8 @@ public:
 	void SetTableOptions(map<string, string> options);
 	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
+	//! Whether the global stats are valid for the table in this transaction
+	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
 	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction);
 

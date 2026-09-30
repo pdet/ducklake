@@ -81,7 +81,7 @@ jobs:
         run: make release
 
       # The benchmark files come from the PR checkout, so new benchmarks also run against the base.
-      # --nofail: the geomean gate also trips on +50 ms, which is noise for a benchmark that takes seconds
+      # The geomean gate is not confirmed by a second pass, so nofail keeps it from failing the job.
       - name: Run regression benchmarks
         working-directory: pr
         run: |

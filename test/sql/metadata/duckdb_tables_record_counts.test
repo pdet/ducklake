@@ -1,0 +1,66 @@
+# name: test/sql/metadata/duckdb_tables_record_counts.test
+# description: duckdb_tables and SHOW ALL TABLES read the record counts of all tables in one metadata query
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/duckdb_tables_record_counts')
+
+statement ok
+CREATE TABLE ducklake.empty_tbl(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.small_tbl AS SELECT i FROM range(3) t(i)
+
+statement ok
+CREATE TABLE ducklake.large_tbl AS SELECT i FROM range(10000) t(i)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	0
+large_tbl	10000
+small_tbl	3
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'ducklake'
+----
+3
+
+# the stats are read once, not once per table
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_table_stats%'
+----
+1
+
+# an insert is picked up
+statement ok
+INSERT INTO ducklake.empty_tbl VALUES (1), (2)
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	10000
+small_tbl	3
+
+# dropping data files is picked up as well, although it does not add files
+statement ok
+TRUNCATE ducklake.large_tbl
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' ORDER BY table_name
+----
+empty_tbl	2
+large_tbl	0
+small_tbl	3
