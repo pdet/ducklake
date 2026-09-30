@@ -874,14 +874,11 @@ void ColumnChangeInfo::DropField(const DuckLakeFieldId &field_id) {
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RemoveColumnInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	if (!ColumnExists(info.removed_column)) {
-		if (info.if_column_exists) {
-			return nullptr;
-		}
-		throw BinderException("Table %s does not have a column with name %s", name, info.removed_column);
+	auto removed_index = GetColumnIndex(info.removed_column, info.if_column_exists);
+	if (!removed_index.IsValid()) {
+		return nullptr;
 	}
-
-	auto &col = table_info.columns.GetColumn(info.removed_column);
+	auto &col = table_info.columns.GetColumn(removed_index);
 	auto &field_id = GetFieldId(col.Physical());
 	if (columns.LogicalColumnCount() == 1) {
 		throw CatalogException("Cannot drop column: table only has one column remaining!");
@@ -912,10 +909,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		}
 	}
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
-		transaction.RemoveColumnFromLocalInlinedData(GetTableId(), col.Logical(), field_id);
+		transaction.RemoveColumnFromLocalInlinedData(GetTableId(), removed_index, field_id);
 	}
 
-	auto removed_index = col.Logical();
 	for (idx_t c_idx = 0; c_idx < table_info.constraints.size(); c_idx++) {
 		auto &constraint = table_info.constraints[c_idx];
 		if (constraint->type == ConstraintType::NOT_NULL) {
@@ -1116,10 +1112,7 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, ChangeColumnTypeInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	if (!ColumnExists(info.column_name)) {
-		throw BinderException("Table %s does not have a column with name %s", name, info.column_name);
-	}
-	auto &col = table_info.columns.GetColumnMutable(info.column_name);
+	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_name));
 	auto &field_id = GetFieldId(col.Physical());
 	if (!IsSimpleCast(*info.expression)) {
 		throw NotImplementedException("Column type cannot be modified using an expression");
@@ -1346,10 +1339,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info) {
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	if (!ColumnExists(info.column_name)) {
-		throw BinderException("Table %s does not have a column with name %s", name, info.column_name);
-	}
-	auto &col = table_info.columns.GetColumnMutable(info.column_name);
+	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_name));
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
 	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(
