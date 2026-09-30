@@ -45,10 +45,6 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 	return std::move(result);
 }
 
-static unique_ptr<GlobalTableFunctionState> DuckLakeCommitInit(ClientContext &, TableFunctionInitInput &) {
-	return make_uniq<GlobalTableFunctionState>();
-}
-
 static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->CastNoConst<DuckLakeCommitBindData>();
 	if (data.emitted) {
@@ -69,7 +65,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 
 DuckLakeCommitFunction::DuckLakeCommitFunction()
     : TableFunction("ducklake_commit", {LogicalType::VARCHAR, LogicalType::BIGINT}, DuckLakeCommitExecute,
-                    DuckLakeCommitBind, DuckLakeCommitInit) {
+                    DuckLakeCommitBind) {
 	named_parameters["max_retry_count"] = LogicalType::BIGINT;
 	named_parameters["retry_wait_ms"] = LogicalType::BIGINT;
 	named_parameters["retry_backoff"] = LogicalType::DOUBLE;

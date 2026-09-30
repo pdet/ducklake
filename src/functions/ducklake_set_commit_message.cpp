@@ -18,18 +18,6 @@ struct DuckLakeSetCommitMessageData final : public TableFunctionData {
 	DuckLakeSnapshotCommit snapshot_commit_info;
 };
 
-struct DuckLakeSetCommitMessageState final : public GlobalTableFunctionState {
-	DuckLakeSetCommitMessageState() {
-	}
-
-	bool finished = false;
-};
-
-unique_ptr<GlobalTableFunctionState> DuckLakeSetCommitMessageInit(ClientContext &context,
-                                                                  TableFunctionInitInput &input) {
-	return make_uniq<DuckLakeSetCommitMessageState>();
-}
-
 static unique_ptr<FunctionData> DuckLakeSetCommitMessageBind(ClientContext &context, TableFunctionBindInput &input,
                                                              vector<LogicalType> &return_types,
                                                              vector<Identifier> &names) {
@@ -45,16 +33,14 @@ static unique_ptr<FunctionData> DuckLakeSetCommitMessageBind(ClientContext &cont
 }
 
 void DuckLakeSetCommitMessageExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeSetCommitMessageState>();
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeSetCommitMessageData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	transaction.SetCommitMessage(bind_data.snapshot_commit_info);
-	state.finished = true;
 }
 
 DuckLakeSetCommitMessage::DuckLakeSetCommitMessage()
     : TableFunction("ducklake_set_commit_message", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                    DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind, DuckLakeSetCommitMessageInit) {
+                    DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind) {
 	named_parameters["extra_info"] = LogicalType::VARCHAR;
 }
 } // namespace duckdb

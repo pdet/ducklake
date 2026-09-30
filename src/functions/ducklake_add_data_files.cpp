@@ -82,18 +82,6 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	return std::move(result);
 }
 
-struct DuckLakeAddDataFilesState : public GlobalTableFunctionState {
-	DuckLakeAddDataFilesState() {
-	}
-
-	bool finished = false;
-};
-
-static unique_ptr<GlobalTableFunctionState> DuckLakeAddDataFilesInit(ClientContext &context,
-                                                                     TableFunctionInitInput &input) {
-	return make_uniq<DuckLakeAddDataFilesState>();
-}
-
 struct ParquetColumn {
 	idx_t column_id;
 	string name;
@@ -1262,18 +1250,11 @@ vector<DuckLakeDataFile> DuckLakeFileProcessor::AddFiles(const vector<string> &g
 }
 
 static void DuckLakeAddDataFilesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeAddDataFilesState>();
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeAddDataFilesData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
-
-	if (state.finished) {
-		return;
-	}
 	DuckLakeFileProcessor processor(transaction, context, bind_data);
 	auto files_to_add = processor.AddFiles(bind_data.globs);
-	// add the files
 	transaction.AppendFiles(bind_data.table.GetTableId(), std::move(files_to_add));
-	state.finished = true;
 }
 
 TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
@@ -1281,7 +1262,7 @@ TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
 	vector<LogicalType> at_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
 	for (auto &type : at_types) {
 		TableFunction function("ducklake_add_data_files", {LogicalType::VARCHAR, LogicalType::VARCHAR, type},
-		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind, DuckLakeAddDataFilesInit);
+		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind);
 		function.named_parameters["allow_missing"] = LogicalType::BOOLEAN;
 		function.named_parameters["ignore_extra_columns"] = LogicalType::BOOLEAN;
 		function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
