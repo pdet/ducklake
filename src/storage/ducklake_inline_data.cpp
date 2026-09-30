@@ -384,14 +384,8 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		ColumnDataAppendState append_state;
 		phys_data->InitializeAppend(append_state);
 		for (auto &chunk : inlined_data.Chunks()) {
-			// extract row_ids from the row_id column
-			auto &row_id_vec = chunk.data[physical_col_count];
-			UnifiedVectorFormat row_id_format;
-			row_id_vec.ToUnifiedFormat(row_id_format);
-			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				auto idx = row_id_format.sel->get_index(r);
-				result->row_ids.push_back(row_id_data[idx]);
+			for (auto row_id : chunk.data[physical_col_count].Values<int64_t>()) {
+				result->row_ids.push_back(row_id.GetValueUnsafe());
 			}
 			DataChunk phys_chunk;
 			phys_chunk.InitializeEmpty(phys_types);
