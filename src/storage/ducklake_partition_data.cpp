@@ -169,17 +169,12 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 		used_names.insert(partition_key_name);
 
 		auto &partition_value = partition_values[field.partition_key_index];
-		string partition_value_str;
-		if (partition_value.IsNull()) {
-			// Keep this in sync with DuckDB's HivePartitioning::IsNull parser.
-			partition_value_str = "__HIVE_DEFAULT_PARTITION__";
-		} else {
-			partition_value_str = partition_value.ToString();
-		}
 		if (!result.empty()) {
 			result += separator;
 		}
-		result += HivePartitioning::Escape(partition_key_name) + "=" + HivePartitioning::Escape(partition_value_str);
+		result += HivePartitioning::Escape(partition_key_name) + "=";
+		result += partition_value.IsNull() ? HivePartitioning::DEFAULT_PARTITION_NAME
+		                                   : HivePartitioning::Escape(partition_value.ToString());
 	}
 	if (!result.empty()) {
 		result += separator;
