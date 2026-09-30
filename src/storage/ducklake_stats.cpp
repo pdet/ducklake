@@ -9,11 +9,7 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/limits.hpp"
 
-#include "yyjson.hpp"
-
 namespace duckdb {
-
-using namespace duckdb_yyjson; // NOLINT
 
 DuckLakeColumnExtraStats::DuckLakeColumnExtraStats(DuckLakeExtraStatsType stats_type) : stats_type(stats_type) {
 }

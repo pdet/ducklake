@@ -3,15 +3,12 @@
 
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/json_document.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 
-#include "yyjson.hpp"
-
 namespace duckdb {
-
-using namespace duckdb_yyjson; // NOLINT
 
 DuckLakeColumnGeoStats::DuckLakeColumnGeoStats() : DuckLakeColumnExtraStats(DuckLakeExtraStatsType::GEOMETRY) {
 	xmin = NumericLimits<double>::Maximum();
@@ -76,64 +73,31 @@ void DuckLakeColumnGeoStats::Serialize(DuckLakeColumnStatsInfo &column_stats) co
 }
 
 void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
-	auto doc = yyjson_read(stats.c_str(), stats.size(), 0);
+	JSONParseError error;
+	auto doc = JSONDocument::TryParse(stats.c_str(), stats.size(), error);
 	if (!doc) {
 		throw InvalidInputException("Failed to parse geo stats JSON");
 	}
-	auto root = yyjson_doc_get_root(doc);
-	if (!yyjson_is_obj(root)) {
-		yyjson_doc_free(doc);
+	auto root = doc->GetRoot();
+	if (!root.IsObject()) {
 		throw InvalidInputException("Invalid geo stats JSON");
 	}
 
-	auto bbox_json = yyjson_obj_get(root, "bbox");
-	if (yyjson_is_obj(bbox_json)) {
-		auto xmin_json = yyjson_obj_get(bbox_json, "xmin");
-		if (yyjson_is_num(xmin_json)) {
-			xmin = yyjson_get_real(xmin_json);
-		}
-		auto xmax_json = yyjson_obj_get(bbox_json, "xmax");
-		if (yyjson_is_num(xmax_json)) {
-			xmax = yyjson_get_real(xmax_json);
-		}
-		auto ymin_json = yyjson_obj_get(bbox_json, "ymin");
-		if (yyjson_is_num(ymin_json)) {
-			ymin = yyjson_get_real(ymin_json);
-		}
-		auto ymax_json = yyjson_obj_get(bbox_json, "ymax");
-		if (yyjson_is_num(ymax_json)) {
-			ymax = yyjson_get_real(ymax_json);
-		}
-		auto zmin_json = yyjson_obj_get(bbox_json, "zmin");
-		if (yyjson_is_num(zmin_json)) {
-			zmin = yyjson_get_real(zmin_json);
-		}
-		auto zmax_json = yyjson_obj_get(bbox_json, "zmax");
-		if (yyjson_is_num(zmax_json)) {
-			zmax = yyjson_get_real(zmax_json);
-		}
-		auto mmin_json = yyjson_obj_get(bbox_json, "mmin");
-		if (yyjson_is_num(mmin_json)) {
-			mmin = yyjson_get_real(mmin_json);
-		}
-		auto mmax_json = yyjson_obj_get(bbox_json, "mmax");
-		if (yyjson_is_num(mmax_json)) {
-			mmax = yyjson_get_real(mmax_json);
+	auto bbox = root.GetMember("bbox");
+	const pair<const char *, double *> bounds[] = {{"xmin", &xmin}, {"xmax", &xmax}, {"ymin", &ymin}, {"ymax", &ymax},
+	                                               {"zmin", &zmin}, {"zmax", &zmax}, {"mmin", &mmin}, {"mmax", &mmax}};
+	for (auto &bound : bounds) {
+		auto bound_val = bbox.GetMember(bound.first);
+		if (bound_val.IsNumber()) {
+			*bound.second = bound_val.GetNumber();
 		}
 	}
 
-	auto types_json = yyjson_obj_get(root, "types");
-	if (yyjson_is_arr(types_json)) {
-		yyjson_arr_iter iter;
-		yyjson_arr_iter_init(types_json, &iter);
-		yyjson_val *type_json;
-		while ((type_json = yyjson_arr_iter_next(&iter))) {
-			if (yyjson_is_str(type_json)) {
-				geo_types.insert(yyjson_get_str(type_json));
-			}
+	root.GetMember("types").IterateArray([&](JSONValue type_val) {
+		if (type_val.IsString()) {
+			geo_types.insert(type_val.GetString());
 		}
-	}
-	yyjson_doc_free(doc);
+	});
 }
 
 bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
