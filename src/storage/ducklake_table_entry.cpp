@@ -1323,17 +1323,6 @@ void DuckLakeTableEntry::SetTableOptions(map<string, string> options) {
 	table_options = std::move(options);
 }
 
-static Value EvaluateTableOptionValue(ClientContext &context, const string &option, const ParsedExpression &expr) {
-	auto binder = Binder::CreateBinder(context);
-	ConstantBinder constant_binder(*binder, context, "table option");
-	auto expr_copy = expr.Copy();
-	auto bound_expr = constant_binder.Bind(expr_copy);
-	if (bound_expr->HasParameter()) {
-		throw NotImplementedException("Table option \"%s\" cannot have parameters", option);
-	}
-	return ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
-}
-
 map<string, string>
 DuckLakeTableEntry::ParseTableOptions(ClientContext &context, DuckLakeCatalog &catalog,
                                       const case_insensitive_map_t<unique_ptr<ParsedExpression>> &options,
@@ -1344,7 +1333,10 @@ DuckLakeTableEntry::ParseTableOptions(ClientContext &context, DuckLakeCatalog &c
 		auto option = StringUtil::Lower(entry.first);
 		Value value;
 		if (entry.second) {
-			value = EvaluateTableOptionValue(context, entry.first, *entry.second);
+			auto binder = Binder::CreateBinder(context);
+			ConstantBinder constant_binder(*binder, context, "table option");
+			auto expr = entry.second->Copy();
+			value = ExpressionExecutor::EvaluateScalar(context, *constant_binder.Bind(expr), true);
 		}
 		if (value.IsNull()) {
 			throw BinderException("Table option \"%s\" requires a value", entry.first);
