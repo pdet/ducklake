@@ -325,14 +325,7 @@ unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expressio
 			merged.push_back(std::move(conjunct));
 		}
 	}
-	if (merged.size() == 1) {
-		return std::move(merged[0]);
-	}
-	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	for (auto &conjunct : merged) {
-		result->GetChildrenMutable().push_back(std::move(conjunct));
-	}
-	return std::move(result);
+	return BoundConjunctionExpression::Create(ExpressionType::CONJUNCTION_AND, std::move(merged));
 }
 
 bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
