@@ -8,8 +8,6 @@
 #include "duckdb/common/map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
-#include "duckdb/common/multi_file/multi_file_list.hpp"
-#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -17,44 +15,6 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 namespace duckdb {
-
-//! FunctionInfo to pass delete file metadata to the MultiFileReader
-struct DeleteFileFunctionInfo : public TableFunctionInfo {
-	DuckLakeFileData file_data;
-};
-
-//! Custom MultiFileReader that creates a SimpleMultiFileList with extended info.
-//! This avoids HEAD requests by providing file metadata (size, etag, last_modified) upfront
-struct DeleteFileMultiFileReader : public MultiFileReader {
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table_function) {
-		auto &info = table_function.function_info->Cast<DeleteFileFunctionInfo>();
-		return make_uniq<DeleteFileMultiFileReader>(info.file_data);
-	}
-
-	explicit DeleteFileMultiFileReader(const DuckLakeFileData &delete_file) {
-		OpenFileInfo file_info(delete_file.path);
-		auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
-		extended_info->options["file_size"] = Value::UBIGINT(delete_file.file_size_bytes);
-		extended_info->options["etag"] = Value("");
-		extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
-		if (!delete_file.encryption_key.empty()) {
-			extended_info->options["encryption_key"] = Value::BLOB_RAW(delete_file.encryption_key);
-		}
-		file_info.extended_info = std::move(extended_info);
-
-		vector<OpenFileInfo> files;
-		files.push_back(std::move(file_info));
-		file_list = make_shared_ptr<SimpleMultiFileList>(std::move(files));
-	}
-
-	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
-	                                         const FileGlobInput &options) override {
-		return file_list;
-	}
-
-private:
-	shared_ptr<MultiFileList> file_list;
-};
 
 DuckLakeDeleteFilter::DuckLakeDeleteFilter() : delete_data(make_shared_ptr<DuckLakeDeleteData>()) {
 }
@@ -205,11 +165,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 		return ScanDeletionVectorFile(context, delete_file, snapshot_filter_min, snapshot_filter_max);
 	}
 
-	// Set up custom MultiFileReader to avoid HEAD requests
-	auto function_info = make_shared_ptr<DeleteFileFunctionInfo>();
-	function_info->file_data = delete_file;
-	ParquetFileScanner scanner(context, delete_file, DeleteFileMultiFileReader::CreateInstance,
-	                           std::move(function_info));
+	ParquetFileScanner scanner(context, delete_file, true);
 
 	auto &return_types = scanner.GetTypes();
 	auto &return_names = scanner.GetNames();
