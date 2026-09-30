@@ -437,13 +437,7 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 			}
 			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
 		} else if (impl.type == "table") {
-			Parser parser;
-			parser.ParseQuery(impl.sql);
-			if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
-				throw InternalException("Expected a single select statement");
-			}
-			auto node = std::move(parser.statements[0]->Cast<SelectStatement>().node);
-			macro_function = make_uniq<TableMacroFunction>(std::move(node));
+			macro_function = make_uniq<TableMacroFunction>(Parser::ParseSelectNode(impl.sql));
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
