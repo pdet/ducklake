@@ -7,6 +7,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/encryption_state.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -260,10 +261,8 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 }
 
 string ToByteaHexLiteral(const string &raw_bytes) {
-	string hex;
-	for (unsigned char c : raw_bytes) {
-		hex += StringUtil::Format("%02x", static_cast<int>(c));
-	}
+	string hex(raw_bytes.size() * 2, '\0');
+	CryptoHash::ToHex(const_data_ptr_cast(raw_bytes.data()), raw_bytes.size(), &hex[0]);
 	return "'\\x" + hex + "'";
 }
 
