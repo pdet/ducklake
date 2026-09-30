@@ -1096,39 +1096,10 @@ DuckLakePartitionInfo DuckLakeTransaction::GetNewPartitionKey(DuckLakeCommitStat
 		DuckLakePartitionFieldInfo partition_field;
 		partition_field.partition_key_index = field.partition_key_index;
 		partition_field.field_id = field.field_id;
-		switch (field.transform.type) {
-		case DuckLakeTransformType::IDENTITY:
-			partition_field.transform = "identity";
-			break;
-		case DuckLakeTransformType::YEAR:
-			partition_field.transform = "year";
-			break;
-		case DuckLakeTransformType::MONTH:
-			partition_field.transform = "month";
-			break;
-		case DuckLakeTransformType::DAY:
-			partition_field.transform = "day";
-			break;
-		case DuckLakeTransformType::HOUR:
-			partition_field.transform = "hour";
-			break;
-		case DuckLakeTransformType::EPOCH_YEAR:
-			partition_field.transform = "epoch_year";
-			break;
-		case DuckLakeTransformType::EPOCH_MONTH:
-			partition_field.transform = "epoch_month";
-			break;
-		case DuckLakeTransformType::EPOCH_DAY:
-			partition_field.transform = "epoch_day";
-			break;
-		case DuckLakeTransformType::EPOCH_HOUR:
-			partition_field.transform = "epoch_hour";
-			break;
-		case DuckLakeTransformType::BUCKET:
+		if (field.transform.type == DuckLakeTransformType::BUCKET) {
 			partition_field.transform = StringUtil::Format("bucket(%d)", field.transform.bucket_count);
-			break;
-		default:
-			throw NotImplementedException("Unimplemented transform type for partition");
+		} else {
+			partition_field.transform = DuckLakePartitionUtils::GetTransformName(field.transform.type);
 		}
 		partition_key.fields.push_back(std::move(partition_field));
 	}

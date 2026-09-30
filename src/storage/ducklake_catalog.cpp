@@ -695,25 +695,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			DuckLakePartitionField partition_field;
 			partition_field.partition_key_index = field.partition_key_index;
 			partition_field.field_id = field.field_id;
-			if (field.transform == "year") {
-				partition_field.transform.type = DuckLakeTransformType::YEAR;
-			} else if (field.transform == "month") {
-				partition_field.transform.type = DuckLakeTransformType::MONTH;
-			} else if (field.transform == "day") {
-				partition_field.transform.type = DuckLakeTransformType::DAY;
-			} else if (field.transform == "hour") {
-				partition_field.transform.type = DuckLakeTransformType::HOUR;
-			} else if (field.transform == "epoch_year") {
-				partition_field.transform.type = DuckLakeTransformType::EPOCH_YEAR;
-			} else if (field.transform == "epoch_month") {
-				partition_field.transform.type = DuckLakeTransformType::EPOCH_MONTH;
-			} else if (field.transform == "epoch_day") {
-				partition_field.transform.type = DuckLakeTransformType::EPOCH_DAY;
-			} else if (field.transform == "epoch_hour") {
-				partition_field.transform.type = DuckLakeTransformType::EPOCH_HOUR;
-			} else if (field.transform == "identity") {
-				partition_field.transform.type = DuckLakeTransformType::IDENTITY;
-			} else if (StringUtil::StartsWith(field.transform, "bucket(")) {
+			if (StringUtil::StartsWith(field.transform, "bucket(")) {
 				partition_field.transform.type = DuckLakeTransformType::BUCKET;
 
 				StringUtil::Trim(field.transform);
@@ -728,7 +710,8 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
 				}
 				partition_field.transform.bucket_count = bucket_count;
-			} else {
+			} else if (!DuckLakePartitionUtils::TryGetTransformType(field.transform, partition_field.transform.type) ||
+			           partition_field.transform.type == DuckLakeTransformType::BUCKET) {
 				throw InvalidInputException("Unsupported partition transform %s", field.transform);
 			}
 			partition->fields.push_back(partition_field);

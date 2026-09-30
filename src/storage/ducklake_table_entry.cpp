@@ -585,23 +585,8 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 		}
 
 		// Other transforms have one argument.
-		if (name == "year") {
-			field.transform.type = DuckLakeTransformType::YEAR;
-		} else if (name == "month") {
-			field.transform.type = DuckLakeTransformType::MONTH;
-		} else if (name == "day") {
-			field.transform.type = DuckLakeTransformType::DAY;
-		} else if (name == "hour") {
-			field.transform.type = DuckLakeTransformType::HOUR;
-		} else if (name == "epoch_year") {
-			field.transform.type = DuckLakeTransformType::EPOCH_YEAR;
-		} else if (name == "epoch_month") {
-			field.transform.type = DuckLakeTransformType::EPOCH_MONTH;
-		} else if (name == "epoch_day") {
-			field.transform.type = DuckLakeTransformType::EPOCH_DAY;
-		} else if (name == "epoch_hour") {
-			field.transform.type = DuckLakeTransformType::EPOCH_HOUR;
-		} else {
+		if (!DuckLakePartitionUtils::TryGetTransformType(name, field.transform.type) ||
+		    field.transform.type == DuckLakeTransformType::IDENTITY) {
 			throw NotImplementedException("Unsupported partition function %s - only year, month, day, hour, "
 			                              "epoch_year, epoch_month, epoch_day, epoch_hour, and bucket are supported",
 			                              name);
