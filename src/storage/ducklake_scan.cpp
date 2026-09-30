@@ -289,13 +289,12 @@ void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionDa
 	serializer.WriteProperty(100, "catalog_name", catalog.GetName());
 	serializer.WriteProperty(101, "schema_name", func_info.table.ParentSchema().name);
 	serializer.WriteProperty(102, "table_name", func_info.table_name);
-	serializer.WriteObject(103, "snapshot", [&](Serializer &obj) { func_info.snapshot.Serialize(obj); });
+	serializer.WriteProperty(103, "snapshot", func_info.snapshot);
 	serializer.WriteProperty(104, "scan_type", static_cast<uint8_t>(func_info.scan_type));
 	bool has_start_snapshot = func_info.start_snapshot != nullptr;
 	serializer.WriteProperty(105, "has_start_snapshot", has_start_snapshot);
 	if (has_start_snapshot) {
-		serializer.WriteObject(106, "start_snapshot",
-		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
+		serializer.WriteProperty(106, "start_snapshot", *func_info.start_snapshot);
 	}
 	serializer.WriteProperty(107, "qualified_name",
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
@@ -306,16 +305,14 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto catalog_name = deserializer.ReadProperty<string>(100, "catalog_name");
 	auto schema_name = deserializer.ReadProperty<string>(101, "schema_name");
 	auto table_name = deserializer.ReadProperty<string>(102, "table_name");
-	DuckLakeSnapshot snapshot;
-	deserializer.ReadObject(103, "snapshot", [&](Deserializer &obj) { snapshot = DuckLakeSnapshot::Deserialize(obj); });
+	auto snapshot = deserializer.ReadProperty<DuckLakeSnapshot>(103, "snapshot");
 	auto scan_type = static_cast<DuckLakeScanType>(deserializer.ReadPropertyWithExplicitDefault<uint8_t>(
 	    104, "scan_type", static_cast<uint8_t>(DuckLakeScanType::SCAN_TABLE)));
 	bool has_start_snapshot = deserializer.ReadPropertyWithExplicitDefault<bool>(105, "has_start_snapshot", false);
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 	if (has_start_snapshot) {
 		start_snapshot = make_uniq<DuckLakeSnapshot>();
-		deserializer.ReadObject(106, "start_snapshot",
-		                        [&](Deserializer &obj) { *start_snapshot = DuckLakeSnapshot::Deserialize(obj); });
+		deserializer.ReadProperty(106, "start_snapshot", *start_snapshot);
 	}
 	auto qualified_name =
 	    deserializer.ReadPropertyWithExplicitDefault<QualifiedName>(107, "qualified_name", QualifiedName());
