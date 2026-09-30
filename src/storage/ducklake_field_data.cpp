@@ -153,25 +153,12 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::SetDefault(const DuckLakeFieldId &f
 	return result;
 }
 
-LogicalType GetStructType(const vector<unique_ptr<DuckLakeFieldId>> &new_children) {
+LogicalType GetNewNestedType(const LogicalType &type, const vector<unique_ptr<DuckLakeFieldId>> &new_children) {
 	child_list_t<LogicalType> child_types;
 	for (auto &child : new_children) {
 		child_types.emplace_back(child->Name(), child->Type());
 	}
-	return LogicalType::STRUCT(std::move(child_types));
-}
-
-LogicalType GetNewNestedType(const LogicalType &type, const vector<unique_ptr<DuckLakeFieldId>> &new_children) {
-	switch (type.id()) {
-	case LogicalTypeId::LIST:
-		return LogicalType::LIST(new_children[0]->Type());
-	case LogicalTypeId::STRUCT:
-		return GetStructType(new_children);
-	case LogicalTypeId::MAP:
-		return LogicalType::MAP(new_children[0]->Type(), new_children[1]->Type());
-	default:
-		throw InternalException("Unsupported type for AddField");
-	}
+	return LogicalType::ConstructNestedType(type, std::move(child_types));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::AddField(const vector<Identifier> &column_path,
