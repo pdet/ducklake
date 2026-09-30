@@ -639,27 +639,14 @@ void DuckLakeInsert::InsertCasts(const vector<LogicalType> &types, ClientContext
 }
 
 unique_ptr<LogicalOperator> DuckLakeInsert::InsertCasts(Binder &binder, unique_ptr<LogicalOperator> &plan) {
-	vector<unique_ptr<Expression>> cast_expressions;
-
-	auto &types = plan->types;
-	auto bindings = plan->GetColumnBindings();
-
-	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
-		auto &type = types[col_idx];
-		auto &binding = bindings[col_idx];
-		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
+	auto result = LogicalProjection::CreateIdentity(binder.GenerateTableIndex(), std::move(plan));
+	for (auto &expr : result->expressions) {
+		auto &type = expr->GetReturnType();
 		if (DuckLakeTypes::RequiresCast(type)) {
 			auto new_type = DuckLakeTypes::GetCastedType(type);
-			cast_expressions.push_back(
-			    BoundCastExpression::AddCastToType(binder.context, std::move(ref_expr), new_type));
-		} else {
-			cast_expressions.push_back(std::move(ref_expr));
+			expr = BoundCastExpression::AddCastToType(binder.context, std::move(expr), new_type);
 		}
 	}
-
-	auto result = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
-	result->children.push_back(std::move(plan));
-
 	return std::move(result);
 }
 

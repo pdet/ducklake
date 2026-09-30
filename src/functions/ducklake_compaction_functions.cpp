@@ -421,24 +421,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	// Create the LogicalOrder operator
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
 	order->children.push_back(std::move(plan));
-	order->ResolveOperatorTypes();
-
-	// Create a projection to pass through all columns
-	vector<unique_ptr<Expression>> cast_expressions;
-	auto &types = order->types;
-	auto order_bindings = order->GetColumnBindings();
-
-	for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
-		auto &type = types[col_idx];
-		auto &binding = order_bindings[col_idx];
-		auto ref_expr = make_uniq<BoundColumnRefExpression>(type, binding);
-		cast_expressions.push_back(std::move(ref_expr));
-	}
-
-	auto projected = make_uniq<LogicalProjection>(binder.GenerateTableIndex(), std::move(cast_expressions));
-	projected->children.push_back(std::move(order));
-
-	return std::move(projected);
+	return LogicalProjection::CreateIdentity(binder.GenerateTableIndex(), std::move(order));
 }
 
 optional_ptr<DuckLakeTableEntry>

@@ -677,19 +677,9 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 
 	auto filter = make_uniq<LogicalFilter>(std::move(filter_expr));
 	filter->children.push_back(std::move(aggregate));
-	// Resolved columns are passed through from child: [0] schema_name, [1] table_name, [2] SUM(rows_flushed)
-	filter->ResolveOperatorTypes();
 
 	// Need a projection to set the correct table index for column binding resolution
-	vector<unique_ptr<Expression>> proj_exprs;
-	auto filter_bindings = filter->GetColumnBindings();
-	for (idx_t i = 0; i < filter->types.size(); i++) {
-		proj_exprs.push_back(make_uniq<BoundColumnRefExpression>(filter->types[i], filter_bindings[i]));
-	}
-	auto projection = make_uniq<LogicalProjection>(bind_index, std::move(proj_exprs));
-	projection->children.push_back(std::move(filter));
-
-	return std::move(projection);
+	return LogicalProjection::CreateIdentity(bind_index, std::move(filter));
 }
 
 DuckLakeFlushInlinedDataFunction::DuckLakeFlushInlinedDataFunction()
