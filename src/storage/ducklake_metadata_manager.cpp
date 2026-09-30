@@ -1346,11 +1346,6 @@ static string StatsColumn(const string &stats_alias, const string &stat) {
 	return stats_alias + "." + stat;
 }
 
-static bool IsSimpleFilterSubject(const Expression &expr) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_REF ||
-	       expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
-}
-
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
 	if (!val.type().IsFloating()) {
 		return true;
@@ -1493,16 +1488,9 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
                                                              const string &stats_alias) {
 	if (BoundComparisonExpression::IsComparison(expr)) {
 		auto &comparison = expr.Cast<BoundFunctionExpression>();
-		auto &left = BoundComparisonExpression::Left(comparison);
-		auto &right = BoundComparisonExpression::Right(comparison);
-		const BoundConstantExpression *constant_expr = nullptr;
-		auto comparison_type = comparison.GetExpressionType();
-		if (IsSimpleFilterSubject(left) && right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			constant_expr = &right.Cast<BoundConstantExpression>();
-		} else if (IsSimpleFilterSubject(right) && left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			constant_expr = &left.Cast<BoundConstantExpression>();
-			comparison_type = FlipComparisonExpression(comparison_type);
-		} else {
+		ExpressionType comparison_type;
+		auto constant_expr = ExpressionFilter::TryGetColumnConstantComparison(comparison, comparison_type);
+		if (!constant_expr) {
 			return string();
 		}
 		const auto &target_type = type ? *type : constant_expr->GetValue().type();
@@ -1523,19 +1511,22 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		switch (expr.GetExpressionType()) {
 		case ExpressionType::OPERATOR_IS_NULL:
-			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
+			if (op_expr.GetChildren().size() != 1 ||
+			    !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			referenced_stats.insert("null_count");
 			return StatsColumn(stats_alias, "null_count") + " > 0";
 		case ExpressionType::OPERATOR_IS_NOT_NULL:
-			if (op_expr.GetChildren().size() != 1 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
+			if (op_expr.GetChildren().size() != 1 ||
+			    !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			referenced_stats.insert("value_count");
 			return StatsColumn(stats_alias, "value_count") + " > 0";
 		case ExpressionType::COMPARE_IN: {
-			if (op_expr.GetChildren().size() < 2 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
+			if (op_expr.GetChildren().size() < 2 ||
+			    !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 				return string();
 			}
 			string result;
@@ -1825,18 +1816,10 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
                                         idx_t bucket_count, vector<string> &out) {
 	// col = constant
 	if (BoundComparisonExpression::IsComparison(expr)) {
-		auto &comparison = expr.Cast<BoundFunctionExpression>();
-		if (comparison.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
-			return false;
-		}
-		auto &left = BoundComparisonExpression::Left(comparison);
-		auto &right = BoundComparisonExpression::Right(comparison);
-		const BoundConstantExpression *constant_expr = nullptr;
-		if (IsSimpleFilterSubject(left) && right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			constant_expr = &right.Cast<BoundConstantExpression>();
-		} else if (IsSimpleFilterSubject(right) && left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			constant_expr = &left.Cast<BoundConstantExpression>();
-		} else {
+		ExpressionType comparison_type;
+		auto constant_expr =
+		    ExpressionFilter::TryGetColumnConstantComparison(expr.Cast<BoundFunctionExpression>(), comparison_type);
+		if (!constant_expr || comparison_type != ExpressionType::COMPARE_EQUAL) {
 			return false;
 		}
 		string partition_value;
@@ -1853,7 +1836,7 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 			return false;
 		}
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
-		if (op_expr.GetChildren().size() < 2 || !IsSimpleFilterSubject(*op_expr.GetChildren()[0])) {
+		if (op_expr.GetChildren().size() < 2 || !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 			return false;
 		}
 		for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {

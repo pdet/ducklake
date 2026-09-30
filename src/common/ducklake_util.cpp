@@ -350,8 +350,7 @@ static void FindFilterSubject(const Expression &expr, optional_ptr<const Express
 	if (conflict) {
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_REF || DuckLakeUtil::IsStructExtract(expr)) {
+	if (ExpressionFilter::IsSimpleFilterColumnRef(expr) || DuckLakeUtil::IsStructExtract(expr)) {
 		if (subject && !subject->Equals(expr)) {
 			conflict = true;
 		} else {

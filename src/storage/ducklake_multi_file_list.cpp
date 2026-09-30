@@ -54,8 +54,7 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 	}
 	vector<StructExtractPathEntry> path;
 	auto &root = PeelStructExtractPath(subject, path);
-	if (root.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF &&
-	    root.GetExpressionClass() != ExpressionClass::BOUND_REF) {
+	if (!ExpressionFilter::IsSimpleFilterColumnRef(root)) {
 		return nullptr;
 	}
 	optional_ptr<const DuckLakeFieldId> field_id = read_info.table.GetFieldId(PhysicalIndex(column_id));
