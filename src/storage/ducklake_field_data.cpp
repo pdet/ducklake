@@ -1,6 +1,7 @@
 #include "storage/ducklake_field_data.hpp"
 #include "common/ducklake_util.hpp"
 
+#include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/exception/catalog_exception.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -78,37 +79,18 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const string &name,
 	column_data.id = FieldIndex(column_id++);
 	vector<unique_ptr<DuckLakeFieldId>> field_children;
 	switch (type.id()) {
-	case LogicalTypeId::STRUCT: {
-		// FIXME: check for struct pack
-		if (default_expr) {
-			throw NotImplementedException("Default value for STRUCT type not supported");
-		}
-		for (auto &entry : StructType::GetChildTypes(type)) {
-			field_children.push_back(
-			    FieldIdFromType(entry.first.GetIdentifierName(), entry.second, nullptr, column_id, add_column));
-		}
-		break;
-	}
+	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
-		if (default_expr) {
-			throw NotImplementedException("Default value for LIST type not supported");
-		}
-		field_children.push_back(
-		    FieldIdFromType("element", ListType::GetChildType(type), nullptr, column_id, add_column));
-		break;
 	case LogicalTypeId::ARRAY:
-		if (default_expr) {
-			throw NotImplementedException("Default value for LIST type not supported");
-		}
-		field_children.push_back(
-		    FieldIdFromType("element", ArrayType::GetChildType(type), nullptr, column_id, add_column));
-		break;
 	case LogicalTypeId::MAP:
 		if (default_expr) {
-			throw NotImplementedException("Default value for MAP type not supported");
+			auto type_id = type.id() == LogicalTypeId::ARRAY ? LogicalTypeId::LIST : type.id();
+			throw NotImplementedException("Default value for %s type not supported", EnumUtil::ToString(type_id));
 		}
-		field_children.push_back(FieldIdFromType("key", MapType::KeyType(type), nullptr, column_id, add_column));
-		field_children.push_back(FieldIdFromType("value", MapType::ValueType(type), nullptr, column_id, add_column));
+		for (auto &child : LogicalType::GetNamedChildTypes(type)) {
+			field_children.push_back(
+			    FieldIdFromType(child.first.GetIdentifierName(), child.second, nullptr, column_id, add_column));
+		}
 		break;
 	default:
 		break;
