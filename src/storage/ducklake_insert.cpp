@@ -668,62 +668,24 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
                                                     optional_ptr<PhysicalOperator> plan) {
 	auto copy_options = GetCopyOptions(context, copy_input);
 	auto &copy = *copy_options.copy;
-	if (!copy_options.projection_list.empty() && plan) {
+	if (!copy_options.projection_list.empty()) {
 		// generate a projection
 		GenerateProjection(context, planner, copy_options.projection_list, plan);
 	}
 
 	if (DuckLakeTypes::RequiresCast(copy.expected_types)) {
-		// Insert a cast projection
-		if (plan) {
-			InsertCasts(copy.expected_types, context, planner, plan);
-			// Update the expected types to match the cast types
-			copy.expected_types = plan->types;
-		} else {
-			// Still update types. If there is no child-plan node, we expect that whoever inserts chunks (e.g.
-			// DuckLakeUpdate, DuckLakeMergeInsert) directly into the physical copy operator will pre-cast the data.
-			for (auto &type : copy.expected_types) {
-				if (DuckLakeTypes::RequiresCast(type)) {
-					type = DuckLakeTypes::GetCastedType(type);
-				}
-			}
-		}
+		InsertCasts(copy.expected_types, context, planner, plan);
+		copy.expected_types = plan->types;
 	}
 
-	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
-	auto &physical_copy =
-	    planner.Make<PhysicalCopyToFile>(copy_return_types, std::move(copy.function), std::move(copy.bind_data), 1)
-	        .Cast<PhysicalCopyToFile>();
-
-	physical_copy.file_path = std::move(copy.file_path);
-	physical_copy.use_tmp_file = copy.use_tmp_file;
-	physical_copy.filename_pattern = std::move(copy.filename_pattern);
-	physical_copy.file_extension = std::move(copy.file_extension);
-	physical_copy.overwrite_mode = copy.overwrite_mode;
-	physical_copy.per_thread_output = copy.per_thread_output;
-	physical_copy.file_size_bytes = copy.file_size_bytes;
-	physical_copy.batch_size = copy.batch_size;
 	string row_group_size_bytes;
 	if (copy_input.catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes,
 	                                          copy_input.schema_id, copy_input.table_id, &copy_input.table_options)) {
 		copy.batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
 	}
-	physical_copy.batch_size_bytes = copy.batch_size_bytes;
-	physical_copy.return_type = copy.return_type;
-
-	physical_copy.partition_output = copy.partition_output;
-	physical_copy.write_partition_columns = copy.write_partition_columns;
-	physical_copy.write_empty_file = copy.write_empty_file;
-	physical_copy.partition_columns = std::move(copy.partition_columns);
-	physical_copy.names = copy.names;
-	physical_copy.expected_types = std::move(copy.expected_types);
-	physical_copy.parallel = true;
-	physical_copy.hive_file_pattern = copy.hive_file_pattern;
-	if (plan) {
-		physical_copy.children.push_back(*plan);
-	}
-
-	return physical_copy;
+	copy.SetEstimatedCardinality(1);
+	copy.ResolveOperatorTypes();
+	return planner.CreatePlan(copy, *plan);
 }
 
 PhysicalOperator &DuckLakeInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
