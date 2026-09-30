@@ -3,7 +3,6 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_delete_filter.hpp"
-#include "common/ducklake_util.hpp"
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -81,7 +80,7 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
                                            const ColumnFilterInfo &column_filter) {
-	auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*column_filter.table_filter);
+	auto filter_data = ExpressionFilter::GetOptionalDynamicFilterData(*column_filter.table_filter);
 	if (!filter_data) {
 		return false;
 	}

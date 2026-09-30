@@ -18,7 +18,6 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
-#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -279,31 +278,6 @@ string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) 
 	} else {
 		return a + sep + b;
 	}
-}
-
-shared_ptr<DynamicFilterData> DuckLakeUtil::GetOptionalDynamicFilterData(const TableFilter &filter) {
-	auto dynamic_filter_data = ExpressionFilter::GetRootOptionalDynamicFilterData(filter);
-	if (dynamic_filter_data) {
-		return dynamic_filter_data;
-	}
-
-	auto &expression_filter =
-	    ExpressionFilter::GetExpressionFilter(filter, "DuckLakeUtil::GetOptionalDynamicFilterData");
-	if (expression_filter.expr->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		return nullptr;
-	}
-	auto &conjunction = expression_filter.expr->Cast<BoundConjunctionExpression>();
-	if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return nullptr;
-	}
-	for (auto &child : conjunction.GetChildren()) {
-		ExpressionFilter child_filter(child->Copy());
-		dynamic_filter_data = GetOptionalDynamicFilterData(child_filter);
-		if (dynamic_filter_data) {
-			return dynamic_filter_data;
-		}
-	}
-	return nullptr;
 }
 
 unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right) {

@@ -29,8 +29,6 @@ class DuckLakeTransaction;
 class FileSystem;
 class Expression;
 class LogicalType;
-class TableFilter;
-struct DynamicFilterData;
 
 struct ParsedCatalogEntry {
 	vector<string> schema_path;
@@ -51,8 +49,6 @@ public:
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
-
-	static shared_ptr<DynamicFilterData> GetOptionalDynamicFilterData(const TableFilter &filter);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
