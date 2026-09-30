@@ -184,18 +184,6 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 	                                           local_change.is_column_new);
 }
 
-static void ReplaceColumnRefName(ParsedExpression &expr, const string &old_name, const string &new_name) {
-	if (expr.GetExpressionType() == ExpressionType::COLUMN_REF) {
-		auto &colref = expr.Cast<ColumnRefExpression>();
-		if (!colref.IsQualified() && colref.GetColumnName() == old_name) {
-			colref.ColumnNamesMutable().back() = Identifier(new_name);
-		}
-		return;
-	}
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](ParsedExpression &child) { ReplaceColumnRefName(child, old_name, new_name); });
-}
-
 // ALTER TABLE RENAME COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
                                        const string &new_name)
@@ -210,7 +198,12 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		for (auto &sort_field : sort_data->fields) {
 			auto parsed = Parser::ParseExpressionList(sort_field.expression);
 			if (!parsed.empty()) {
-				ReplaceColumnRefName(*parsed[0], old_col_name, new_name);
+				ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(
+				    *parsed[0], [&](ColumnRefExpression &colref) {
+					    if (!colref.IsQualified() && colref.GetColumnName() == old_col_name) {
+						    colref.ColumnNamesMutable().back() = Identifier(new_name);
+					    }
+				    });
 				sort_field.expression = parsed[0]->ToString();
 			}
 		}
