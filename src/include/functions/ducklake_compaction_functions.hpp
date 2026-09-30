@@ -66,12 +66,7 @@ public:
 		return "ducklake";
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
-		vector<ColumnBinding> result;
-		result.emplace_back(table_index, ProjectionIndex(0));
-		result.emplace_back(table_index, ProjectionIndex(1));
-		result.emplace_back(table_index, ProjectionIndex(2));
-		result.emplace_back(table_index, ProjectionIndex(3));
-		return result;
+		return GenerateColumnBindings(table_index, 4);
 	}
 
 	void ResolveTypes() override {

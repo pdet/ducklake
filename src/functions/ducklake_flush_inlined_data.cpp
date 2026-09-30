@@ -237,11 +237,7 @@ public:
 		return "ducklake";
 	}
 	vector<ColumnBinding> GetColumnBindings() override {
-		vector<ColumnBinding> result;
-		result.emplace_back(table_index, ProjectionIndex(0));
-		result.emplace_back(table_index, ProjectionIndex(1));
-		result.emplace_back(table_index, ProjectionIndex(2));
-		return result;
+		return GenerateColumnBindings(table_index, 3);
 	}
 
 	void ResolveTypes() override {
@@ -667,14 +663,11 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	return_names.push_back("rows_flushed");
 	if (flushes.empty()) {
 		// nothing to write - generate empty result
-		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, ProjectionIndex(0));
-		bindings.emplace_back(bind_index, ProjectionIndex(1));
-		bindings.emplace_back(bind_index, ProjectionIndex(2));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
+		auto bindings = LogicalOperator::GenerateColumnBindings(bind_index, return_types.size());
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 

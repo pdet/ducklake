@@ -737,16 +737,12 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
                                                               vector<unique_ptr<LogicalOperator>> &compactions) {
 	if (compactions.empty()) {
 		// nothing to compact - generate an empty result
-		vector<ColumnBinding> bindings;
 		vector<LogicalType> return_types;
-		bindings.emplace_back(bind_index, ProjectionIndex(0));
-		bindings.emplace_back(bind_index, ProjectionIndex(1));
-		bindings.emplace_back(bind_index, ProjectionIndex(2));
-		bindings.emplace_back(bind_index, ProjectionIndex(3));
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::VARCHAR);
 		return_types.emplace_back(LogicalType::BIGINT);
 		return_types.emplace_back(LogicalType::BIGINT);
+		auto bindings = LogicalOperator::GenerateColumnBindings(bind_index, return_types.size());
 		return make_uniq<LogicalEmptyResult>(std::move(return_types), std::move(bindings));
 	}
 	if (compactions.size() == 1) {
