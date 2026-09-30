@@ -432,14 +432,6 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	                                        std::move(pushdown_info));
 }
 
-vector<OpenFileInfo> DuckLakeMultiFileList::GetAllFiles() const {
-	vector<OpenFileInfo> file_list;
-	for (idx_t i = 0; i < GetTotalFileCount(); i++) {
-		file_list.push_back(GetFile(i));
-	}
-	return file_list;
-}
-
 FileExpandResult DuckLakeMultiFileList::GetExpandResult() const {
 	return FileExpandResult::MULTIPLE_FILES;
 }
