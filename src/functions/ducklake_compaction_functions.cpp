@@ -1,4 +1,5 @@
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
+#include "duckdb/common/bind_helpers.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -48,29 +49,6 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
 	}
 	return pre_bound_orders;
-}
-
-//! Binds ORDER BY expressions directly using ExpressionBinder.
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
-                                                           const Identifier &table_name, TableIndex table_index,
-                                                           vector<OrderByNode> &pre_bound_orders) {
-	auto column_names = columns.GetColumnNames();
-	auto column_types = columns.GetColumnTypes();
-
-	// Create a child binder with the table columns in scope
-	auto child_binder = Binder::CreateBinder(binder.context, &binder);
-	child_binder->bind_context.AddGenericBinding(table_index, table_name, StringsToIdentifiers(column_names),
-	                                             column_types);
-
-	// Bind each ORDER BY expression directly
-	vector<BoundOrderByNode> orders;
-	for (auto &pre_bound_order : pre_bound_orders) {
-		ExpressionBinder expr_binder(*child_binder, binder.context);
-		auto bound_expr = expr_binder.Bind(pre_bound_order.expression);
-		orders.emplace_back(pre_bound_order.type, pre_bound_order.null_order, std::move(bound_expr));
-	}
-
-	return orders;
 }
 
 //===--------------------------------------------------------------------===//
@@ -416,8 +394,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 	auto table_index = bindings[0].table_index;
 
 	// Bind the ORDER BY expressions
-	auto orders =
-	    DuckLakeCompactor::BindSortOrders(binder, table.GetColumns(), table.name, table_index, pre_bound_orders);
+	auto &columns = table.GetColumns();
+	auto orders = BindOrderByNodes(binder, table_index, table.name, StringsToIdentifiers(columns.GetColumnNames()),
+	                               columns.GetColumnTypes(), pre_bound_orders);
 
 	// Append (row_id, snapshot_id) as deterministic tiebreakers when requested so the file order
 	// exactly matches the deletes-position query's ORDER BY, including ties in the user sort key.

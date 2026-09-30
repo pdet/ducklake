@@ -21,6 +21,7 @@
 #include "functions/ducklake_compaction_functions.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/common/bind_helpers.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
 #include "duckdb/execution/operator/join/physical_join.hpp"
 #include "duckdb/execution/operator/order/physical_order.hpp"
@@ -735,7 +736,8 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 
 	auto binder = Binder::CreateBinder(context);
 	TableIndex table_index(0);
-	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index, pre_bound_orders);
+	auto orders = BindOrderByNodes(*binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
+	                               columns.GetColumnTypes(), pre_bound_orders);
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
 	DuckLakeInsertColumnBindingResolver resolver(table_index, plan.GetTypes());
