@@ -1218,10 +1218,6 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, D
 	return TryGetConfigOption(option, result, schema_id, table_id, &table.GetTableOptions());
 }
 
-idx_t DuckLakeCatalog::DataInliningRowLimit(SchemaIndex schema_index, TableIndex table_index) const {
-	return GetConfigOption<idx_t>("data_inlining_row_limit", schema_index, table_index, 10);
-}
-
 idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex schema_index, TableIndex table_index,
                                             optional_ptr<const map<string, string>> table_options) const {
 	string value_str;
