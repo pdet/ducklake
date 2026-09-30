@@ -1,4 +1,5 @@
 #include "metadata_manager/quack_metadata_manager.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -88,8 +89,7 @@ void QuackMetadataManager::ProbeServerCapabilities() {
 	if (!result || result->HasError()) {
 		return;
 	}
-	auto chunk = result->Fetch();
-	if (chunk && chunk->size() > 0) {
+	if (result->RowCount() > 0) {
 		transaction.GetCatalog().SetRetrialsServerSide(true);
 	}
 }
@@ -128,16 +128,13 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 		}
 		throw IOException("Failed to invoke server-side ducklake_commit: empty result");
 	}
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
+	auto row = result->begin();
+	if (row == result->end()) {
 		throw IOException("Server-side ducklake_commit returned no rows");
 	}
-	auto committed_snapshot_id = chunk->GetValue(0, 0).GetValue<int64_t>();
-	auto committed_schema_version = chunk->GetValue(1, 0).GetValue<int64_t>();
-	auto had_flushes = !chunk->GetValue(2, 0).IsNull() && chunk->GetValue(2, 0).GetValue<bool>();
-	flush_transaction.GetCatalog().SetCommittedSnapshotId(static_cast<idx_t>(committed_snapshot_id));
-	flush_transaction.ApplyServerSideCommit(static_cast<idx_t>(committed_schema_version));
-	if (had_flushes) {
+	flush_transaction.GetCatalog().SetCommittedSnapshotId(AsIdx(*row, 0));
+	flush_transaction.ApplyServerSideCommit(AsIdx(*row, 1));
+	if (OptBoolFalse(*row, 2)) {
 		// With quack we need to clear up superseded inlines tables on the client side to avoid dangling caching
 		// references
 		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
@@ -153,11 +150,7 @@ bool QuackMetadataManager::MetadataExists() {
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to probe DuckLake metadata: ");
 	}
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
-		return false;
-	}
-	return chunk->GetValue(0, 0).GetValue<int64_t>() > 0;
+	return result->RowCount() > 0 && result->GetValue(0, 0).GetValue<int64_t>() > 0;
 }
 
 } // namespace duckdb

@@ -178,31 +178,32 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 void DuckLakeServerSideCommit::ReadCommitHeader() {
 	auto result = ScanStagedTable(DuckLakeStagedTableType::COMMIT_HEADER);
-	auto chunk = result->Fetch();
-	if (!chunk || chunk->size() == 0) {
+	auto header = result->begin();
+	if (header == result->end()) {
 		throw IOException("Server-side ducklake_commit: no staged commit header");
 	}
+	auto &row = *header;
 
 	string data_path;
 	string separator;
-	if (!chunk->GetValue(4, 0).IsNull()) {
-		data_path = chunk->GetValue(4, 0).ToString();
+	if (!row.IsNull(4)) {
+		data_path = row.GetValue<string>(4);
 	}
-	if (!chunk->GetValue(5, 0).IsNull()) {
-		separator = chunk->GetValue(5, 0).ToString();
+	if (!row.IsNull(5)) {
+		separator = row.GetValue<string>(5);
 	}
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
-	state->commit_info.author = chunk->GetValue(0, 0);
-	state->commit_info.commit_message = chunk->GetValue(1, 0);
-	state->commit_info.commit_extra_info = chunk->GetValue(2, 0);
+	state->commit_info.author = row.GetBaseValue(0);
+	state->commit_info.commit_message = row.GetBaseValue(1);
+	state->commit_info.commit_extra_info = row.GetBaseValue(2);
 
-	if (chunk->GetValue(3, 0).IsNull()) {
+	if (row.IsNull(3)) {
 		transaction_snapshot = ReadLatestSnapshot();
 	} else {
-		transaction_snapshot.snapshot_id = static_cast<idx_t>(chunk->GetValue(3, 0).GetValue<int64_t>());
-		transaction_snapshot.next_catalog_id = chunk->GetValue(6, 0).GetValue<uint64_t>();
-		transaction_snapshot.next_file_id = chunk->GetValue(7, 0).GetValue<uint64_t>();
+		transaction_snapshot.snapshot_id = AsIdx(row, 3);
+		transaction_snapshot.next_catalog_id = row.GetValue<uint64_t>(6);
+		transaction_snapshot.next_file_id = row.GetValue<uint64_t>(7);
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
 	if (schema_version < 0) {
