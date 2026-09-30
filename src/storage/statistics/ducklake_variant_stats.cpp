@@ -292,22 +292,8 @@ void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats
 		}
 		// quoted field - this is a field name
 		string current_field_name;
-		idx_t next_pos;
-		for (next_pos = pos + 1; next_pos < field_name.size(); next_pos++) {
-			auto c = field_name[next_pos];
-			if (c == '"') {
-				// found a quote
-				// check if this is an escaped quote
-				if (next_pos + 1 < field_name.size() && field_name[next_pos + 1] == '"') {
-					// escaped quote - add a single quote and skip
-					current_field_name += c;
-					next_pos++;
-				} else {
-					// not an escaped quote - we are done
-					break;
-				}
-			}
-			current_field_name += c;
+		if (!StringUtil::TryParseQuotedString(field_name, pos, current_field_name)) {
+			break;
 		}
 		// we have the current field name
 		// check if the field name already exists
@@ -327,17 +313,17 @@ void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats
 		}
 		stats = child_stats[struct_idx];
 		// have we reached the end?
-		if (next_pos + 1 >= field_name.size()) {
+		if (pos >= field_name.size()) {
 			// we have! add the full field name and return
 			stats.get().full_field_name = field_name;
 			return;
 		} else {
 			// we have not - this is nested - continue with the next field name
-			if (field_name[next_pos + 1] != '.') {
+			if (field_name[pos] != '.') {
 				// invalid format - expected a dot here
 				break;
 			}
-			pos = next_pos + 2;
+			pos++;
 		}
 	}
 	throw InvalidInputException("Incorrectly formatted field name %s", field_name);
