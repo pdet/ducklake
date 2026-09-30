@@ -31,7 +31,7 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_delete_filter.hpp"
-#include "duckdb/common/types/blob.hpp"
+#include "common/ducklake_row_helpers.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 
@@ -448,53 +448,38 @@ LEFT JOIN (
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;
 
-	while (true) {
-		auto chunk = deletions_result->Fetch();
-		if (!chunk || chunk->size() == 0) {
-			break;
-		}
-		for (idx_t row_idx = 0; row_idx < chunk->size(); row_idx++) {
-			auto file_id = chunk->GetValue(0, row_idx).GetValue<idx_t>();
-			auto row_id = chunk->GetValue(3, row_idx).GetValue<int64_t>();
-			auto begin_snapshot = chunk->GetValue(4, row_idx).GetValue<idx_t>();
+	for (auto &row : *deletions_result) {
+		auto file_id = row.GetValue<idx_t>(0);
+		auto row_id = row.GetValue<int64_t>(3);
+		auto begin_snapshot = row.GetValue<idx_t>(4);
 
-			// Get or create the file entry
-			auto &file_info = files_to_flush[file_id];
+		auto &file_info = files_to_flush[file_id];
 
-			// Initialize file info on first encounter
-			if (file_info.file_path.empty()) {
-				auto path = chunk->GetValue(1, row_idx).GetValue<string>();
-				auto path_is_relative = chunk->GetValue(2, row_idx).GetValue<bool>();
-				file_info.file_path = path_is_relative ? table.DataPath() + path : path;
-				file_info.max_snapshot = begin_snapshot;
-
-				// Check for existing delete file
-				if (!chunk->GetValue(5, row_idx).IsNull()) {
-					file_info.has_existing_delete_file = true;
-					file_info.existing_delete_file_id = DataFileIndex(chunk->GetValue(5, row_idx).GetValue<idx_t>());
-					file_info.existing_delete_path = chunk->GetValue(6, row_idx).GetValue<string>();
-					file_info.existing_delete_path_is_relative = chunk->GetValue(7, row_idx).GetValue<bool>();
-					file_info.existing_delete_begin_snapshot = chunk->GetValue(8, row_idx).GetValue<idx_t>();
-					if (!chunk->GetValue(9, row_idx).IsNull()) {
-						file_info.existing_delete_encryption_key =
-						    Blob::FromBase64(chunk->GetValue(9, row_idx).GetValue<string>());
-					}
-					if (!chunk->GetValue(10, row_idx).IsNull()) {
-						file_info.existing_delete_format =
-						    DeleteFileFormatFromString(chunk->GetValue(10, row_idx).GetValue<string>());
-					}
+		// Initialize file info on first encounter
+		if (file_info.file_path.empty()) {
+			auto path = row.GetValue<string>(1);
+			auto path_is_relative = row.GetValue<bool>(2);
+			file_info.file_path = path_is_relative ? table.DataPath() + path : path;
+			file_info.max_snapshot = begin_snapshot;
+			if (!row.IsNull(5)) {
+				file_info.has_existing_delete_file = true;
+				file_info.existing_delete_file_id = DataFileIndex(row.GetValue<idx_t>(5));
+				file_info.existing_delete_path = row.GetValue<string>(6);
+				file_info.existing_delete_path_is_relative = row.GetValue<bool>(7);
+				file_info.existing_delete_begin_snapshot = row.GetValue<idx_t>(8);
+				ReadEncryptionKey(row, 9, file_info.existing_delete_encryption_key);
+				if (!row.IsNull(10)) {
+					file_info.existing_delete_format = DeleteFileFormatFromString(row.GetValue<string>(10));
 				}
-			} else {
-				// Update max_snapshot for subsequent rows
-				file_info.max_snapshot = MaxValue(file_info.max_snapshot, begin_snapshot);
 			}
-
-			// Add the deletion
-			PositionWithSnapshot pos_with_snap;
-			pos_with_snap.position = row_id;
-			pos_with_snap.snapshot_id = static_cast<int64_t>(begin_snapshot);
-			file_info.deletions.insert(pos_with_snap);
+		} else {
+			file_info.max_snapshot = MaxValue(file_info.max_snapshot, begin_snapshot);
 		}
+
+		PositionWithSnapshot pos_with_snap;
+		pos_with_snap.position = row_id;
+		pos_with_snap.snapshot_id = static_cast<int64_t>(begin_snapshot);
+		file_info.deletions.insert(pos_with_snap);
 	}
 
 	if (files_to_flush.empty()) {
