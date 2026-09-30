@@ -1385,7 +1385,7 @@ static bool IsSimpleFilterSubject(const Expression &expr) {
 }
 
 bool DuckLakeMetadataManager::ValueIsFinite(const Value &val) {
-	if (val.type().id() != LogicalTypeId::FLOAT && val.type().id() != LogicalTypeId::DOUBLE) {
+	if (!val.type().IsFloating()) {
 		return true;
 	}
 	double constant_val = val.GetValue<double>();

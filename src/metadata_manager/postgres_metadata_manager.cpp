@@ -84,10 +84,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (value.IsNull() || value.ToString().find('\0') != string::npos || type.id() == LogicalTypeId::BLOB) {
 		return string();
 	}
-	if (RequiresValueComparison(type) &&
-	    (!CanCastPostgresStatsForValueComparison(type) ||
-	     ((value.type().id() == LogicalTypeId::FLOAT || value.type().id() == LogicalTypeId::DOUBLE) &&
-	      !Value::IsFinite(value.GetValue<double>())))) {
+	if (RequiresValueComparison(type) && (!CanCastPostgresStatsForValueComparison(type) || !ValueIsFinite(value))) {
 		return string();
 	}
 	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {

@@ -797,8 +797,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 		string select_list = "COUNT(*)";
 		for (auto &col : columns) {
 			auto col_ident = SQLQuotedIdentifier::ToString(col.column_name);
-			bool is_float =
-			    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
+			bool is_float = col.column_type.IsFloating();
 			string nan_expr =
 			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
 			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
@@ -817,8 +816,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 			}
 			idx_t col_offset = 1;
 			for (auto &col : columns) {
-				bool is_float =
-				    col.column_type.id() == LogicalTypeId::FLOAT || col.column_type.id() == LogicalTypeId::DOUBLE;
+				bool is_float = col.column_type.IsFloating();
 				bool contains_nan = !row.IsNull(col_offset + 3) && row.template GetValue<bool>(col_offset + 3);
 				DuckLakeColumnStats col_stats(col.column_type);
 				auto non_null = static_cast<idx_t>(row.template GetValue<int64_t>(col_offset + 2));
