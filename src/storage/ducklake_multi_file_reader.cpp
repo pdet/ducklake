@@ -412,16 +412,12 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 }
 
 shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(const OpenFileInfo &file) {
-	if (!file.extended_info) {
-		return nullptr;
-	}
-	auto entry = file.extended_info->options.find("inlined_data");
-	if (entry == file.extended_info->options.end()) {
+	if (!file.extended_info || !file.extended_info->options.count("inlined_data")) {
 		return nullptr;
 	}
 	// this is not a file but inlined data
-	entry = file.extended_info->options.find("table_name");
-	if (entry == file.extended_info->options.end()) {
+	string inlined_table_name;
+	if (!file.extended_info->TryGetOption("table_name", inlined_table_name)) {
 		// scanning transaction local inlined data
 		if (!transaction_local_data) {
 			throw InternalException("No transaction local data");
@@ -429,19 +425,15 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		auto columns = DuckLakeMultiFileReader::ColumnsFromFieldData(read_info.table.GetFieldData(), true);
 		return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, transaction_local_data, std::move(columns));
 	}
-	optional_idx schema_version;
-	auto version_entry = file.extended_info->options.find("schema_version");
-	if (version_entry != file.extended_info->options.end()) {
-		schema_version = version_entry->second.GetValue<idx_t>();
-	}
+	idx_t schema_version;
 	reference<DuckLakeTableEntry> schema_table = read_info.table;
-	if (schema_version.IsValid()) {
+	if (file.extended_info->TryGetOption("schema_version", schema_version)) {
 		// read the table at the specified version
 		auto transaction = read_info.GetTransaction();
 		auto &catalog = transaction->GetCatalog();
-		DuckLakeSnapshot snapshot(catalog.GetBeginSnapshotForSchemaVersion(read_info.table.GetTableId(),
-		                                                                   schema_version.GetIndex(), *transaction),
-		                          schema_version.GetIndex(), 0, 0);
+		DuckLakeSnapshot snapshot(
+		    catalog.GetBeginSnapshotForSchemaVersion(read_info.table.GetTableId(), schema_version, *transaction),
+		    schema_version, 0, 0);
 		auto entry = catalog.GetEntryById(*transaction, snapshot, read_info.table.GetTableId());
 		if (!entry) {
 			return nullptr;
@@ -452,8 +444,6 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 	auto columns = DuckLakeMultiFileReader::ColumnsFromFieldData(schema_table.get().GetFieldData(), true);
 	columns.insert(columns.begin(), *snapshot_id_column);
 	columns.insert(columns.begin(), *row_id_column);
-
-	auto inlined_table_name = StringValue::Get(entry->second);
 	return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, std::move(inlined_table_name),
 	                                                  std::move(columns));
 }
@@ -572,19 +562,16 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 
 	const auto &column_ids_to_use = global_state.internally_projected_rowid ? extended_column_ids : global_column_ids;
 
-	if (reader_data.reader->file.extended_info) {
-		auto &file_options = reader_data.reader->file.extended_info->options;
-		auto entry = file_options.find("mapping_id");
-		if (entry != file_options.end()) {
-			auto mapping_id = MappingIndex(entry->second.GetValue<idx_t>());
-			auto transaction = read_info.transaction.lock();
-			auto mapping = transaction->GetMappingById(mapping_id);
-			// use the mapping to generate a new set of global columns for this file
-			auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);
-			return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
-			                                      multi_file_list, bind_data, virtual_columns,
-			                                      MultiFileColumnMappingMode::BY_NAME);
-		}
+	auto &extended_info = reader_data.reader->file.extended_info;
+	idx_t mapping_id;
+	if (extended_info && extended_info->TryGetOption("mapping_id", mapping_id)) {
+		auto transaction = read_info.transaction.lock();
+		auto mapping = transaction->GetMappingById(MappingIndex(mapping_id));
+		// use the mapping to generate a new set of global columns for this file
+		auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);
+		return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
+		                                      multi_file_list, bind_data, virtual_columns,
+		                                      MultiFileColumnMappingMode::BY_NAME);
 	}
 	// Check if file columns have field_id identifiers
 	if (!ColumnsHaveFieldIds(reader_data.reader->columns)) {
@@ -621,14 +608,13 @@ MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExp
 			throw InternalException("Extended info not found for reading row id column");
 		}
 
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("row_id_start");
-		if (entry == options.end()) {
+		idx_t row_id_start;
+		if (!reader_data.file_to_be_opened.extended_info->TryGetOption("row_id_start", row_id_start)) {
 			throw InvalidInputException("File \"%s\" does not have row_id_start defined, and the file does not have a "
 			                            "row_id column written either - row id could not be read",
 			                            reader_data.file_to_be_opened.path);
 		}
-		auto row_id_expr = make_uniq<BoundConstantExpression>(entry->second);
+		auto row_id_expr = make_uniq<BoundConstantExpression>(Value::UBIGINT(row_id_start));
 		auto file_row_number = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
 
 		// generate the addition
@@ -698,6 +684,12 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 	rowid_vector.ToUnifiedFormat(row_id_data);
 	auto row_id_ptr = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
 
+	idx_t row_id_start = 0;
+	auto &extended_info = reader_data.file_to_be_opened.extended_info;
+	if (extended_info) {
+		extended_info->TryGetOption("row_id_start", row_id_start);
+	}
+
 	// Look up the snapshot_id for each row
 	for (idx_t i = 0; i < count; i++) {
 		auto row_id_idx = row_id_data.sel->get_index(i);
@@ -708,18 +700,7 @@ void DuckLakeMultiFileReader::GatherDeletionScanSnapshots(BaseFileReader &reader
 			// File has embedded row_ids - use global row_id directly
 			lookup_key = static_cast<idx_t>(row_id);
 		} else {
-			optional_idx row_id_start;
-			if (reader_data.file_to_be_opened.extended_info) {
-				auto entry = reader_data.file_to_be_opened.extended_info->options.find("row_id_start");
-				if (entry != reader_data.file_to_be_opened.extended_info->options.end()) {
-					row_id_start = entry->second.GetValue<idx_t>();
-				}
-			}
-			if (row_id_start.IsValid()) {
-				lookup_key = NumericCast<idx_t>(row_id) - row_id_start.GetIndex();
-			} else {
-				lookup_key = NumericCast<idx_t>(row_id);
-			}
+			lookup_key = NumericCast<idx_t>(row_id) - row_id_start;
 		}
 
 		auto snapshot = delete_filter.delete_data->GetSnapshotForRow(lookup_key);
