@@ -343,16 +343,23 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 namespace {
 
 template <class T>
-void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change_info, const set<T> &changes,
-                   const char *change_type) {
+void AddChangeInfo(DuckLakeCommitState &commit_state, vector<string> &changes_made, const set<T> &changes,
+                   const string &change_type) {
 	for (auto &entry : changes) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
+		changes_made.push_back(change_type + ":" + to_string(commit_state.GetTableId(entry).index));
+	}
+}
+
+void AddCreatedChangeInfo(vector<string> &changes_made,
+                          const case_insensitive_map_t<reference_set_t<CatalogEntry>> &created_entries,
+                          const string &change_type) {
+	for (auto &entry : created_entries) {
+		for (auto &created_entry : entry.second) {
+			auto &catalog_entry = created_entry.get();
+			auto entry_type = catalog_entry.type == CatalogType::VIEW_ENTRY ? "created_view" : change_type;
+			changes_made.push_back(entry_type + ":" + entry.first + "." +
+			                       DuckLakeUtil::SQLIdentifierToString(catalog_entry.name.GetIdentifierName()));
 		}
-		auto id = commit_state.GetTableId(entry);
-		change_info.changes_made += change_type;
-		change_info.changes_made += ":";
-		change_info.changes_made += to_string(id.index);
 	}
 }
 
@@ -361,8 +368,6 @@ void AddChangeInfo(DuckLakeCommitState &commit_state, SnapshotChangeInfo &change
 string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
                                                       TransactionChangeInformation &changes,
                                                       const DuckLakeSnapshotCommit &commit_info) const {
-	SnapshotChangeInfo change_info;
-
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
@@ -370,88 +375,39 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 		auto &table_changes = entry.GetTableChanges();
 		DuckLakeTransaction::AddTableChanges(table_id, table_changes, changes);
 	}
+	vector<string> changes_made;
 	for (auto &entry : changes.dropped_schemas) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		auto schema_id = entry.first.index;
-		change_info.changes_made += "dropped_schema:";
-		change_info.changes_made += to_string(schema_id);
+		changes_made.push_back("dropped_schema:" + to_string(entry.first.index));
 	}
-	AddChangeInfo(commit_state, change_info, changes.dropped_tables, "dropped_table");
-	AddChangeInfo(commit_state, change_info, changes.dropped_views, "dropped_view");
+	AddChangeInfo(commit_state, changes_made, changes.dropped_tables, "dropped_table");
+	AddChangeInfo(commit_state, changes_made, changes.dropped_views, "dropped_view");
 	for (auto &created_schema : changes.created_schemas) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "created_schema:";
-		change_info.changes_made += created_schema.first;
+		changes_made.push_back("created_schema:" + created_schema.first);
 	}
-	for (auto &entry : changes.created_tables) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_table : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			auto is_view = created_table.get().type == CatalogType::VIEW_ENTRY;
-			change_info.changes_made += is_view ? "created_view:" : "created_table:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_table.get().name.GetIdentifierName());
-		}
-	}
-
-	for (auto &entry : changes.created_scalar_macros) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_macro : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			change_info.changes_made += "created_scalar_macro:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name.GetIdentifierName());
-		}
-	}
-	for (auto &entry : changes.created_table_macros) {
-		auto schema_prefix = entry.first + ".";
-		for (auto &created_macro : entry.second) {
-			if (!change_info.changes_made.empty()) {
-				change_info.changes_made += ",";
-			}
-			change_info.changes_made += "created_table_macro:";
-			change_info.changes_made +=
-			    schema_prefix + DuckLakeUtil::SQLIdentifierToString(created_macro.get().name.GetIdentifierName());
-		}
-	}
-
+	AddCreatedChangeInfo(changes_made, changes.created_tables, "created_table");
+	AddCreatedChangeInfo(changes_made, changes.created_scalar_macros, "created_scalar_macro");
+	AddCreatedChangeInfo(changes_made, changes.created_table_macros, "created_table_macro");
 	for (auto &entry : changes.dropped_scalar_macros) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "dropped_scalar_macro:";
-		change_info.changes_made += to_string(entry.index);
+		changes_made.push_back("dropped_scalar_macro:" + to_string(entry.index));
 	}
-
 	for (auto &entry : changes.dropped_table_macros) {
-		if (!change_info.changes_made.empty()) {
-			change_info.changes_made += ",";
-		}
-		change_info.changes_made += "dropped_table_macro:";
-		change_info.changes_made += to_string(entry.index);
+		changes_made.push_back("dropped_table_macro:" + to_string(entry.index));
 	}
-
-	AddChangeInfo(commit_state, change_info, changes.tables_inserted_into, "inserted_into_table");
-	AddChangeInfo(commit_state, change_info, changes.tables_deleted_from, "deleted_from_table");
-	AddChangeInfo(commit_state, change_info, changes.altered_tables, "altered_table");
-	AddChangeInfo(commit_state, change_info, changes.altered_views, "altered_view");
-	AddChangeInfo(commit_state, change_info, changes.tables_inserted_inlined, "inlined_insert");
-	AddChangeInfo(commit_state, change_info, changes.tables_deleted_inlined, "inlined_delete");
-	AddChangeInfo(commit_state, change_info, changes.tables_flushed_inlined, "inline_flush");
+	AddChangeInfo(commit_state, changes_made, changes.tables_inserted_into, "inserted_into_table");
+	AddChangeInfo(commit_state, changes_made, changes.tables_deleted_from, "deleted_from_table");
+	AddChangeInfo(commit_state, changes_made, changes.altered_tables, "altered_table");
+	AddChangeInfo(commit_state, changes_made, changes.altered_views, "altered_view");
+	AddChangeInfo(commit_state, changes_made, changes.tables_inserted_inlined, "inlined_insert");
+	AddChangeInfo(commit_state, changes_made, changes.tables_deleted_inlined, "inlined_delete");
+	AddChangeInfo(commit_state, changes_made, changes.tables_flushed_inlined, "inline_flush");
 	bool has_compaction = !changes.tables_merge_adjacent.empty() || !changes.tables_rewrite_delete.empty();
-	if (has_compaction && !change_info.changes_made.empty()) {
+	if (has_compaction && !changes_made.empty()) {
 		throw InvalidInputException("Transactions can either make changes OR perform compaction - not both");
 	}
-	AddChangeInfo(commit_state, change_info, changes.tables_merge_adjacent, "merge_adjacent");
-	AddChangeInfo(commit_state, change_info, changes.tables_rewrite_delete, "rewrite_delete");
+	AddChangeInfo(commit_state, changes_made, changes.tables_merge_adjacent, "merge_adjacent");
+	AddChangeInfo(commit_state, changes_made, changes.tables_rewrite_delete, "rewrite_delete");
+	SnapshotChangeInfo change_info;
+	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 

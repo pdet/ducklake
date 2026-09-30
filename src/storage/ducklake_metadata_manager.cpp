@@ -168,13 +168,9 @@ FileSystem &DuckLakeMetadataManager::GetFileSystem() {
 
 string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields) {
 	// DuckDB syntax: LIST({'key1': val1, 'key2': val2, ...})
-	string fields_part;
-	for (auto const &entry : fields) {
-		if (!fields_part.empty()) {
-			fields_part += ", ";
-		}
-		fields_part += "'" + entry.first + "': " + entry.second;
-	}
+	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
+		return "'" + entry.first + "': " + entry.second;
+	});
 	return "LIST({" + fields_part + "})";
 }
 
@@ -322,11 +318,7 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	statements.push_back(
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_sort_expression(sort_id BIGINT, table_id BIGINT, sort_key_index "
 	    "BIGINT, expression VARCHAR, dialect VARCHAR, sort_direction VARCHAR, null_order VARCHAR);");
-	string result = "\n";
-	for (auto &statement : statements) {
-		result += statement + "\n";
-	}
-	return result;
+	return "\n" + StringUtil::Join(statements, "\n") + "\n";
 }
 
 string DuckLakeMetadataManager::GetVersionString() {
@@ -2012,13 +2004,7 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 			continue;
 		}
 
-		string in_list;
-		for (auto &v : bucket_values) {
-			if (!in_list.empty()) {
-				in_list += ", ";
-			}
-			in_list += StringUtil::Format("%s", SQLString(v));
-		}
+		auto in_list = StringUtil::Join(bucket_values, bucket_values.size(), ", ", SQLString::ToString);
 		string clause =
 		    StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s "
 		                       "WHERE table_id = %d AND partition_key_index = %d AND partition_value IN (%s))",
@@ -2750,16 +2736,13 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 	return files;
 }
 
-template <class T>
-string GenerateIDList(const set<T> &dropped_entries) {
-	string dropped_id_list;
-	for (auto &dropped_id : dropped_entries) {
-		if (!dropped_id_list.empty()) {
-			dropped_id_list += ", ";
-		}
-		dropped_id_list += to_string(dropped_id.index);
+template <class C>
+string GenerateIDList(const C &entries) {
+	vector<string> ids;
+	for (auto &entry : entries) {
+		ids.push_back(to_string(entry.index));
 	}
-	return dropped_id_list;
+	return StringUtil::Join(ids, ", ");
 }
 
 template <class T>
@@ -3001,14 +2984,7 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	}
 	switch (column_type.id()) {
 	case LogicalTypeId::STRUCT: {
-		string result;
-		for (auto &child : col.children) {
-			if (!result.empty()) {
-				result += ", ";
-			}
-			result += StringUtil::Format("%s %s", SQLIdentifier(child.name), GetColumnType(child));
-		}
-		return "STRUCT(" + result + ")";
+		return "STRUCT(" + GetColumnDefinitions(col.children) + ")";
 	}
 	case LogicalTypeId::LIST: {
 		return GetColumnType(col.children[0]) + "[]";
@@ -3055,14 +3031,14 @@ string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
 	    table_id, table_id);
 }
 
+string DuckLakeMetadataManager::GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns) {
+	return StringUtil::Join(columns, columns.size(), ", ", [&](const DuckLakeColumnInfo &col) {
+		return StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
+	});
+}
+
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
-	string column_defs;
-	for (auto &col : table.columns) {
-		if (!column_defs.empty()) {
-			column_defs += ", ";
-		}
-		column_defs += StringUtil::Format("%s %s", SQLIdentifier(col.name), GetColumnType(col));
-	}
+	auto column_defs = GetColumnDefinitions(table.columns);
 	// We created a table here, flag we need to clear our cache at commit
 	MarkPendingCacheClear();
 	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
@@ -3195,52 +3171,31 @@ INSERT INTO {METADATA_CATALOG}.ducklake_macro_parameters values(%llu,%llu,%llu,%
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns) {
+static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {
 	if (dropped_columns.empty()) {
 		return {};
 	}
-	string dropped_cols;
-	for (auto &dropped_col : dropped_columns) {
-		if (!dropped_cols.empty()) {
-			dropped_cols += ", ";
-		}
-		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
-	}
-	// overwrite the snapshot for the old columns
+	auto values = StringUtil::Join(dropped_columns, dropped_columns.size(), ", ", [](const DuckLakeDroppedColumn &col) {
+		return StringUtil::Format("(%d, %d)", col.table_id.index, col.field_id.index);
+	});
 	return StringUtil::Format(R"(
 WITH dropped_cols(tid, cid) AS (
 VALUES %s
 )
-UPDATE {METADATA_CATALOG}.ducklake_column
+UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
 WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
 ;)",
-	                          dropped_cols);
+	                          values, metadata_table);
+}
+
+string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns) {
+	return ExpireDroppedColumns(dropped_columns, "ducklake_column");
 }
 
 string DuckLakeMetadataManager::WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns) {
-	if (dropped_columns.empty()) {
-		return {};
-	}
-	string dropped_cols;
-	for (auto &dropped_col : dropped_columns) {
-		if (!dropped_cols.empty()) {
-			dropped_cols += ", ";
-		}
-		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
-	}
-	// expire any active tags of the dropped columns (GH #1310)
-	return StringUtil::Format(R"(
-WITH dropped_cols(tid, cid) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.ducklake_column_tag
-SET end_snapshot = {SNAPSHOT_ID}
-FROM dropped_cols
-WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
-;)",
-	                          dropped_cols);
+	return ExpireDroppedColumns(dropped_columns, "ducklake_column_tag");
 }
 
 string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns) {
@@ -3257,22 +3212,15 @@ string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> 
 }
 
 string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views) {
-	string view_insert_sql;
-	for (auto &view : new_views) {
-		if (!view_insert_sql.empty()) {
-			view_insert_sql += ", ";
-		}
-		auto schema_id = view.schema_id.index;
-		view_insert_sql +=
-		    StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s)", view.id.index, view.uuid,
-		                       schema_id, SQLString(view.name), SQLString(view.dialect), SQLString(view.sql),
-		                       SQLString(DuckLakeUtil::ToQuotedList(view.column_aliases)));
+	if (new_views.empty()) {
+		return {};
 	}
-	if (!view_insert_sql.empty()) {
-		// insert table entries
-		return "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql + ";";
-	}
-	return {};
+	auto view_insert_sql = StringUtil::Join(new_views, new_views.size(), ", ", [](const DuckLakeViewInfo &view) {
+		return StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s, %s)", view.id.index, view.uuid,
+		                          view.schema_id.index, SQLString(view.name), SQLString(view.dialect),
+		                          SQLString(view.sql), SQLString(DuckLakeUtil::ToQuotedList(view.column_aliases)));
+	});
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_view VALUES " + view_insert_sql + ";";
 }
 
 static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transaction, const DuckLakeSnapshot &snapshot,
@@ -3597,14 +3545,8 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	// Build the IN clause with file IDs
-	string file_id_list;
-	for (auto &file_id : file_ids) {
-		if (!file_id_list.empty()) {
-			file_id_list += ", ";
-		}
-		file_id_list += to_string(file_id);
-	}
+	auto file_id_list =
+	    StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t file_id) { return to_string(file_id); });
 	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
 	                                "begin_snapshot <= {SNAPSHOT_ID}",
 	                                inlined_table_name, file_id_list);
@@ -3746,17 +3688,12 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 }
 
 static string GetProjection(const vector<string> &columns_to_read) {
-	string result;
-	idx_t i = 1;
-	for (auto &entry : columns_to_read) {
-		if (!result.empty()) {
-			result += ", ";
-		}
+	vector<string> projections;
+	for (idx_t i = 0; i < columns_to_read.size(); i++) {
 		// alias to avoid duplicate name in PG
-		result += entry + StringUtil::Format(" AS col%d", i);
-		i++;
+		projections.push_back(columns_to_read[i] + StringUtil::Format(" AS col%d", i + 1));
 	}
-	return result;
+	return StringUtil::Join(projections, ", ");
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
@@ -5157,56 +5094,11 @@ string DuckLakeMetadataManager::WriteNewTableOptions(const vector<DuckLakeConfig
 	if (new_options.empty()) {
 		return {};
 	}
-	string values;
-	for (auto &option : new_options) {
-		if (!values.empty()) {
-			values += ", ";
-		}
-		values += StringUtil::Format("(%s, %s, 'table', %d)", SQLString(option.option.key),
-		                             SQLString(option.option.value), option.table_id.index);
-	}
+	auto values = StringUtil::Join(new_options, new_options.size(), ", ", [](const DuckLakeConfigOption &option) {
+		return StringUtil::Format("(%s, %s, 'table', %d)", SQLString(option.option.key), SQLString(option.option.value),
+		                          option.table_id.index);
+	});
 	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES " + values + ";";
-}
-
-string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
-	if (new_tags.empty()) {
-		return {};
-	}
-	// update old tags (if there were any)
-	// get a list of all tags
-	string tags_list;
-	for (auto &tag : new_tags) {
-		if (!tags_list.empty()) {
-			tags_list += ", ";
-		}
-		tags_list += StringUtil::Format("(%d, %s)", tag.id, SQLString(tag.key));
-	}
-
-	// overwrite the snapshot for the old tags
-	string batch_query = StringUtil::Format(R"(
-WITH overwritten_tags(tid, key) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.ducklake_tag
-SET end_snapshot = {SNAPSHOT_ID}
-FROM overwritten_tags
-WHERE object_id=tid AND ducklake_tag.key=overwritten_tags.key AND end_snapshot IS NULL
-;)",
-	                                        tags_list);
-
-	// now insert the new tags
-	string new_tag_query;
-	for (auto &tag : new_tags) {
-		if (!new_tag_query.empty()) {
-			new_tag_query += ", ";
-		}
-		new_tag_query += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.id, SQLString(tag.key),
-		                                    tag.value.ToSQLString());
-	}
-
-	new_tag_query = "INSERT INTO {METADATA_CATALOG}.ducklake_tag VALUES " + new_tag_query + ";";
-	batch_query += new_tag_query;
-	return batch_query;
 }
 
 template <class T, class OverwrittenValues, class NewValues>
@@ -5216,14 +5108,7 @@ static string WriteNewColumnTagBatch(const vector<T> &new_tags, const string &ct
 	if (new_tags.empty()) {
 		return {};
 	}
-	string tags_list;
-	for (auto &tag : new_tags) {
-		if (!tags_list.empty()) {
-			tags_list += ", ";
-		}
-		tags_list += overwritten_values(tag);
-	}
-
+	auto tags_list = StringUtil::Join(new_tags, new_tags.size(), ", ", overwritten_values);
 	string batch_query = StringUtil::Format(R"(
 WITH overwritten_tags(%s) AS (
 VALUES %s
@@ -5234,17 +5119,19 @@ FROM overwritten_tags
 WHERE %s AND end_snapshot IS NULL
 ;)",
 	                                        cte_columns, tags_list, metadata_table, update_condition);
-
-	string new_tag_query;
-	for (auto &tag : new_tags) {
-		if (!new_tag_query.empty()) {
-			new_tag_query += ", ";
-		}
-		new_tag_query += new_values(tag);
-	}
-
+	auto new_tag_query = StringUtil::Join(new_tags, new_tags.size(), ", ", new_values);
 	batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", metadata_table, new_tag_query);
 	return batch_query;
+}
+
+string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_tags) {
+	return WriteNewColumnTagBatch(
+	    new_tags, "tid, key", "ducklake_tag", "object_id=tid AND ducklake_tag.key=overwritten_tags.key",
+	    [](const DuckLakeTagInfo &tag) { return StringUtil::Format("(%d, %s)", tag.id, SQLString(tag.key)); },
+	    [](const DuckLakeTagInfo &tag) {
+		    return StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.id, SQLString(tag.key),
+		                              tag.value.ToSQLString());
+	    });
 }
 
 string DuckLakeMetadataManager::WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags) {
@@ -5535,13 +5422,9 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetFilesForCleanup(const
 }
 
 void DuckLakeMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files) {
-	string deleted_file_ids;
-	for (auto &file : cleaned_up_files) {
-		if (!deleted_file_ids.empty()) {
-			deleted_file_ids += ", ";
-		}
-		deleted_file_ids += to_string(file.id.index);
-	}
+	auto deleted_file_ids =
+	    StringUtil::Join(cleaned_up_files, cleaned_up_files.size(), ", ",
+	                     [](const DuckLakeFileForCleanup &file) { return to_string(file.id.index); });
 	auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 WHERE data_file_id IN (%s);
@@ -5674,13 +5557,8 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	unique_ptr<QueryResult> result;
 	// first delete the actual snapshots
-	string snapshot_ids;
-	for (auto &snapshot : snapshots) {
-		if (!snapshot_ids.empty()) {
-			snapshot_ids += ", ";
-		}
-		snapshot_ids += to_string(snapshot.id);
-	}
+	auto snapshot_ids = StringUtil::Join(snapshots, snapshots.size(), ", ",
+	                                     [](const DuckLakeSnapshotInfo &snapshot) { return to_string(snapshot.id); });
 
 	vector<TableIndex> stats_table_ids;
 	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
@@ -5724,13 +5602,7 @@ AND NOT EXISTS (
 	for (auto &row : *result) {
 		cleanup_tables.push_back(TableIndex(row.GetValue<idx_t>(0)));
 	}
-	string deleted_table_ids;
-	for (auto &table_id : cleanup_tables) {
-		if (!deleted_table_ids.empty()) {
-			deleted_table_ids += ", ";
-		}
-		deleted_table_ids += to_string(table_id.index);
-	}
+	auto deleted_table_ids = GenerateIDList(cleanup_tables);
 
 	// get a list of files that are no longer required after these deletions
 	string table_id_filter;

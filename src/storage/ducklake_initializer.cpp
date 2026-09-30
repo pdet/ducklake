@@ -29,16 +29,7 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
 	if (options.access_mode != AccessMode::AUTOMATIC) {
-		switch (options.access_mode) {
-		case AccessMode::READ_ONLY:
-			attach_options.push_back("READ_ONLY");
-			break;
-		case AccessMode::READ_WRITE:
-			attach_options.push_back("READ_WRITE");
-			break;
-		default:
-			throw InternalException("Unsupported access mode in DuckLake attach");
-		}
+		attach_options.push_back(EnumUtil::ToString(options.access_mode));
 	}
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
@@ -65,14 +56,7 @@ string DuckLakeInitializer::GetAttachOptions() {
 	if (attach_options.empty()) {
 		return string();
 	}
-	string result;
-	for (auto &option : attach_options) {
-		if (!result.empty()) {
-			result += ", ";
-		}
-		result += option;
-	}
-	return " (" + result + ")";
+	return " (" + StringUtil::Join(attach_options, ", ") + ")";
 }
 
 void DuckLakeInitializer::Initialize() {
@@ -149,10 +133,7 @@ void DuckLakeInitializer::InitializeDataPath() {
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto separator = fs.PathSeparator(data_path);
-	// pop trailing path separators
-	while (!data_path.empty() && (data_path.back() == '/' || data_path.back() == '\\')) {
-		data_path.pop_back();
-	}
+	StringUtil::RTrim(data_path, "/\\");
 	// ensure the paths we store always end in a path separator
 	data_path += separator;
 	catalog.Separator() = separator;

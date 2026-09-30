@@ -699,13 +699,7 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 }
 
 static string FormatExpectedError(const vector<LogicalType> &expected) {
-	string error;
-	for (auto &type : expected) {
-		if (!error.empty()) {
-			error += ", ";
-		}
-		error += type.ToString();
-	}
+	auto error = StringUtil::ToString(expected, ", ");
 	return expected.size() > 1 ? "one of " + error : error;
 }
 
@@ -726,13 +720,9 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 }
 
 void DuckLakeParquetTypeChecker::Fail() {
-	string error_message = StringUtil::Format(
-	    "Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"",
-	    prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filepath, table.name.GetIdentifierName());
-	for (auto &failure : failures) {
-		error_message += "\n* " + failure;
-	}
-	throw InvalidInputException(error_message);
+	throw InvalidInputException("Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"\n* %s",
+	                            prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filepath,
+	                            table.name.GetIdentifierName(), StringUtil::Join(failures, "\n* "));
 }
 
 void DuckLakeParquetTypeChecker::CheckSignedInteger() {

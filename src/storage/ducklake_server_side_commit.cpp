@@ -257,13 +257,7 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	if (table_ids.empty()) {
 		return;
 	}
-	string id_list;
-	for (auto id : table_ids) {
-		if (!id_list.empty()) {
-			id_list += ",";
-		}
-		id_list += to_string(id);
-	}
+	auto id_list = JoinIds(vector<idx_t>(table_ids.begin(), table_ids.end()));
 	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                                "FROM %s.ducklake_column col "
 	                                "WHERE col.end_snapshot IS NULL "
