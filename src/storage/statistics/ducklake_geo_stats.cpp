@@ -11,14 +11,6 @@
 namespace duckdb {
 
 DuckLakeColumnGeoStats::DuckLakeColumnGeoStats() : DuckLakeColumnExtraStats(DuckLakeExtraStatsType::GEOMETRY) {
-	xmin = NumericLimits<double>::Maximum();
-	xmax = NumericLimits<double>::Minimum();
-	ymin = NumericLimits<double>::Maximum();
-	ymax = NumericLimits<double>::Minimum();
-	zmin = NumericLimits<double>::Maximum();
-	zmax = NumericLimits<double>::Minimum();
-	mmin = NumericLimits<double>::Maximum();
-	mmax = NumericLimits<double>::Minimum();
 }
 
 unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnGeoStats::Copy() const {
@@ -28,28 +20,20 @@ unique_ptr<DuckLakeColumnExtraStats> DuckLakeColumnGeoStats::Copy() const {
 void DuckLakeColumnGeoStats::Merge(const DuckLakeColumnExtraStats &new_stats) {
 	auto &geo_stats = new_stats.Cast<DuckLakeColumnGeoStats>();
 
-	xmin = MinValue(xmin, geo_stats.xmin);
-	xmax = MaxValue(xmax, geo_stats.xmax);
-	ymin = MinValue(ymin, geo_stats.ymin);
-	ymax = MaxValue(ymax, geo_stats.ymax);
-	zmin = MinValue(zmin, geo_stats.zmin);
-	zmax = MaxValue(zmax, geo_stats.zmax);
-	mmin = MinValue(mmin, geo_stats.mmin);
-	mmax = MaxValue(mmax, geo_stats.mmax);
-
+	extent.Merge(geo_stats.extent);
 	geo_types.insert(geo_stats.geo_types.begin(), geo_stats.geo_types.end());
 }
 
 bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	// Format as JSON
-	auto xmin_val = xmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(xmin);
-	auto xmax_val = xmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(xmax);
-	auto ymin_val = ymin == NumericLimits<double>::Maximum() ? "null" : std::to_string(ymin);
-	auto ymax_val = ymax == NumericLimits<double>::Minimum() ? "null" : std::to_string(ymax);
-	auto zmin_val = zmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(zmin);
-	auto zmax_val = zmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(zmax);
-	auto mmin_val = mmin == NumericLimits<double>::Maximum() ? "null" : std::to_string(mmin);
-	auto mmax_val = mmax == NumericLimits<double>::Minimum() ? "null" : std::to_string(mmax);
+	auto xmin_val = extent.x_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.x_min);
+	auto xmax_val = extent.x_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.x_max);
+	auto ymin_val = extent.y_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.y_min);
+	auto ymax_val = extent.y_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.y_max);
+	auto zmin_val = extent.z_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.z_min);
+	auto zmax_val = extent.z_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.z_max);
+	auto mmin_val = extent.m_min == GeometryExtent::EMPTY_MIN ? "null" : std::to_string(extent.m_min);
+	auto mmax_val = extent.m_max == GeometryExtent::EMPTY_MAX ? "null" : std::to_string(extent.m_max);
 
 	auto bbox = StringUtil::Format(
 	    R"({"xmin": %s, "xmax": %s, "ymin": %s, "ymax": %s, "zmin": %s, "zmax": %s, "mmin": %s, "mmax": %s})", xmin_val,
@@ -84,8 +68,9 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 	}
 
 	auto bbox = root.GetMember("bbox");
-	const pair<const char *, double *> bounds[] = {{"xmin", &xmin}, {"xmax", &xmax}, {"ymin", &ymin}, {"ymax", &ymax},
-	                                               {"zmin", &zmin}, {"zmax", &zmax}, {"mmin", &mmin}, {"mmax", &mmax}};
+	const pair<const char *, double *> bounds[] = {
+	    {"xmin", &extent.x_min}, {"xmax", &extent.x_max}, {"ymin", &extent.y_min}, {"ymax", &extent.y_max},
+	    {"zmin", &extent.z_min}, {"zmax", &extent.z_max}, {"mmin", &extent.m_min}, {"mmax", &extent.m_max}};
 	for (auto &bound : bounds) {
 		auto bound_val = bbox.GetMember(bound.first);
 		if (bound_val.IsNumber()) {
@@ -102,21 +87,21 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 
 bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<Value> &stats_children) {
 	if (stats_name == "bbox_xmax") {
-		xmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.x_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_xmin") {
-		xmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.x_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_ymax") {
-		ymax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.y_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_ymin") {
-		ymin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.y_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_zmax") {
-		zmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.z_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_zmin") {
-		zmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.z_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_mmax") {
-		mmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.m_max = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "bbox_mmin") {
-		mmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		extent.m_min = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
 	} else if (stats_name == "geo_types") {
 		auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
 		for (const auto &child : ListValue::GetChildren(list_value)) {
@@ -131,15 +116,7 @@ bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<V
 unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
 
-	auto &extent = GeometryStats::GetExtent(stats);
-	extent.x_min = xmin;
-	extent.x_max = xmax;
-	extent.y_min = ymin;
-	extent.y_max = ymax;
-	extent.z_min = zmin;
-	extent.z_max = zmax;
-	extent.m_min = mmin;
-	extent.m_max = mmax;
+	GeometryStats::GetExtent(stats) = extent;
 
 	static const case_insensitive_map_t<pair<GeometryType, VertexType>> type_mapping = {
 	    // XY TYPES

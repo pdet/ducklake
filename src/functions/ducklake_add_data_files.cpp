@@ -390,9 +390,9 @@ FROM parquet_full_metadata(%s)
 
 			auto geo_bbox = stats_entry.GetChildValue<6>();
 			if (geo_bbox.IsValid() && stats.extra_stats) {
-				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-				double *bounds[] = {&geo_stats.xmin, &geo_stats.xmax, &geo_stats.ymin, &geo_stats.ymax,
-				                    &geo_stats.zmin, &geo_stats.zmax, &geo_stats.mmin, &geo_stats.mmax};
+				auto &extent = stats.extra_stats->Cast<DuckLakeColumnGeoStats>().extent;
+				double *bounds[] = {&extent.x_min, &extent.x_max, &extent.y_min, &extent.y_max,
+				                    &extent.z_min, &extent.z_max, &extent.m_min, &extent.m_max};
 				idx_t bound_idx = 0;
 				geo_bbox.ForEach([&](const VectorIterator<double>::ValueEntry &bound) {
 					if (bound.IsValid()) {
