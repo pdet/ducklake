@@ -2006,7 +2006,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
                                                                   const FilterPushdownInfo &filter_info,
                                                                   const string &partition_value_table) {
 	auto partition_data = table.GetPartitionData();
-	if (!partition_data) {
+	// a transaction-local spec has no committed files written with it, so there is nothing to prune
+	if (!partition_data || DuckLakeTransaction::IsTransactionLocal(partition_data->partition_id)) {
 		return string();
 	}
 	auto context_ptr = transaction.context.lock();
@@ -2056,7 +2057,11 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 		}
 		result += clause;
 	}
-	return result;
+	if (result.empty()) {
+		return result;
+	}
+	// partition values are only comparable for files written with the current partition spec
+	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
