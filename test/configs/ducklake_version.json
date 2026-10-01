@@ -59,6 +59,7 @@
         "test/sql/migration/inlined_column_rename_conflict.test",
         "test/sql/migration/inlined_column_rename_partial.test",
         "test/sql/migration/inlined_column_rename_dev_conflict.test",
+        "test/sql/migration/inlined_column_rename_layout.test",
         "test/sql/migration/inlined_column_rename_missing_table.test",
         "test/sql/migration/inlined_column_rename_remigrate.test",
         "test/sql/migration/inlined_column_rename_hint.test",

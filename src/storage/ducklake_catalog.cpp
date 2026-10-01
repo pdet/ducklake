@@ -443,9 +443,10 @@ static unique_ptr<ParsedExpression> LoadMacroDefault(ClientContext &context, con
 	if (type.id() == LogicalTypeId::UNKNOWN) {
 		return nullptr;
 	}
+	// typed NULL defaults are stored as the text NULL
 	const bool is_null = StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(type);
 	if (type.IsNested()) {
-		// Legacy nested defaults omit child types.
+		// nested defaults omit child types
 		return is_null ? ConstantExpression::FromValue(Value()) : nullptr;
 	}
 	if (is_null) {

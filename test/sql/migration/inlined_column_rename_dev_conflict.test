@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_dev_conflict.test
-# description: dev migration must not partially rename the inlined table on a column conflict
+# description: dev migration fails on user columns named like the renamed metadata columns
 # group: [migration]
 
 require ducklake
@@ -28,7 +28,7 @@ UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 statement ok
 DETACH meta
 
-# the dev migration must fail loudly instead of partially renaming the inlined table
+# user columns cannot stand in for metadata columns
 statement error
 ATTACH 'ducklake:{TEST_DIR}/dev1_conflict.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_conflict_files', AUTOMATIC_MIGRATION TRUE)
 ----

@@ -29,7 +29,7 @@ UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '[2020-01-01]
 1
 
 query I
-UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '{a: 1}', default_value_type = 'struct' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'struct_default')
+UPDATE ducklake_meta.ducklake_macro_parameters SET default_value = '{''a'': 1}', default_value_type = 'struct' WHERE macro_id = (SELECT macro_id FROM ducklake_meta.ducklake_macro WHERE macro_name = 'struct_default')
 ----
 1
 

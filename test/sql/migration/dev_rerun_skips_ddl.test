@@ -13,11 +13,16 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/dev_rerun_skips_ddl', METADATA_CATALOG 'meta')
 
-statement ok
-CREATE TABLE ducklake.t(i INTEGER)
+# enough inlined tables to need more than one probe batch
+loop i 0 101
 
 statement ok
-INSERT INTO ducklake.t VALUES (42)
+CREATE TABLE ducklake.t${i}(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t${i} VALUES (${i})
+
+endloop
 
 statement ok
 DETACH ducklake
@@ -37,6 +42,12 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (METADATA_CATALOG 'meta', AU
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query ILIKE '%ALTER TABLE%' OR query ILIKE '%CREATE TABLE%' OR query ILIKE '%UPDATE%ducklake_metadata%'
+----
+0
+
+# the combined probe avoids separate queries for each table
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query ILIKE 'SELECT * FROM %inlined_data% LIMIT 0'
 ----
 0
 

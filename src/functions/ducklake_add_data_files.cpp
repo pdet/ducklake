@@ -132,7 +132,7 @@ static void CollectMissingColumns(const DuckLakeFieldId &field_id, bool reads_nu
 		result.push_back(MissingColumn {field_id.GetFieldIndex(), field_id.Type(), reads_null});
 		return;
 	}
-	// A missing parent makes every child NULL
+	// a missing parent makes every child NULL
 	for (auto &child : field_id.Children()) {
 		CollectMissingColumns(*child, true, result);
 	}
@@ -1188,6 +1188,7 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 			    ConstantColumnStats(file_metadata, missing.field_index, missing.field_type, Value(missing.field_type)));
 			continue;
 		}
+		// non NULL defaults leave statistics unknown
 		DuckLakeColumnStats unknown_stats(missing.field_type);
 		unknown_stats.extra_stats.reset();
 		result.column_stats.emplace(missing.field_index, std::move(unknown_stats));

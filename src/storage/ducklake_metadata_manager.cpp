@@ -464,7 +464,7 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 	)";
 
-// Keep this probe in sync with the migration additions.
+// keep this probe in sync with the migration additions
 static constexpr const char *V1_1_DEV1_ADDITIONS_PROBE = R"(
 SELECT 1
 FROM (SELECT df.row_group_count FROM {METADATA_CATALOG}.ducklake_data_file df LIMIT 0),
@@ -475,7 +475,7 @@ FROM (SELECT df.row_group_count FROM {METADATA_CATALOG}.ducklake_data_file df LI
 	)";
 
 void DuckLakeMetadataManager::MigrateV10Additions(bool allow_failures) {
-	// PostgreSQL DDL requires table ownership even when every addition already exists.
+	// PostgreSQL DDL requires table ownership even when the additions exist
 	if (allow_failures && !Query(V1_1_DEV1_ADDITIONS_PROBE)->HasError()) {
 		return;
 	}
@@ -521,12 +521,36 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
 	                                          {old_names.end_snapshot, new_names.end_snapshot}};
 	vector<pair<string, string>> inlined_tables;
+	// batch the probe since binding one query over every table is superlinear
+	static constexpr idx_t PROBE_BATCH_SIZE = 100;
+	vector<vector<string>> probe_batches;
 	for (auto &row : *tables) {
 		auto table_name = row.GetValue<string>(0);
 		auto user_table_name = row.IsNull(1) ? table_name : row.GetValue<string>(1);
+		vector<string> probe_columns;
+		for (idx_t i = 0; i < col_renames.size(); i++) {
+			probe_columns.push_back(
+			    StringUtil::Format("(SELECT %s FROM (SELECT #%d FROM {METADATA_CATALOG}.%s LIMIT 0)) AS probe_%d",
+			                       col_renames[i].second, i + 1, SQLIdentifier(table_name), i));
+		}
+		if (inlined_tables.size() % PROBE_BATCH_SIZE == 0) {
+			probe_batches.emplace_back();
+		}
+		probe_batches.back().push_back("SELECT 1 FROM " + StringUtil::Join(probe_columns, ", "));
 		inlined_tables.emplace_back(std::move(table_name), std::move(user_table_name));
 	}
-	// Validate all tables before applying any renames.
+	bool all_renamed = true;
+	for (auto &batch : probe_batches) {
+		auto probe = StringUtil::Join(batch, " UNION ALL ");
+		if (Query(probe)->HasError()) {
+			all_renamed = false;
+			break;
+		}
+	}
+	if (all_renamed) {
+		return;
+	}
+	// validate every table before applying any renames
 	string renames;
 	for (const auto &inlined_table : inlined_tables) {
 		const auto &table_name = inlined_table.first;
@@ -1612,7 +1636,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			const bool is_null = expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL;
 			auto matching_count = StatsColumn(stats_alias, is_null ? "null_count" : "value_count");
 			auto other_count = StatsColumn(stats_alias, is_null ? "value_count" : "null_count");
-			// Zero counts can indicate missing statistics.
+			// zero counts can indicate missing statistics
 			return "(" + matching_count + " > 0 OR " + other_count + " = 0)";
 		}
 		case ExpressionType::COMPARE_IN: {
@@ -1742,6 +1766,7 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 		null_checks += StatsColumn(cte_name, stat) + " IS NULL OR ";
 	}
 
+	// all NULL files may be pruned only when NULL cannot match
 	bool needs_value_count_guard = false;
 	if (referenced_stats.count("min_value") > 0 || referenced_stats.count("max_value") > 0) {
 		auto null_stats = BaseStatistics::FromConstant(Value(column_filter.column_type));

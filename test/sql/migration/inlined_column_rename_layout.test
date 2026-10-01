@@ -1,0 +1,50 @@
+# name: test/sql/migration/inlined_column_rename_layout.test
+# description: inlined metadata columns must retain their expected order
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_layout.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_layout_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE TABLE dl.t2(i INTEGER)
+
+statement ok
+INSERT INTO dl.t2 VALUES (2)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2 RENAME COLUMN _ducklake_row_id TO temporary_row_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2 RENAME COLUMN _ducklake_begin_snapshot TO _ducklake_row_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2 RENAME COLUMN temporary_row_id TO _ducklake_begin_snapshot
+
+statement ok
+DETACH meta
+
+# reject reordered columns in a later inlined table
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_layout_files', AUTOMATIC_MIGRATION TRUE)
+----
+unexpected column layout

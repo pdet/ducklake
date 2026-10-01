@@ -499,9 +499,9 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
-	//! Reruns development migrations and logs failures
+	//! Reruns development migrations on attach and logs failures
 	virtual void MigrateV10Dev();
-	//! Skips existing schema additions when rerunning the migration
+	//! Applies the v1.1-dev1 schema additions, a rerun skips them when none is missing
 	void MigrateV10Additions(bool allow_failures);
 	//! Renames inlined metadata columns when needed
 	virtual void MigrateInlinedColumnNames();

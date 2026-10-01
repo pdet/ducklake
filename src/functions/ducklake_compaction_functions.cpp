@@ -526,11 +526,31 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 	return &partition_table;
 }
 
-bool DuckLakeCompactor::HasStoredRowIds(const vector<DuckLakeCompactionFileEntry> &source_files) {
+bool DuckLakeCompactor::HasNonPositionalRowIds(const vector<DuckLakeCompactionFileEntry> &source_files) {
 	for (const auto &source : source_files) {
 		ParquetFileScanner scanner(context, source.file.data);
-		if (scanner.FindColumn("_ducklake_internal_row_id").IsValid()) {
+		auto row_id_column = scanner.FindColumn("_ducklake_internal_row_id");
+		if (!row_id_column.IsValid()) {
+			continue;
+		}
+		if (scanner.GetTypes()[row_id_column.GetIndex()] != LogicalType::BIGINT) {
 			return true;
+		}
+		scanner.SetColumnIds({row_id_column.GetIndex()});
+		DataChunk chunk;
+		chunk.Initialize(context, {LogicalType::BIGINT});
+		auto expected_row_id = source.file.row_id_start.GetIndex();
+		while (scanner.Scan(chunk)) {
+			UnifiedVectorFormat row_id_data;
+			chunk.data[0].ToUnifiedFormat(row_id_data);
+			auto row_ids = UnifiedVectorFormat::GetData<int64_t>(row_id_data);
+			for (idx_t i = 0; i < chunk.size(); i++) {
+				auto idx = row_id_data.sel->get_index(i);
+				if (!row_id_data.validity.RowIsValid(idx) || row_ids[idx] < 0 ||
+				    NumericCast<idx_t>(row_ids[idx]) != expected_row_id++) {
+					return true;
+				}
+			}
 		}
 	}
 	return false;
@@ -655,8 +675,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		// Sorting or stored row ids require explicit row ids
-		write_row_id = sort_data || !files_are_adjacent || HasStoredRowIds(actionable_source_files);
+		// sorting reorders rows so only unsorted positional row ids can be left implicit
+		write_row_id = sort_data || !files_are_adjacent || HasNonPositionalRowIds(actionable_source_files);
 		write_snapshot_id = true;
 		break;
 	}
