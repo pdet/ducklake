@@ -1,0 +1,24 @@
+# name: benchmark/micro/maintenance/cleanup_listing_dry_run.benchmark
+# description: Detect 2000 orphan files and ~1000 files scheduled for deletion with dry_run, without deleting anything
+# group: [maintenance]
+
+name Cleanup Listing Dry Run
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+# dry_run does all the work at bind time and deletes nothing, so the run needs no reset
+run
+SELECT
+(SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)) AS orphans,
+(SELECT count(*) FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => true)) AS old_files;
+
+result_query II
+SELECT orphans, old_files >= 900 FROM __answer
+----
+2000	true
