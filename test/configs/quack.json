@@ -138,6 +138,12 @@
       ]
     },
     {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
+      "paths": [
+        "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"
+      ]
+    },
+    {
       "reason": "FIXME: A failed client-side commit batch is not atomic on the quack server.",
       "paths": [
         "test/sql/quack/server_side_commit_atomicity.test"

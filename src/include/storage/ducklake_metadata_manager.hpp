@@ -288,7 +288,7 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery(bool include_exactness);
+	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
@@ -306,6 +306,8 @@ public:
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
+	//! Get the record count of every table that has global stats
+	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,

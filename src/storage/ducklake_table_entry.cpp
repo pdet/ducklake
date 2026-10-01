@@ -471,16 +471,15 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
+bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
+	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
+}
+
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
-	if (IsTransactionLocal()) {
-		// no stats for transaction local tables
+	if (!CanUseGlobalStats(transaction)) {
 		return nullptr;
 	}
 	auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
-	if (transaction.HasTransactionLocalInserts(GetTableId())) {
-		// no stats if there are transaction-local inserts
-		return nullptr;
-	}
 	return dl_catalog.GetTableStats(transaction, GetTableId());
 }
 
@@ -1782,8 +1781,12 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetAddColumnInfo() const {
 
 TableStorageInfo DuckLakeTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo storage_info;
-	auto table_stats = GetTableStats(context);
-	storage_info.cardinality = table_stats ? table_stats->record_count : 0;
+	storage_info.cardinality = 0;
+	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
+	if (CanUseGlobalStats(transaction)) {
+		auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
+		storage_info.cardinality = dl_catalog.GetTableRecordCount(transaction, GetTableId());
+	}
 	return storage_info;
 }
 
