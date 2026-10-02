@@ -21,6 +21,13 @@ SELECT 1, 'CREATE TABLE lake.empty_wide (' ||
 string_agg('c' || j || ' ' || ['INTEGER', 'VARCHAR', 'DOUBLE', 'BIGINT'][j % 4 + 1], ', ' ORDER BY j) || ');'
 FROM range(30) t(j)) ORDER BY o)
 TO '${BENCHMARK_DIR}/warm_gen/schema.sql' (HEADER false, QUOTE '');
+COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/warm_blank'
+(FORMAT CSV, PARTITION_BY (part), OVERWRITE);
+ATTACH '${BENCHMARK_DIR}/warm_blank/blank.db' AS blank;
+DETACH blank;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/warm_blank/blank.db'))
+TO '${BENCHMARK_DIR}/warm.db' (FORMAT blob);
+COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/warm.db.wal' (FORMAT blob);
 ATTACH 'ducklake:${BENCHMARK_DIR}/warm.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/warm_files');
 BEGIN;
 IMPORT DATABASE '${BENCHMARK_DIR}/warm_gen';
@@ -36,6 +43,7 @@ SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'small_inl'))
 OR (SELECT count(*) FROM lake.small_inl) <> 5
 OR (SELECT count(*) FROM ducklake_list_files('lake', 'evolved')) < 40
 THEN error('small_inl must be inlined and evolved must have a file per partition') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT 1) TO '${BENCHMARK_DIR}/warm_ready.marker' (FORMAT CSV);
 ATTACH 'ducklake:${BENCHMARK_DIR}/warm.db' AS lake (READ_ONLY);
