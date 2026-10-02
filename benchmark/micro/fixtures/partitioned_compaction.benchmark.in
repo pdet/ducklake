@@ -1,18 +1,12 @@
-# name: benchmark/micro/fixtures/snap1000.benchmark.in
-# description: Lake with 1006 snapshots: 1000 commits into t and m, then a delete and rewrite of t and a merge of m
+# name: benchmark/micro/fixtures/partitioned_compaction.benchmark.in
+# description: Lake with 100 identity partitions and three 2048-row files per partition
 # group: [fixtures]
 
-argument lake snap1000
+argument lake partitioned_compaction_v1
 
 cache_file ${lake}_ready.marker
 
-# Every generated schema.sql line ends with COMMIT; BEGIN;, so each of the 1000 lines becomes one snapshot
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT 'INSERT INTO lake.t SELECT i, ''v'' || i, i * 0.5 FROM range(' || k * 100 || ', ' || (k + 1) * 100
-|| ') r(i); INSERT INTO lake.m SELECT i, ''v'' || i, i * 0.5 FROM range(' || k * 1000 || ', ' || (k + 1) * 1000
-|| ') r(i); COMMIT; BEGIN;' FROM range(1000) t(k))
-TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/${lake}_pristine_blank'
 (FORMAT CSV, PARTITION_BY (part), OVERWRITE);
 ATTACH '${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db' AS blank;
@@ -22,12 +16,19 @@ TO '${BENCHMARK_DIR}/${lake}_pristine.db' (FORMAT blob);
 COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${lake}_pristine.db.wal' (FORMAT blob);
 ATTACH 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files');
 CALL lake.set_option('data_inlining_row_limit', 0);
-CREATE TABLE lake.t (id BIGINT, v VARCHAR, x DOUBLE);
-CREATE TABLE lake.m (id BIGINT, v VARCHAR, x DOUBLE);
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-DELETE FROM lake.t WHERE id % 100 < 96;
-CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0.5);
-CALL ducklake_merge_adjacent_files('lake', 'm');
+CREATE TABLE lake.events (part INTEGER, id BIGINT, v BIGINT);
+ALTER TABLE lake.events SET PARTITIONED BY (part);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(2048) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(2048, 4096) rows(r);
+INSERT INTO lake.events
+SELECT p, p * 6144 + r AS id, id * 3 + 7 FROM range(100) parts(p), range(4096, 6144) rows(r);
+SELECT CASE WHEN (SELECT count(*) <> 300 OR NOT bool_and(n = 2048) FROM (
+SELECT part, filename, count(*) AS n FROM lake.events GROUP BY ALL))
+OR (SELECT count(DISTINCT part) <> 100 FROM lake.events)
+OR (SELECT max(snapshot_id) <> 5 FROM lake.snapshots())
+THEN error('expected three 2048-row files in each of 100 partitions') END;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))

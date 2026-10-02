@@ -32,9 +32,17 @@ FROM range(${file_count}) t(i);
 COPY src TO '${BENCHMARK_DIR}/${lake}_source'
 (FORMAT PARQUET, PARTITION_BY (col_long_name_001), WRITE_PARTITION_COLUMNS true, OVERWRITE);
 DROP TABLE src;
+COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/${lake}_pristine_blank'
+(FORMAT CSV, PARTITION_BY (part), OVERWRITE);
+ATTACH '${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db' AS blank;
+DETACH blank;
+COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db'))
+TO '${BENCHMARK_DIR}/${lake}_pristine.db' (FORMAT blob);
+COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${lake}_pristine.db.wal' (FORMAT blob);
 ATTACH 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files');
-CREATE OR REPLACE TABLE lake.big_files AS
+CREATE TABLE lake.big_files AS
 SELECT * FROM read_parquet('${BENCHMARK_DIR}/${lake}_source/**/*.parquet') LIMIT 0;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
@@ -42,6 +50,7 @@ COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
 DETACH DATABASE IF EXISTS lake;
 COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
 TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
+COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${work}.db.wal' (FORMAT blob);
 ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
