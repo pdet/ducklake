@@ -90,6 +90,14 @@
       "paths": [
         "test/sql/quack/partial_file_count.test"
       ]
+    },
+    {
+      "reason": "FIXME: duckdb-postgres f9db66e re-looks up attached tables while planning (PostgresGetBindInfo); a concurrent pg_clear_cache from another DuckLake commit empties the catalog set between load and lookup, so the lookup fails",
+      "paths": [
+        "test/sql/catalog/schema_cache_concurrent_prepare.test",
+        "test/sql/concurrent/concurrent_table_creation.test_slow",
+        "test/sql/settings/max_retry_count.test"
+      ]
     }
   ]
 }
