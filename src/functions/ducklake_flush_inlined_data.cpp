@@ -612,9 +612,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         TableIndex bind_index, vector<Identifier> &return_names) {
-	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
