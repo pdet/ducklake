@@ -278,10 +278,10 @@ public:
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	//! Delete inlined data rows with begin_snapshot <= flush_snapshot_id
-	void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
-	//! Marks that inlined data have been deleted in a flush if retries are necessary
+	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
+	//! Whether this transaction flushed the inlined data table
+	bool InlinedTableFlushed(const string &table_name);
 
 	bool ChangesMade() const;
 	idx_t GetLocalCatalogId();
@@ -378,6 +378,8 @@ private:
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
 	unique_ptr<Connection> connection;
+	//! Flushes of several tables finalize in parallel while scans check the flushed tables
+	mutex flushed_inlined_lock;
 	//! The snapshot of the transaction (latest snapshot in DuckLake)
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;

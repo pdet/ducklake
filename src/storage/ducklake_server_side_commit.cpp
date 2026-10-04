@@ -688,7 +688,11 @@ vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex tabl
 	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<string>(0));
+		auto name = row.GetValue<string>(0);
+		// the tables flushed by this transaction are emptied by its commit
+		if (!state->InlinedTableFlushed(name)) {
+			names.push_back(std::move(name));
+		}
 	}
 	return names;
 }

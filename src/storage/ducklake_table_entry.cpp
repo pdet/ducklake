@@ -488,11 +488,21 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 	return metadata_manager.GetNetDataFileRowCount(GetTableId(), transaction.GetSnapshot());
 }
 
+vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction) const {
+	vector<DuckLakeInlinedTableInfo> result;
+	for (auto &inlined_table : inlined_data_tables) {
+		if (!transaction.InlinedTableFlushed(inlined_table.table_name)) {
+			result.push_back(inlined_table);
+		}
+	}
+	return result;
+}
+
 idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
-	for (auto &inlined_table : inlined_data_tables) {
+	for (auto &inlined_table : GetInlinedDataTables(transaction)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 	}
 	return total;

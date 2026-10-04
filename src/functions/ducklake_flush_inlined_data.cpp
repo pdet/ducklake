@@ -212,7 +212,6 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
 	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
 	return SinkFinalizeType::READY;
 }
@@ -674,8 +673,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				continue;
 			}
 			auto &table = table_ref.get();
-			auto &inlined_tables = table.GetInlinedDataTables();
-			for (auto &inlined_table : inlined_tables) {
+			for (auto &inlined_table : table.GetInlinedDataTables(transaction)) {
 				DuckLakeDataFlusher compactor(context, ducklake_catalog, transaction, *input.binder, table.GetTableId(),
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());

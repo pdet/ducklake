@@ -206,6 +206,8 @@ public:
 	DuckLakePath GetRelativePath(const string &path) const;
 
 	bool SchemaChangesMade() const;
+	//! Whether the inlined data table was flushed, the commit deletes its rows
+	bool InlinedTableFlushed(const string &table_name) const;
 
 public:
 	DatabaseInstance &db;

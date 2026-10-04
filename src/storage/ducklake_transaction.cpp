@@ -1561,7 +1561,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (!entry) {
 			return names;
 		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables(*this)) {
 			names.push_back(t.table_name);
 		}
 		return names;
@@ -1640,14 +1640,14 @@ void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inli
 	metadata_manager.DeleteInlinedData(inlined_table);
 }
 
-void DuckLakeTransaction::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
-                                                   idx_t flush_snapshot_id) {
-	auto &metadata_manager = GetMetadataManager();
-	metadata_manager.DeleteFlushedInlinedData(inlined_table, flush_snapshot_id);
+void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
 }
 
-void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
+bool DuckLakeTransaction::InlinedTableFlushed(const string &table_name) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	return state->InlinedTableFlushed(table_name);
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {

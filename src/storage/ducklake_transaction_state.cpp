@@ -72,6 +72,15 @@ bool DuckLakeTransactionState::SchemaChangesMade() const {
 	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
 }
 
+bool DuckLakeTransactionState::InlinedTableFlushed(const string &table_name) const {
+	for (auto &flushed_table : flushed_inlined_tables) {
+		if (flushed_table.inlined_table.table_name == table_name) {
+			return true;
+		}
+	}
+	return false;
+}
+
 namespace {
 
 template <class T, class MAP>

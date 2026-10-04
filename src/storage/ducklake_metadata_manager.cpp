@@ -6107,19 +6107,6 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 	}
 }
 
-void DuckLakeMetadataManager::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
-                                                       idx_t flush_snapshot_id) {
-	auto result = Execute(StringUtil::Format(R"(
-		DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d
-)",
-	                                         SQLIdentifier(inlined_table.table_name), InlinedColNames().begin_snapshot,
-	                                         flush_snapshot_id));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to delete flushed inlined data in DuckLake from table " +
-		                               inlined_table.table_name + ": ");
-	}
-}
-
 string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;

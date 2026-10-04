@@ -477,7 +477,6 @@ public:
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! We delete at the flush
-	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
 	//! If it conflicts we batch everything at the retry
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const DuckLakeInlinedColNames &col_names);
