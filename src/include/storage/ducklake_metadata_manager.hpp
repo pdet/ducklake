@@ -501,7 +501,7 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
-	//! Rebuilds the schema version begin snapshots that the v0.3 migration of DuckDB 1.5.0 and 1.5.1 got wrong
+	//! Rebuilds the begin snapshots of schema versions that a migration set to the begin snapshot of their table
 	void RepairSchemaVersionBeginSnapshots();
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
@@ -562,9 +562,11 @@ public:
 	                                    const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                                    const string &base_data_path, const string &separator);
 
+	//! The type an inlined table stores a column as
+	string GetColumnType(const DuckLakeColumnInfo &col);
+
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
-	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetKnownFilesForCleanupQuery(const string &separator) const;
 
 	//! Optimized data file writing using DuckDB Appender API (only for DuckDB metadata manager)

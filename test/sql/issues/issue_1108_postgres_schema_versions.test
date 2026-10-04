@@ -1,0 +1,57 @@
+# name: test/sql/issues/issue_1108_postgres_schema_versions.test
+# description: Repair the schema version begin snapshots of a Postgres catalog, which stores inlined TINYINT columns as SMALLINT
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1108_postgres', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER)
+
+statement ok
+CREATE TABLE dl.u (x INTEGER)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN c TINYINT
+
+statement ok
+INSERT INTO dl.t VALUES (1, 1)
+
+statement ok
+ALTER TABLE dl.t ALTER c TYPE SMALLINT
+
+statement ok
+INSERT INTO dl.t VALUES (2, 300)
+
+# the damage of the v0.3 migration gives every version of a table the begin snapshot of the table
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'UPDATE ducklake_schema_versions SET begin_snapshot = 1 WHERE table_id = 1')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1108_postgres', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_dl.ducklake_schema_versions WHERE table_id = 1
+----
+[(1, 1), (3, 3), (5, 4)]
+
+query II
+SELECT * FROM dl.t ORDER BY id
+----
+1	1
+2	300

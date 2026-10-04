@@ -474,28 +474,85 @@ optional_idx FirstSnapshotFrom(const SnapshotRanges &ranges, idx_t minimum) {
 }
 
 struct ColumnVersion {
+	idx_t column_id;
+	optional_idx parent_column;
 	idx_t begin_snapshot;
 	optional_idx end_snapshot;
 	string name;
 	string type;
-	bool top_level;
+
+	bool ExistsAt(idx_t snapshot) const {
+		return begin_snapshot <= snapshot && (!end_snapshot.IsValid() || end_snapshot.GetIndex() > snapshot);
+	}
 };
 
+//! The column with the fields it had at a snapshot
+DuckLakeColumnInfo GetColumnAtSnapshot(const vector<ColumnVersion> &columns, const ColumnVersion &column,
+                                       idx_t snapshot) {
+	DuckLakeColumnInfo result;
+	result.name = column.name;
+	result.type = column.type;
+	if (!DuckLakeTypes::FromString(column.type).IsNested()) {
+		return result;
+	}
+	for (auto &child : columns) {
+		if (child.parent_column == column.column_id && child.ExistsAt(snapshot)) {
+			result.children.push_back(GetColumnAtSnapshot(columns, child, snapshot));
+		}
+	}
+	return result;
+}
+
+//! Whether a stored type has the numbers and the nesting of a type, other types can be stored as text
+bool InlinedTypeMatches(const LogicalType &stored, const LogicalType &expected) {
+	if (expected.IsNumeric()) {
+		return stored == expected;
+	}
+	switch (expected.id()) {
+	case LogicalTypeId::STRUCT: {
+		auto child_count = StructType::GetChildCount(expected);
+		if (stored.id() != LogicalTypeId::STRUCT || StructType::GetChildCount(stored) != child_count) {
+			return false;
+		}
+		for (idx_t i = 0; i < child_count; i++) {
+			if (StructType::GetChildName(stored, i) != StructType::GetChildName(expected, i) ||
+			    !InlinedTypeMatches(StructType::GetChildType(stored, i), StructType::GetChildType(expected, i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+	case LogicalTypeId::LIST:
+		return stored.id() == LogicalTypeId::LIST &&
+		       InlinedTypeMatches(ListType::GetChildType(stored), ListType::GetChildType(expected));
+	case LogicalTypeId::MAP:
+		return stored.id() == LogicalTypeId::MAP &&
+		       InlinedTypeMatches(MapType::KeyType(stored), MapType::KeyType(expected)) &&
+		       InlinedTypeMatches(MapType::ValueType(stored), MapType::ValueType(expected));
+	default:
+		return true;
+	}
+}
+
 //! Whether the columns of a table at a snapshot are the columns of an inlined table, whose metadata columns come first
-bool InlinedColumnsMatch(const vector<ColumnVersion> &columns, idx_t snapshot, QueryResult &inlined) {
+bool InlinedColumnsMatch(DuckLakeMetadataManager &metadata, const vector<ColumnVersion> &columns, idx_t snapshot,
+                         QueryResult &inlined, unordered_map<string, LogicalType> &storage_types) {
 	auto &names = inlined.GetNames();
 	auto &types = inlined.GetTypes();
 	idx_t index = 3;
 	for (auto &column : columns) {
-		if (!column.top_level || column.begin_snapshot > snapshot ||
-		    (column.end_snapshot.IsValid() && column.end_snapshot.GetIndex() <= snapshot)) {
+		if (column.parent_column.IsValid() || !column.ExistsAt(snapshot)) {
 			continue;
 		}
 		if (index >= names.size() || !StringUtil::CIEquals(names[index].GetIdentifierName(), column.name)) {
 			return false;
 		}
-		// a type change only promotes numbers, and some backends store other types as text
-		if (types[index].IsNumeric() && DuckLakeTypes::ToString(types[index]) != column.type) {
+		auto storage_type = metadata.GetColumnType(GetColumnAtSnapshot(columns, column, snapshot));
+		auto entry = storage_types.find(storage_type);
+		if (entry == storage_types.end()) {
+			entry = storage_types.emplace(storage_type, UnboundType::TryParseAndDefaultBind(storage_type)).first;
+		}
+		if (!InlinedTypeMatches(types[index], entry->second)) {
 			return false;
 		}
 		index++;
@@ -522,7 +579,7 @@ SELECT table_id, table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inl
 		return result;
 	}
 	auto column_result = metadata.Query(R"(
-SELECT table_id, begin_snapshot, end_snapshot, column_name, column_type, parent_column IS NULL
+SELECT table_id, column_id, parent_column, begin_snapshot, end_snapshot, column_name, column_type
 FROM {METADATA_CATALOG}.ducklake_column
 ORDER BY table_id, column_order)");
 	if (column_result->HasError()) {
@@ -531,16 +588,20 @@ ORDER BY table_id, column_order)");
 	map<idx_t, vector<ColumnVersion>> table_columns;
 	for (auto &row : *column_result) {
 		ColumnVersion column;
-		column.begin_snapshot = row.GetValue<idx_t>(1);
+		column.column_id = row.GetValue<idx_t>(1);
 		if (!row.IsNull(2)) {
-			column.end_snapshot = row.GetValue<idx_t>(2);
+			column.parent_column = row.GetValue<idx_t>(2);
 		}
-		column.name = row.GetValue<string>(3);
-		column.type = row.GetValue<string>(4);
-		column.top_level = row.GetValue<bool>(5);
+		column.begin_snapshot = row.GetValue<idx_t>(3);
+		if (!row.IsNull(4)) {
+			column.end_snapshot = row.GetValue<idx_t>(4);
+		}
+		column.name = row.GetValue<string>(5);
+		column.type = row.GetValue<string>(6);
 		table_columns[row.GetValue<idx_t>(0)].push_back(std::move(column));
 	}
 	// an inlined table has the columns of its table when its version began and rows inserted after that
+	unordered_map<string, LogicalType> storage_types;
 	for (auto &inlined : inlined_tables) {
 		auto sample = metadata.Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s ORDER BY 2 LIMIT 1",
 		                                                SQLIdentifier(inlined.second)));
@@ -557,7 +618,7 @@ ORDER BY table_id, column_order)");
 		}
 		SnapshotRanges ranges;
 		for (auto change = column_changes.begin(); change != column_changes.end(); change++) {
-			if (InlinedColumnsMatch(columns, *change, *sample)) {
+			if (InlinedColumnsMatch(metadata, columns, *change, *sample, storage_types)) {
 				auto next_change = std::next(change);
 				ranges.emplace_back(*change, next_change == column_changes.end() ? NumericLimits<idx_t>::Maximum()
 				                                                                 : *next_change - 1);
@@ -646,7 +707,7 @@ SELECT table_id, begin_snapshot, schema_version FROM {METADATA_CATALOG}.ducklake
 	for (auto &row : *rows) {
 		table_begins[make_pair(row.GetValue<idx_t>(0), row.GetValue<idx_t>(1))].insert(row.GetValue<idx_t>(2));
 	}
-	// the v0.3 to v0.4 migration of DuckDB 1.5.0 and 1.5.1 gave all versions of a table the table begin snapshot
+	// a damaged table has several versions that begin at the begin snapshot of the table
 	map<idx_t, idx_t> known_begins;
 	set<idx_t> versions;
 	bool damaged = false;

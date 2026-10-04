@@ -16,6 +16,9 @@ unzip data/old_ducklake/schema_versions_v151_v10.db.gz {TEST_DIR}/issue_1108_v10
 
 unzip data/old_ducklake/schema_versions_v151_v11.db.gz {TEST_DIR}/issue_1108_v11.db
 
+# a catalog where a struct field was added after a change whose objects were expired
+unzip data/old_ducklake/schema_versions_v151_nested.db.gz {TEST_DIR}/issue_1108_nested.db
+
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/issue_1108.db' AS dl (DATA_PATH '{TEST_DIR}/issue_1108', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
@@ -57,3 +60,12 @@ query I
 SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_v11.ducklake_schema_versions WHERE table_id = 1
 ----
 [(1, 1), (2, 2), (3, 3)]
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1108_nested.db' AS nested (DATA_PATH '{TEST_DIR}/issue_1108_nested', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT * FROM nested.t ORDER BY id
+----
+1	{'a': 1, 'b': NULL}
+2	{'a': 2, 'b': 3}
