@@ -292,7 +292,7 @@ WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR
 		col_names.end_snapshot = names[2].GetIdentifierName();
 		vector<string> select_list;
 		for (idx_t i = 0; i < 3; i++) {
-			select_list.push_back(StringUtil::Format("%s", SQLIdentifier(names[i].GetIdentifierName())));
+			select_list.push_back(SQLIdentifier::ToString(names[i].GetIdentifierName()));
 		}
 		string column_defs;
 		bool rewrite = false;
@@ -312,7 +312,7 @@ WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR
 			// DuckLake 0.3 stored values with the native type of their DuckLake type, other columns are kept
 			auto &stored_type = probe->GetTypes()[i];
 			bool convert = stored_type != storage_type && stored_type == native_type;
-			auto column_name = StringUtil::Format("%s", SQLIdentifier(name));
+			auto column_name = SQLIdentifier::ToString(name);
 			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());
 			select_list.push_back(convert ? DuckLakeUtil::InlinedStorageExpression(*this, column_name, type)
