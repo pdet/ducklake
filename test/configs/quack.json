@@ -126,6 +126,12 @@
       ]
     },
     {
+      "reason": "Snapshots expire when the transaction commits on quack so a rollback keeps them, so a cleanup in the same transaction does not see their files yet.",
+      "paths": [
+        "test/sql/transaction/expire_cleanup_same_transaction.test"
+      ]
+    },
+    {
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
       "paths": [
         "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"

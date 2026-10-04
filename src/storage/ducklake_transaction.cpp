@@ -776,10 +776,16 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::Commit() {
-	try {
-		if (!expired_snapshots.empty()) {
+	if (!expired_snapshots.empty()) {
+		try {
 			GetMetadataManager().DeleteSnapshots(expired_snapshots);
+		} catch (...) {
+			// the other changes of the transaction are not committed yet
+			Rollback();
+			throw;
 		}
+	}
+	try {
 		if (ChangesMade()) {
 			FlushChanges();
 		} else if (connection) {
@@ -1634,6 +1640,11 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 }
 
 void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	auto &metadata_manager = GetMetadataManager();
+	if (!metadata_manager.CommitsEachStatement()) {
+		metadata_manager.DeleteSnapshots(snapshots);
+		return;
+	}
 	// deleted when the transaction commits, so a rollback keeps them
 	expired_snapshots.insert(expired_snapshots.end(), snapshots.begin(), snapshots.end());
 }

@@ -11,7 +11,6 @@
 #include "common/ducklake_snapshot.hpp"
 #include "common/index.hpp"
 #include "duckdb/common/common.hpp"
-#include "duckdb/common/map.hpp"
 
 #include <vector>
 
@@ -49,7 +48,6 @@ enum class DuckLakeStagedTableType : uint8_t {
 	TABLES_DELETED_FROM,
 	TABLES_DELETE_ATTEMPTED,
 	FLUSHED_INLINED,
-	FLUSHED_INLINED_FILE_DELETE,
 	COMPACTION,
 	COMPACTION_SOURCE,
 	NAME_MAP,
@@ -112,8 +110,7 @@ private:
 	//! Emits column name mapping entries.
 	string EmitNameMaps(const DuckLakeNameMapSet &name_maps) const;
 	//! Emits flushed inlined table references.
-	string EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed,
-	                                const map<TableIndex, idx_t> &flushed_file_deletions) const;
+	string EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed) const;
 	//! Emits dropped file paths and tables-deleted-from markers.
 	string EmitDroppedFiles(DuckLakeTransaction &transaction) const;
 };

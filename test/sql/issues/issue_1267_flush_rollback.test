@@ -91,7 +91,10 @@ SELECT count(*) FROM dl.d
 ----
 98
 
-# a flush whose commit fails keeps the inlined rows
+# a flush whose commit fails keeps the inlined rows and inlined file deletions
+statement ok
+INSERT INTO dl.t VALUES (100)
+
 statement ok
 CALL dl.set_option('require_commit_message', true)
 
@@ -103,4 +106,9 @@ Commit Information for the snapshot is required
 query II
 SELECT count(*), sum(i) FROM dl.t
 ----
-5	10
+6	110
+
+query I
+SELECT count(*) FROM dl.d
+----
+98

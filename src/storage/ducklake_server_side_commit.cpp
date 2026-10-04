@@ -518,10 +518,6 @@ void DuckLakeServerSideCommit::ReadStagedFlushedInlinedTables() {
 		entry.flush_snapshot_id = AsIdx(row, 2);
 		state->flushed_inlined_tables.push_back(std::move(entry));
 	}
-	auto file_deletions = ScanStagedTable(DuckLakeStagedTableType::FLUSHED_INLINED_FILE_DELETE);
-	for (auto &row : *file_deletions) {
-		state->flushed_inlined_file_deletions[TableIndex(AsIdx(row, 0))] = AsIdx(row, 1);
-	}
 }
 
 void DuckLakeServerSideCommit::ReadStagedCompactions() {
@@ -692,11 +688,7 @@ vector<string> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex tabl
 	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
-		auto name = row.GetValue<string>(0);
-		// the tables flushed by this transaction are emptied by its commit
-		if (!state->InlinedTableFlushed(name)) {
-			names.push_back(std::move(name));
-		}
+		names.push_back(row.GetValue<string>(0));
 	}
 	return names;
 }

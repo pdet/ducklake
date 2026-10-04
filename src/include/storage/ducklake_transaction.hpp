@@ -280,11 +280,9 @@ public:
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
-	//! Whether this transaction flushed the inlined data table
 	bool InlinedTableFlushed(const string &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
-	//! Whether this transaction flushed the inlined file deletions of the table
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;

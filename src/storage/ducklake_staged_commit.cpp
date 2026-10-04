@@ -51,8 +51,6 @@ const char *DuckLakeStagedTable::BaseName(DuckLakeStagedTableType type) {
 		return "ducklake_staged_tables_delete_attempted";
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
 		return "ducklake_staged_flushed_inlined";
-	case DuckLakeStagedTableType::FLUSHED_INLINED_FILE_DELETE:
-		return "ducklake_staged_flushed_inlined_file_delete";
 	case DuckLakeStagedTableType::COMPACTION:
 		return "ducklake_staged_compaction";
 	case DuckLakeStagedTableType::COMPACTION_SOURCE:
@@ -109,8 +107,6 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 		return "table_id BIGINT";
 	case DuckLakeStagedTableType::FLUSHED_INLINED:
 		return "inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT";
-	case DuckLakeStagedTableType::FLUSHED_INLINED_FILE_DELETE:
-		return "table_id BIGINT, flush_snapshot_id BIGINT";
 	case DuckLakeStagedTableType::COMPACTION:
 		return "compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, row_id_start BIGINT";
 	case DuckLakeStagedTableType::COMPACTION_SOURCE:
@@ -161,7 +157,6 @@ const vector<DuckLakeStagedTableType> &DuckLakeStagedTable::AllTypes() {
 	                                                      DuckLakeStagedTableType::TABLES_DELETED_FROM,
 	                                                      DuckLakeStagedTableType::TABLES_DELETE_ATTEMPTED,
 	                                                      DuckLakeStagedTableType::FLUSHED_INLINED,
-	                                                      DuckLakeStagedTableType::FLUSHED_INLINED_FILE_DELETE,
 	                                                      DuckLakeStagedTableType::COMPACTION,
 	                                                      DuckLakeStagedTableType::COMPACTION_SOURCE,
 	                                                      DuckLakeStagedTableType::NAME_MAP,
@@ -473,19 +468,13 @@ string DuckLakeStagedCommit::EmitNameMaps(const DuckLakeNameMapSet &name_maps) c
 	return sql;
 }
 
-string DuckLakeStagedCommit::EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed,
-                                                      const map<TableIndex, idx_t> &flushed_file_deletions) const {
+string DuckLakeStagedCommit::EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed) const {
 	string sql;
 	for (auto &entry : flushed) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu, %llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::FLUSHED_INLINED),
 		                          SQLString(entry.inlined_table.table_name), entry.inlined_table.schema_version,
 		                          entry.flush_snapshot_id);
-	}
-	for (auto &entry : flushed_file_deletions) {
-		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu);",
-		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::FLUSHED_INLINED_FILE_DELETE),
-		                          entry.first.index, entry.second);
 	}
 	return sql;
 }
@@ -528,8 +517,7 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction, const DuckL
 	batch += EmitInlinedFileDeletes(local_changes);
 	batch += EmitDeleteFiles(local_changes);
 	batch += EmitDroppedFiles(transaction);
-	batch +=
-	    EmitFlushedInlinedTables(transaction.GetFlushedInlinedTables(), transaction.GetFlushedInlinedFileDeletions());
+	batch += EmitFlushedInlinedTables(transaction.GetFlushedInlinedTables());
 	batch += EmitNameMaps(transaction.GetNewNameMaps());
 
 	int64_t schema_version_param = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
