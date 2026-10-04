@@ -37,9 +37,33 @@ EXECUTE merge
 main	t	2	1
 
 statement ok
+COPY (SELECT 3 AS i) TO '{DATA_PATH}/issue_1419_f3.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/issue_1419_f3.parquet')
+
+query IIII
+EXECUTE merge
+----
+main	t	2	1
+
+statement ok
 DELETE FROM dl.t WHERE i = 2
 
 query IIII
 EXECUTE rewrite
 ----
 main	t	1	1
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+query IIII
+EXECUTE rewrite
+----
+main	t	1	1
+
+query II
+SELECT i, (SELECT count(*) FROM ducklake_list_files('dl', 't')) FROM dl.t
+----
+1	1

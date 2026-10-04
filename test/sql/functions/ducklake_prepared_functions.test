@@ -77,6 +77,11 @@ statement ok
 CALL ducklake_merge_adjacent_files('dl')
 
 query I
+EXECUTE list_files
+----
+1
+
+query I
 EXECUTE cleanup_old_files
 ----
 2
