@@ -479,6 +479,7 @@ public:
 	//! We delete at the flush
 	//! If it conflicts we batch everything at the retry
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const DuckLakeInlinedColNames &col_names);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 

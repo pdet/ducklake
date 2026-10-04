@@ -3690,6 +3690,11 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 	// The table name is always deterministic
 	string table_name = InlinedFileDeletionTableName(table_id);
 
+	// this transaction reads the deletions it flushed from its delete files
+	if (!create_if_not_exists && transaction.InlinedFileDeletionsFlushed(table_id)) {
+		return string();
+	}
+
 	// Check per-transaction cache first (covers tables created in this transaction)
 	if (delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end()) {
 		return table_name;
@@ -6108,12 +6113,17 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 }
 
 string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                                                 const map<TableIndex, idx_t> &flushed_file_deletions,
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
 		                             flushed.flush_snapshot_id);
+	}
+	for (auto &flushed : flushed_file_deletions) {
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= %d;\n",
+		                             SQLIdentifier(InlinedFileDeletionTableName(flushed.first)), flushed.second);
 	}
 	return result;
 }

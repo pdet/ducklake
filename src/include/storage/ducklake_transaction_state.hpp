@@ -236,6 +236,8 @@ public:
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;
 	vector<FlushedInlinedTableInfo> flushed_inlined_tables;
+	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
+	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
 };
 

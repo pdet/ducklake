@@ -1650,6 +1650,16 @@ bool DuckLakeTransaction::InlinedTableFlushed(const string &table_name) {
 	return state->InlinedTableFlushed(table_name);
 }
 
+void DuckLakeTransaction::MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	state->flushed_inlined_file_deletions[table_id] = flush_snapshot_id;
+}
+
+bool DuckLakeTransaction::InlinedFileDeletionsFlushed(TableIndex table_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	return state->flushed_inlined_file_deletions.count(table_id) > 0;
+}
+
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
 	auto start = std::chrono::steady_clock::now();
@@ -1969,6 +1979,10 @@ const set<TableIndex> &DuckLakeTransaction::GetTablesDeleteAttempted() const {
 
 const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {
 	return state->flushed_inlined_tables;
+}
+
+const map<TableIndex, idx_t> &DuckLakeTransaction::GetFlushedInlinedFileDeletions() const {
+	return state->flushed_inlined_file_deletions;
 }
 
 bool DuckLakeTransaction::FileIsDropped(const string &path) const {
