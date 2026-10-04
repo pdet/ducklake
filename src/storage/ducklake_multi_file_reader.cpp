@@ -209,12 +209,7 @@ shared_ptr<MultiFileList> DuckLakeMultiFileReader::CreateFileList(ClientContext 
 
 MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_id, bool emit_key_value) {
 	MultiFileColumnDefinition column(field_id.Name(), field_id.Type());
-	auto &column_data = field_id.GetColumnData();
-	if (column_data.initial_default.IsNull()) {
-		column.default_expression = ConstantExpression::FromValue(Value(field_id.Type()));
-	} else {
-		column.default_expression = ConstantExpression::FromValue(column_data.initial_default);
-	}
+	column.default_expression = field_id.GetInitialDefault();
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
 	for (auto &child : field_id.Children()) {
 		column.children.push_back(CreateColumnFromFieldId(*child, emit_key_value));
@@ -308,7 +303,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
 			auto transaction = read_info.GetTransaction();
 			auto inlined_deletes = transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path);
-			if (inlined_deletes) {
+			// the flush source query already excludes these rows
+			if (inlined_deletes && read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
 				auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 				delete_filter->Initialize(*inlined_deletes);
 				reader.deletion_filter = std::move(delete_filter);
