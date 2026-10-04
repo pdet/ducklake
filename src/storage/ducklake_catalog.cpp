@@ -225,6 +225,7 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
+	ReleaseDatabaseName();
 }
 
 void DuckLakeCatalog::Initialize(bool load_builtin) {
@@ -248,6 +249,7 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
+	ClaimDatabaseName();
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
@@ -1107,7 +1109,10 @@ optional_ptr<BoundAtClause> DuckLakeCatalog::CatalogSnapshot() const {
 }
 
 void DuckLakeCatalog::OnDetach(ClientContext &context) {
-	// detach the metadata database
+	// the metadata database stays attached while another DuckLake uses it
+	if (!ReleaseDatabaseName()) {
+		return;
+	}
 	auto &db_manager = DatabaseManager::Get(context);
 	db_manager.DetachDatabase(context, Identifier(MetadataDatabaseName()), OnEntryNotFound::RETURN_NULL);
 }
@@ -1364,6 +1369,38 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
 	return GetDatabase().GetObjectCache();
+}
+
+void DuckLakeCatalog::ClaimDatabaseName() {
+	attached_databases =
+	    GetObjectCacheInstance().GetOrCreate<DuckLakeAttachedDatabases>(DuckLakeAttachedDatabases::ObjectType());
+	auto name = GetAttached().GetName().GetIdentifierName();
+	lock_guard<mutex> guard(attached_databases->lock);
+	auto entry = attached_databases->entries.find(name);
+	if (entry != attached_databases->entries.end() && entry->second.catalog != this &&
+	    options.on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
+		// fail before attaching a metadata database that would replace the one of the attached DuckLake
+		throw BinderException("Failed to attach database: database with name \"%s\" already exists", name);
+	}
+	attached_databases->entries[name] = {this, MetadataDatabaseName()};
+	claimed_name = name;
+}
+
+bool DuckLakeCatalog::ReleaseDatabaseName() {
+	if (!attached_databases) {
+		return true;
+	}
+	lock_guard<mutex> guard(attached_databases->lock);
+	auto entry = attached_databases->entries.find(claimed_name);
+	if (entry != attached_databases->entries.end() && entry->second.catalog == this) {
+		attached_databases->entries.erase(entry);
+	}
+	for (auto &other : attached_databases->entries) {
+		if (StringUtil::CIEquals(other.second.metadata_catalog, MetadataDatabaseName())) {
+			return false;
+		}
+	}
+	return true;
 }
 
 } // namespace duckdb

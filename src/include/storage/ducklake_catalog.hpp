@@ -29,6 +29,7 @@
 
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
+class DuckLakeCatalog;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
@@ -104,6 +105,26 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 		return ObjectType();
 	}
 	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! The DuckLake attached under each database name of a database instance
+struct DuckLakeAttachedDatabases : public ObjectCacheEntry {
+	struct Entry {
+		DuckLakeCatalog *catalog;
+		string metadata_catalog;
+	};
+	mutex lock;
+	case_insensitive_map_t<Entry> entries;
+
+	static string ObjectType() {
+		return "ducklake_attached_databases";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return optional_idx();
+	}
 };
 
 //! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
@@ -369,6 +390,10 @@ private:
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
+	//! Claims the database name, failing when another DuckLake is attached under it
+	void ClaimDatabaseName();
+	//! Releases the database name, returns whether no attached DuckLake uses the metadata catalog anymore
+	bool ReleaseDatabaseName();
 
 private:
 	mutex name_maps_lock;
@@ -412,6 +437,10 @@ private:
 	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
+	//! The DuckLakes attached in this database instance, set once this DuckLake claimed its name
+	shared_ptr<DuckLakeAttachedDatabases> attached_databases;
+	//! The name this DuckLake claimed
+	string claimed_name;
 };
 
 } // namespace duckdb
