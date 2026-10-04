@@ -36,7 +36,8 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
-        "test/sql/metadata/metadata_schema_scoped_attach.test"
+        "test/sql/metadata/metadata_schema_scoped_attach.test",
+        "test/sql/issues/issue_1108_postgres_schema_versions.test"
       ]
     },
     {
