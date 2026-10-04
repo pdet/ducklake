@@ -354,12 +354,6 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		root = std::move(proj);
 	}
 
-	// Add another projection with casts if necessary
-	root->ResolveOperatorTypes();
-	if (DuckLakeTypes::RequiresCast(root->types)) {
-		root = DuckLakeInsert::InsertCasts(binder, root);
-	}
-
 	// If flush should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the rows being flushed,
 	// and instead pull the latest sort setting
@@ -384,6 +378,12 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 
+	// Add another projection with casts if necessary
+	root->ResolveOperatorTypes();
+	if (DuckLakeTypes::RequiresCast(root->types)) {
+		root = DuckLakeInsert::InsertCasts(binder, root);
+	}
+
 	// generate the LogicalCopyToFile
 	auto copy = make_uniq<LogicalCopyToFile>(std::move(copy_options.copy_function), std::move(copy_options.bind_data),
 	                                         std::move(copy_options.info), binder.GenerateTableIndex());
@@ -405,7 +405,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	copy->write_empty_file = copy_options.write_empty_file;
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
+	copy->expected_types = DuckLakeTypes::GetCastedTypes(copy_options.expected_types);
 
 	copy->hive_file_pattern = copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id,
 	                                                                copy_input.table_id, &copy_input.table_options);

@@ -678,15 +678,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
 	}
 
-	// Resolve types so we can check if we need casts
-	ducklake_scan->ResolveOperatorTypes();
-
-	// Insert a cast projection if necessary
 	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
-
-	if (DuckLakeTypes::RequiresCast(root->types)) {
-		root = DuckLakeInsert::InsertCasts(binder, root);
-	}
 
 	// If compaction should be ordered, add Order By (and projection) to logical plan
 	// Do not pull the sort setting at the time of the creation of the files being compacted,
@@ -708,6 +700,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto sort_data = latest_table.GetSortData();
 	if (sort_data) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
+	}
+
+	// Insert a cast projection if necessary
+	root->ResolveOperatorTypes();
+	if (DuckLakeTypes::RequiresCast(root->types)) {
+		root = DuckLakeInsert::InsertCasts(binder, root);
 	}
 
 	// read the configured row group size before copy_options.info is moved into the LogicalCopyToFile
@@ -742,7 +740,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy->write_empty_file = false;
 	copy->partition_columns = std::move(copy_options.partition_columns);
 	copy->names = copy_options.names;
-	copy->expected_types = std::move(copy_options.expected_types);
+	copy->expected_types = DuckLakeTypes::GetCastedTypes(copy_options.expected_types);
 	copy->children.push_back(std::move(root));
 
 	optional_idx target_row_id_start;

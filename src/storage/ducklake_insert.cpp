@@ -232,7 +232,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				}
 			}
 
-			if (skipped_fields.count(field_id.GetFieldIndex().index)) {
+			// the bounds of a casted column are ordered by the type it was written as
+			if (skipped_fields.count(field_id.GetFieldIndex().index) || DuckLakeTypes::RequiresCast(field_id.Type())) {
 				column_stats.ClearBounds();
 			}
 			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));
@@ -593,17 +594,8 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
-	vector<LogicalType> casted_types;
-	for (const auto &type : types_to_write) {
-		if (DuckLakeTypes::RequiresCast(type)) {
-			casted_types.push_back(DuckLakeTypes::GetCastedType(type));
-		} else {
-			casted_types.push_back(type);
-		}
-	}
-
-	auto function_data =
-	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), casted_types);
+	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write),
+	                                                    DuckLakeTypes::GetCastedTypes(types_to_write));
 
 	DuckLakeCopyOptions result(std::move(info), copy_fun.function);
 	result.bind_data = std::move(function_data);
@@ -718,11 +710,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 		} else {
 			// Still update types. If there is no child-plan node, we expect that whoever inserts chunks (e.g.
 			// DuckLakeUpdate, DuckLakeMergeInsert) directly into the physical copy operator will pre-cast the data.
-			for (auto &type : copy_options.expected_types) {
-				if (DuckLakeTypes::RequiresCast(type)) {
-					type = DuckLakeTypes::GetCastedType(type);
-				}
-			}
+			copy_options.expected_types = DuckLakeTypes::GetCastedTypes(copy_options.expected_types);
 		}
 	}
 
