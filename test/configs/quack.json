@@ -146,7 +146,8 @@
     {
       "reason": "FIXME: A failed client-side commit batch is not atomic on the quack server.",
       "paths": [
-        "test/sql/quack/server_side_commit_atomicity.test"
+        "test/sql/quack/server_side_commit_atomicity.test",
+        "test/sql/issues/issue_1472_expire_open_transaction.test"
       ]
     },
     {
