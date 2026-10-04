@@ -6,7 +6,6 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "common/ducklake_types.hpp"
-#include "duckdb/parser/parser.hpp"
 
 namespace duckdb {
 
@@ -307,8 +306,7 @@ WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR
 			DuckLakeColumnInfo column;
 			column.type = column_type->second;
 			auto storage_type_name = GetColumnType(column);
-			auto storage_type = UnboundType::TryDefaultBind(
-			    Parser::ParseColumnList("dummy " + storage_type_name).GetColumn(LogicalIndex(0)).Type());
+			auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
 			auto type = DuckLakeTypes::FromString(column.type);
 			auto native_type = type.HasAlias() ? LogicalType(type.id()) : type;
 			// DuckLake 0.3 stored values with the native type of their DuckLake type, other columns are kept
