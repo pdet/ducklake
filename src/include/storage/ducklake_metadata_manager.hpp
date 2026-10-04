@@ -506,6 +506,9 @@ public:
 	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
+	virtual void MigrateInlinedDataTypes() {
+	}
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
