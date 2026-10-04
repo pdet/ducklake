@@ -378,7 +378,6 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
 
-	// Add another projection with casts if necessary
 	root->ResolveOperatorTypes();
 	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);

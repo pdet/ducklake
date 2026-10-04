@@ -82,12 +82,9 @@ bool DuckLakeTypes::IsStringType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::BLOB;
 }
 
-static bool IsInt128Type(const LogicalType &type) {
-	return type.id() == LogicalTypeId::HUGEINT || type.id() == LogicalTypeId::UHUGEINT;
-}
-
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
-	return TypeVisitor::Contains(type, IsInt128Type);
+	// the Parquet writer rounds 128 bit integers to DOUBLE
+	return type.id() == LogicalTypeId::HUGEINT || type.id() == LogicalTypeId::UHUGEINT;
 }
 
 bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
@@ -100,10 +97,8 @@ bool DuckLakeTypes::RequiresCast(const vector<LogicalType> &types) {
 }
 
 LogicalType DuckLakeTypes::GetCastedType(const LogicalType &type) {
-	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
-		// the Parquet writer rounds 128-bit integers to DOUBLE, so they are written as decimal text
-		return IsInt128Type(child) ? LogicalType::VARCHAR : child;
-	});
+	// 128 bit integers are written as text to preserve their precision
+	return LogicalType::VARCHAR;
 }
 
 vector<LogicalType> DuckLakeTypes::GetCastedTypes(const vector<LogicalType> &types) {

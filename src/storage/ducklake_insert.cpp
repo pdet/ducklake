@@ -233,7 +233,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 
 			// the bounds of a casted column are ordered by the type it was written as
-			if (skipped_fields.count(field_id.GetFieldIndex().index) || DuckLakeTypes::RequiresCast(field_id.Type())) {
+			bool casted = column_names.size() == 1 && DuckLakeTypes::RequiresCast(field_id.Type());
+			if (skipped_fields.count(field_id.GetFieldIndex().index) || casted) {
 				column_stats.ClearBounds();
 			}
 			data_file.column_stats.insert(make_pair(field_id.GetFieldIndex(), std::move(column_stats)));

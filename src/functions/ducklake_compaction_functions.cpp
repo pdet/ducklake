@@ -702,7 +702,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data);
 	}
 
-	// Insert a cast projection if necessary
 	root->ResolveOperatorTypes();
 	if (DuckLakeTypes::RequiresCast(root->types)) {
 		root = DuckLakeInsert::InsertCasts(binder, root);

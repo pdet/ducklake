@@ -28,7 +28,6 @@ public:
 	static bool RequiresCast(const vector<LogicalType> &types);
 	//! If this type requires a cast, return the type to cast to
 	static LogicalType GetCastedType(const LogicalType &type);
-	//! The types with every type that requires a cast replaced by the type to cast to
 	static vector<LogicalType> GetCastedTypes(const vector<LogicalType> &types);
 };
 
