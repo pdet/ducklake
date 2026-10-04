@@ -563,21 +563,19 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
 			parameter.parameter_name = impl->parameters[i]->GetName().GetIdentifierName();
-			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
+			auto &type = impl->types[i];
+			// DuckLake types carry no child types, so nested types are stored as types of the macro dialect
+			parameter.parameter_type = type.IsNested() ? type.ToString() : DuckLakeTypes::ToString(type);
 			auto default_it = impl->default_parameters.find(Identifier(parameter.parameter_name));
 			if (default_it != impl->default_parameters.end()) {
 				Value default_value;
-				if (!DuckLakeUtil::TryGetLiteralValue(*default_it->second, default_value)) {
-					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
-					                              parameter.parameter_name);
+				if (DuckLakeUtil::TryGetMacroDefaultLiteral(*default_it->second, default_value)) {
+					parameter.default_value = default_value.ToString();
+					parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
+				} else {
+					parameter.default_value = default_it->second->ToString();
+					parameter.default_value_type = "expression";
 				}
-				auto default_type = default_value.type();
-				if (default_value.IsNull() && (DuckLakeTypes::IsStringType(default_type) || default_type.IsNested())) {
-					// the text NULL is a valid string and nested types are stored without their children
-					default_type = LogicalType::SQLNULL;
-				}
-				parameter.default_value = default_value.ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(default_type);
 			} else {
 				parameter.default_value_type = "unknown";
 			}
