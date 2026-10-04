@@ -1,0 +1,59 @@
+# name: test/sql/issues/issue_1108_migrated_schema_versions.test
+# description: Repair the schema version begin snapshots written by the v0.3 migration of DuckDB 1.5.0 and 1.5.1
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# v0.3 catalogs migrated by DuckDB 1.5.1, one of them expired with dropped tables
+unzip data/old_ducklake/schema_versions_v151.db.gz {TEST_DIR}/issue_1108.db
+
+unzip data/old_ducklake/schema_versions_v151_expired.db.gz {TEST_DIR}/issue_1108_expired.db
+
+# the first catalog after a migration to v1.0 and to v1.1 without the repair
+unzip data/old_ducklake/schema_versions_v151_v10.db.gz {TEST_DIR}/issue_1108_v10.db
+
+unzip data/old_ducklake/schema_versions_v151_v11.db.gz {TEST_DIR}/issue_1108_v11.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1108.db' AS dl (DATA_PATH '{TEST_DIR}/issue_1108', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_dl.ducklake_schema_versions WHERE table_id = 1
+----
+[(1, 1), (2, 2), (3, 3)]
+
+statement ok
+CREATE TABLE dl.t2 (id INTEGER)
+
+query II
+SELECT * FROM dl.t0 ORDER BY ALL
+----
+1	10
+2	20
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1108_expired.db' AS expired (DATA_PATH '{TEST_DIR}/issue_1108_expired', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT * FROM expired.t0 ORDER BY ALL
+----
+1	10
+2	20
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1108_v10.db' AS v10 (DATA_PATH '{TEST_DIR}/issue_1108_v10', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_v10.ducklake_schema_versions WHERE table_id = 1
+----
+[(1, 1), (2, 2), (3, 3)]
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1108_v11.db' AS v11 (DATA_PATH '{TEST_DIR}/issue_1108_v11', OVERRIDE_DATA_PATH TRUE)
+
+query I
+SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_v11.ducklake_schema_versions WHERE table_id = 1
+----
+[(1, 1), (2, 2), (3, 3)]

@@ -501,6 +501,8 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
+	//! Rebuilds the schema version begin snapshots that the v0.3 migration of DuckDB 1.5.0 and 1.5.1 got wrong
+	void RepairSchemaVersionBeginSnapshots();
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
 	virtual void MigrateV10Dev();

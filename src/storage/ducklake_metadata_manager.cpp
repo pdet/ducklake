@@ -444,7 +444,322 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 	}
 }
 
+namespace {
+
+//! Sorted and disjoint inclusive ranges of snapshots
+using SnapshotRanges = vector<pair<idx_t, idx_t>>;
+
+SnapshotRanges IntersectSnapshotRanges(const SnapshotRanges &left, const SnapshotRanges &right) {
+	SnapshotRanges result;
+	for (auto &left_range : left) {
+		for (auto &right_range : right) {
+			auto first = MaxValue(left_range.first, right_range.first);
+			auto last = MinValue(left_range.second, right_range.second);
+			if (first <= last) {
+				result.emplace_back(first, last);
+			}
+		}
+	}
+	return result;
+}
+
+//! The first snapshot of the ranges that is at least minimum
+optional_idx FirstSnapshotFrom(const SnapshotRanges &ranges, idx_t minimum) {
+	for (auto &range : ranges) {
+		if (range.second >= minimum) {
+			return MaxValue(range.first, minimum);
+		}
+	}
+	return optional_idx();
+}
+
+struct ColumnVersion {
+	idx_t begin_snapshot;
+	optional_idx end_snapshot;
+	string name;
+	string type;
+	bool top_level;
+};
+
+//! Whether the columns of a table at a snapshot are the columns of an inlined table, whose metadata columns come first
+bool InlinedColumnsMatch(const vector<ColumnVersion> &columns, idx_t snapshot, QueryResult &inlined) {
+	auto &names = inlined.GetNames();
+	auto &types = inlined.GetTypes();
+	idx_t index = 3;
+	for (auto &column : columns) {
+		if (!column.top_level || column.begin_snapshot > snapshot ||
+		    (column.end_snapshot.IsValid() && column.end_snapshot.GetIndex() <= snapshot)) {
+			continue;
+		}
+		if (index >= names.size() || !StringUtil::CIEquals(names[index].GetIdentifierName(), column.name)) {
+			return false;
+		}
+		// a type change only promotes numbers, and some backends store other types as text
+		if (types[index].IsNumeric() && DuckLakeTypes::ToString(types[index]) != column.type) {
+			return false;
+		}
+		index++;
+	}
+	return index == names.size();
+}
+
+//! The snapshots at which each version with inlined tables can begin
+map<idx_t, SnapshotRanges> GetInlinedVersionRanges(DuckLakeMetadataManager &metadata, const set<idx_t> &versions) {
+	map<idx_t, SnapshotRanges> result;
+	auto inlined_result = metadata.Query(R"(
+SELECT table_id, table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inlined_data_tables)");
+	if (inlined_result->HasError()) {
+		inlined_result->GetErrorObject().Throw("Failed to read the inlined tables to repair the schema versions: ");
+	}
+	vector<pair<pair<idx_t, idx_t>, string>> inlined_tables;
+	for (auto &row : *inlined_result) {
+		auto version = row.GetValue<idx_t>(2);
+		if (versions.find(version) != versions.end()) {
+			inlined_tables.emplace_back(make_pair(row.GetValue<idx_t>(0), version), row.GetValue<string>(1));
+		}
+	}
+	if (inlined_tables.empty()) {
+		return result;
+	}
+	auto column_result = metadata.Query(R"(
+SELECT table_id, begin_snapshot, end_snapshot, column_name, column_type, parent_column IS NULL
+FROM {METADATA_CATALOG}.ducklake_column
+ORDER BY table_id, column_order)");
+	if (column_result->HasError()) {
+		column_result->GetErrorObject().Throw("Failed to read the columns to repair the schema versions: ");
+	}
+	map<idx_t, vector<ColumnVersion>> table_columns;
+	for (auto &row : *column_result) {
+		ColumnVersion column;
+		column.begin_snapshot = row.GetValue<idx_t>(1);
+		if (!row.IsNull(2)) {
+			column.end_snapshot = row.GetValue<idx_t>(2);
+		}
+		column.name = row.GetValue<string>(3);
+		column.type = row.GetValue<string>(4);
+		column.top_level = row.GetValue<bool>(5);
+		table_columns[row.GetValue<idx_t>(0)].push_back(std::move(column));
+	}
+	// an inlined table has the columns of its table when its version began and rows inserted after that
+	for (auto &inlined : inlined_tables) {
+		auto sample = metadata.Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s ORDER BY 2 LIMIT 1",
+		                                                SQLIdentifier(inlined.second)));
+		if (sample->HasError()) {
+			sample->GetErrorObject().Throw("Failed to read the inlined data to repair the schema versions: ");
+		}
+		auto &columns = table_columns[inlined.first.first];
+		set<idx_t> column_changes;
+		for (auto &column : columns) {
+			column_changes.insert(column.begin_snapshot);
+			if (column.end_snapshot.IsValid()) {
+				column_changes.insert(column.end_snapshot.GetIndex());
+			}
+		}
+		SnapshotRanges ranges;
+		for (auto change = column_changes.begin(); change != column_changes.end(); change++) {
+			if (InlinedColumnsMatch(columns, *change, *sample)) {
+				auto next_change = std::next(change);
+				ranges.emplace_back(*change, next_change == column_changes.end() ? NumericLimits<idx_t>::Maximum()
+				                                                                 : *next_change - 1);
+			}
+		}
+		if (ranges.empty()) {
+			ranges.emplace_back(0, NumericLimits<idx_t>::Maximum());
+		}
+		for (auto &row : *sample) {
+			if (!row.IsNull(1)) {
+				ranges = IntersectSnapshotRanges(ranges, {{0, row.GetValue<idx_t>(1)}});
+			}
+		}
+		auto entry = result.emplace(inlined.first.second, ranges);
+		entry.first->second = IntersectSnapshotRanges(entry.first->second, ranges);
+	}
+	return result;
+}
+
+//! Assigns begin snapshots to the versions after start, returns false if none fit the allowed ranges
+bool AssignSchemaVersionBegins(idx_t start, const vector<idx_t> &changes, const vector<SnapshotRanges> &allowed,
+                               vector<idx_t> &result) {
+	auto version_count = allowed.size();
+	auto change_count = changes.size();
+	const auto invalid = NumericLimits<idx_t>::Maximum();
+	// the lowest begin of the last placed version for every count of used changes
+	vector<idx_t> last_begin(change_count + 1, invalid);
+	vector<vector<bool>> used_change(version_count, vector<bool>(change_count + 1, false));
+	last_begin[0] = start;
+	for (idx_t i = 0; i < version_count; i++) {
+		vector<idx_t> next_begin(change_count + 1, invalid);
+		for (idx_t j = 0; j <= change_count; j++) {
+			if (last_begin[j] == invalid) {
+				continue;
+			}
+			if (j < change_count && changes[j] > last_begin[j] &&
+			    FirstSnapshotFrom(allowed[i], changes[j]) == changes[j] && changes[j] < next_begin[j + 1]) {
+				next_begin[j + 1] = changes[j];
+				used_change[i][j + 1] = true;
+			}
+			// a version whose changed objects no longer exist takes the first free snapshot
+			auto free_snapshot = FirstSnapshotFrom(allowed[i], last_begin[j] + 1);
+			if (free_snapshot.IsValid() && (j == change_count || free_snapshot.GetIndex() < changes[j]) &&
+			    free_snapshot.GetIndex() < next_begin[j]) {
+				next_begin[j] = free_snapshot.GetIndex();
+				used_change[i][j] = false;
+			}
+		}
+		last_begin = std::move(next_begin);
+	}
+	// the changes that are left belong to versions that no table covers
+	idx_t used = change_count + 1;
+	while (used > 0 && last_begin[used - 1] == invalid) {
+		used--;
+	}
+	if (used == 0) {
+		return false;
+	}
+	used--;
+	vector<bool> takes_change(version_count);
+	for (idx_t i = version_count; i > 0; i--) {
+		takes_change[i - 1] = used_change[i - 1][used];
+		if (takes_change[i - 1]) {
+			used--;
+		}
+	}
+	result.clear();
+	auto previous = start;
+	idx_t change_idx = 0;
+	for (idx_t i = 0; i < version_count; i++) {
+		previous = takes_change[i] ? changes[change_idx++] : FirstSnapshotFrom(allowed[i], previous + 1).GetIndex();
+		result.push_back(previous);
+	}
+	return true;
+}
+
+} // namespace
+
+void DuckLakeMetadataManager::RepairSchemaVersionBeginSnapshots() {
+	auto rows = Query(R"(
+SELECT table_id, begin_snapshot, schema_version FROM {METADATA_CATALOG}.ducklake_schema_versions)");
+	if (rows->HasError()) {
+		rows->GetErrorObject().Throw("Failed to read the schema versions to repair: ");
+	}
+	map<pair<idx_t, idx_t>, set<idx_t>> table_begins;
+	for (auto &row : *rows) {
+		table_begins[make_pair(row.GetValue<idx_t>(0), row.GetValue<idx_t>(1))].insert(row.GetValue<idx_t>(2));
+	}
+	// the v0.3 to v0.4 migration of DuckDB 1.5.0 and 1.5.1 gave all versions of a table the table begin snapshot
+	map<idx_t, idx_t> known_begins;
+	set<idx_t> versions;
+	bool damaged = false;
+	bool consistent = true;
+	auto add_known_begin = [&](idx_t version, idx_t begin_snapshot) {
+		auto entry = known_begins.emplace(version, begin_snapshot);
+		consistent = consistent && entry.first->second == begin_snapshot;
+	};
+	for (auto &entry : table_begins) {
+		damaged = damaged || entry.second.size() > 1;
+		versions.insert(entry.second.begin(), entry.second.end());
+		// the first of these versions was created by the table creation or rename at that snapshot
+		add_known_begin(*entry.second.begin(), entry.first.second);
+	}
+	if (!damaged) {
+		return;
+	}
+
+	auto snapshot_result = Query(R"(
+SELECT snapshot_id, schema_version FROM {METADATA_CATALOG}.ducklake_snapshot ORDER BY snapshot_id)");
+	if (snapshot_result->HasError()) {
+		snapshot_result->GetErrorObject().Throw("Failed to read the snapshots to repair the schema versions: ");
+	}
+	vector<pair<idx_t, idx_t>> snapshots;
+	for (auto &row : *snapshot_result) {
+		snapshots.emplace_back(row.GetValue<idx_t>(0), row.GetValue<idx_t>(1));
+	}
+
+	// every catalog change creates a schema version, so its snapshot is the begin of one
+	string change_query;
+	for (auto table :
+	     {"ducklake_schema", "ducklake_table", "ducklake_view", "ducklake_column", "ducklake_partition_info",
+	      "ducklake_tag", "ducklake_column_tag", "ducklake_macro", "ducklake_sort_info"}) {
+		change_query += StringUtil::Format("%sSELECT begin_snapshot FROM {METADATA_CATALOG}.%s UNION SELECT "
+		                                   "end_snapshot FROM {METADATA_CATALOG}.%s WHERE end_snapshot IS NOT NULL",
+		                                   change_query.empty() ? "" : " UNION ", table, table);
+	}
+	auto change_result = Query(change_query + " ORDER BY 1");
+	if (change_result->HasError()) {
+		change_result->GetErrorObject().Throw("Failed to read the catalog changes to repair the schema versions: ");
+	}
+	vector<idx_t> changes;
+	for (auto &row : *change_result) {
+		changes.push_back(row.GetValue<idx_t>(0));
+	}
+	auto inlined_ranges = GetInlinedVersionRanges(*this, versions);
+
+	vector<idx_t> sorted_versions(versions.begin(), versions.end());
+	vector<idx_t> begins;
+	for (idx_t i = 0; i < sorted_versions.size() && consistent;) {
+		auto known = known_begins.find(sorted_versions[i]);
+		if (known != known_begins.end()) {
+			consistent = begins.empty() || known->second > begins.back();
+			begins.push_back(known->second);
+			i++;
+			continue;
+		}
+		// the versions between two known begins were created by the catalog changes between them
+		auto end = i;
+		while (end < sorted_versions.size() && known_begins.find(sorted_versions[end]) == known_begins.end()) {
+			end++;
+		}
+		auto start = begins.empty() ? 0 : begins.back();
+		auto limit =
+		    end < sorted_versions.size() ? known_begins[sorted_versions[end]] : NumericLimits<idx_t>::Maximum();
+		vector<idx_t> window_changes;
+		for (auto change : changes) {
+			if (change > start && change < limit) {
+				window_changes.push_back(change);
+			}
+		}
+		// a version begins after the snapshots of older versions and no later than its first snapshot
+		vector<SnapshotRanges> allowed;
+		for (idx_t v = i; v < end; v++) {
+			auto first_newer = std::lower_bound(
+			    snapshots.begin(), snapshots.end(), sorted_versions[v],
+			    [](const pair<idx_t, idx_t> &snapshot, idx_t version) { return snapshot.second < version; });
+			auto first = first_newer == snapshots.begin() ? 0 : std::prev(first_newer)->first + 1;
+			auto last = first_newer == snapshots.end() ? limit - 1 : MinValue(limit - 1, first_newer->first);
+			allowed.push_back({{first, last}});
+			auto inlined = inlined_ranges.find(sorted_versions[v]);
+			if (inlined != inlined_ranges.end()) {
+				allowed.back() = IntersectSnapshotRanges(allowed.back(), inlined->second);
+			}
+		}
+		vector<idx_t> window_begins;
+		consistent = AssignSchemaVersionBegins(start, window_changes, allowed, window_begins);
+		begins.insert(begins.end(), window_begins.begin(), window_begins.end());
+		i = end;
+	}
+	if (!consistent) {
+		DUCKDB_LOG_WARNING(transaction.GetCatalog().GetDatabase(),
+		                   "DuckLake could not repair the begin snapshots of the schema versions");
+		return;
+	}
+	string values;
+	for (idx_t i = 0; i < sorted_versions.size(); i++) {
+		values += StringUtil::Format("%s(%d, %d)", i == 0 ? "" : ", ", sorted_versions[i], begins[i]);
+	}
+	auto result = Execute(StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_schema_versions AS sv
+SET begin_snapshot = repaired.begin_snapshot
+FROM (VALUES %s) repaired(schema_version, begin_snapshot)
+WHERE sv.schema_version = repaired.schema_version AND sv.begin_snapshot <> repaired.begin_snapshot;
+)",
+	                                         values));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to repair the begin snapshots of the schema versions: ");
+	}
+}
+
 void DuckLakeMetadataManager::MigrateV04() {
+	RepairSchemaVersionBeginSnapshots();
 	auto result = Execute(R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'version';
 	)");
@@ -468,6 +783,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 	)";
 
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
+	RepairSchemaVersionBeginSnapshots();
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
@@ -491,6 +807,13 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
 		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
 		                                          error.RawMessage()));
+	}
+	try {
+		RepairSchemaVersionBeginSnapshots();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(
+		    db, StringUtil::Format("DuckLake could not repair the schema versions on attach: %s", error.RawMessage()));
 	}
 }
 
