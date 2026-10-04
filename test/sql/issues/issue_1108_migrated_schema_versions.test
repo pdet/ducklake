@@ -11,11 +11,6 @@ unzip data/old_ducklake/schema_versions_v151.db.gz {TEST_DIR}/issue_1108.db
 
 unzip data/old_ducklake/schema_versions_v151_expired.db.gz {TEST_DIR}/issue_1108_expired.db
 
-# the first catalog after a migration to v1.0 and to v1.1 without the repair
-unzip data/old_ducklake/schema_versions_v151_v10.db.gz {TEST_DIR}/issue_1108_v10.db
-
-unzip data/old_ducklake/schema_versions_v151_v11.db.gz {TEST_DIR}/issue_1108_v11.db
-
 # a catalog where a struct field was added after a change whose objects were expired
 unzip data/old_ducklake/schema_versions_v151_nested.db.gz {TEST_DIR}/issue_1108_nested.db
 
@@ -44,22 +39,6 @@ SELECT * FROM expired.t0 ORDER BY ALL
 ----
 1	10
 2	20
-
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/issue_1108_v10.db' AS v10 (DATA_PATH '{TEST_DIR}/issue_1108_v10', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
-
-query I
-SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_v10.ducklake_schema_versions WHERE table_id = 1
-----
-[(1, 1), (2, 2), (3, 3)]
-
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/issue_1108_v11.db' AS v11 (DATA_PATH '{TEST_DIR}/issue_1108_v11', OVERRIDE_DATA_PATH TRUE)
-
-query I
-SELECT list((begin_snapshot, schema_version) ORDER BY schema_version) FROM __ducklake_metadata_v11.ducklake_schema_versions WHERE table_id = 1
-----
-[(1, 1), (2, 2), (3, 3)]
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/issue_1108_nested.db' AS nested (DATA_PATH '{TEST_DIR}/issue_1108_nested', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)

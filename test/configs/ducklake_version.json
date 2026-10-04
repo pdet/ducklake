@@ -41,6 +41,12 @@
       ]
     },
     {
+      "reason": "Catalogs at 1.0 or later are repaired by the migration to 1.1-dev1 or on an attach at 1.1-dev1, which does not happen when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/issues/issue_1108_migrated_schema_versions_v11.test"
+      ]
+    },
+    {
       "reason": "View column comments (ducklake_view_column_tag) were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/comments/comment_on_view_column.test",
