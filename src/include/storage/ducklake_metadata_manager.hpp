@@ -244,6 +244,10 @@ public:
 	string CastColumnToTarget(const string &column, const LogicalType &type);
 	//! The inlined rows to flush with typed columns, without those this transaction deleted
 	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	//! The comma separated ids of the rows whose current version this transaction deleted
+	string InlinedRowIdsDeletedByTransaction(TableIndex table_id, const string &inlined_table_name);
+	//! The filter on the current versions of the rows in a set of row ids
+	string InlinedCurrentRowsFilter(const string &row_id_set);
 	//! The order of the rows in a flushed file
 	string InlinedFlushOrder(const string &sort_order_sql) const;
 
@@ -483,7 +487,8 @@ public:
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! We delete at the flush
-	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
+	virtual void DeleteFlushedInlinedData(TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table,
+	                                      idx_t flush_snapshot_id);
 	//! If it conflicts we batch everything at the retry
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const DuckLakeInlinedColNames &col_names);

@@ -1640,10 +1640,10 @@ void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inli
 	metadata_manager.DeleteInlinedData(inlined_table);
 }
 
-void DuckLakeTransaction::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
+void DuckLakeTransaction::DeleteFlushedInlinedData(TableIndex table_id, const DuckLakeInlinedTableInfo &inlined_table,
                                                    idx_t flush_snapshot_id) {
 	auto &metadata_manager = GetMetadataManager();
-	metadata_manager.DeleteFlushedInlinedData(inlined_table, flush_snapshot_id);
+	metadata_manager.DeleteFlushedInlinedData(table_id, inlined_table, flush_snapshot_id);
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {

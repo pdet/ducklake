@@ -1860,12 +1860,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                            new_inlined_data_tables_result);
 	}
 
-	// in case of a retry, we generate the deletion of inlined data from the tables
-	if (!flushed_inlined_tables.empty()) {
-		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
-		                                                                           context.InlinedColNames());
-	}
-
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
@@ -1938,6 +1932,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				                                 compaction_rewrite_delete_changes, table_entry.second, context);
 			}
 		}
+	}
+
+	// in case of a retry, we generate the deletion of inlined data from the tables after their deletes
+	if (!flushed_inlined_tables.empty()) {
+		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
+		                                                                           context.InlinedColNames());
 	}
 
 	// Tracking for tables that had schema changes

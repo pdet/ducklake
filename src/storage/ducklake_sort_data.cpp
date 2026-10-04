@@ -34,7 +34,7 @@ static void MapToInlinedColumns(unique_ptr<ParsedExpression> &expr, const DuckLa
 	}
 }
 
-// FIXME: TODO: Macros and other user-catalog references will fail at bind time on the metadata connection
+// FIXME: macros and other user catalog references fail to bind on the metadata connection
 string DuckLakeSort::BuildSortOrderSQL(const vector<OrderByNode> &orders, const DuckLakeTableEntry &current_table,
                                        const DuckLakeTableEntry &inlined_table) {
 	string result;

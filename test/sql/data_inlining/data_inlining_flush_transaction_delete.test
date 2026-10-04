@@ -54,6 +54,29 @@ SELECT id, k FROM u AT (VERSION => 2) ORDER BY id
 2	2
 3	3
 
+# the version that the transaction updated keeps its history
+query II
+SELECT id, k FROM u AT (VERSION => 4) ORDER BY id
+----
+1	20
+2	2
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'u')
+
+query II
+SELECT id, k FROM u AT (VERSION => 3) ORDER BY id
+----
+1	20
+2	2
+3	3
+
+query II
+SELECT id, k FROM u ORDER BY id
+----
+1	30
+2	2
+
 # rows deleted in the transaction do not shift the positions of committed deletes
 statement ok
 CREATE TABLE s (id INTEGER, k INTEGER)

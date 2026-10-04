@@ -3036,24 +3036,38 @@ string DuckLakeMetadataManager::InlinedFlushSource(const string &inlined_table_n
 		}
 		projection.push_back(typed_column);
 	}
+	// rows deleted by this transaction are not flushed, passing their ids as one string keeps planning cheap
+	auto deleted_ids = InlinedRowIdsDeletedByTransaction(table.GetTableId(), inlined_table_name);
 	string filter;
-	auto local_deletes = transaction.GetInlinedDeletes(table.GetTableId(), inlined_table_name);
-	if (local_deletes && !local_deletes->rows.empty()) {
-		vector<string> row_ids;
-		for (auto &row_id : local_deletes->rows) {
-			row_ids.push_back(to_string(row_id));
-		}
-		// rows deleted by this transaction are not flushed, passing the ids as one string keeps planning cheap
-		filter = StringUtil::Format(" WHERE NOT (%s IN (SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM "
-		                            "(SELECT %s AS ids)) AND (%s IS NULL OR %s > {SNAPSHOT_ID}))",
-		                            col_names.row_id, SQLString(StringUtil::Join(row_ids, ",")), col_names.end_snapshot,
-		                            col_names.end_snapshot);
+	if (!deleted_ids.empty()) {
+		auto row_id_set = StringUtil::Format(
+		    "(SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM (SELECT %s AS ids))", SQLString(deleted_ids));
+		filter = " WHERE NOT (" + InlinedCurrentRowsFilter(row_id_set) + ")";
 	}
 	auto source = "{METADATA_CATALOG}." + inlined_table_name;
 	if (!has_casts && filter.empty()) {
 		return source;
 	}
 	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
+}
+
+string DuckLakeMetadataManager::InlinedRowIdsDeletedByTransaction(TableIndex table_id,
+                                                                  const string &inlined_table_name) {
+	auto local_deletes = transaction.GetInlinedDeletes(table_id, inlined_table_name);
+	if (!local_deletes) {
+		return string();
+	}
+	vector<string> row_ids;
+	for (auto &row_id : local_deletes->rows) {
+		row_ids.push_back(to_string(row_id));
+	}
+	return StringUtil::Join(row_ids, ",");
+}
+
+string DuckLakeMetadataManager::InlinedCurrentRowsFilter(const string &row_id_set) {
+	auto col_names = InlinedColNames();
+	return StringUtil::Format("%s IN %s AND (%s IS NULL OR %s > {SNAPSHOT_ID})", col_names.row_id, row_id_set,
+	                          col_names.end_snapshot, col_names.end_snapshot);
 }
 
 string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
@@ -6153,13 +6167,18 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 	}
 }
 
-void DuckLakeMetadataManager::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
+void DuckLakeMetadataManager::DeleteFlushedInlinedData(TableIndex table_id,
+                                                       const DuckLakeInlinedTableInfo &inlined_table,
                                                        idx_t flush_snapshot_id) {
-	auto result = Execute(StringUtil::Format(R"(
-		DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d
-)",
-	                                         SQLIdentifier(inlined_table.table_name), InlinedColNames().begin_snapshot,
-	                                         flush_snapshot_id));
+	auto query =
+	    StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d", SQLIdentifier(inlined_table.table_name),
+	                       InlinedColNames().begin_snapshot, flush_snapshot_id);
+	// rows deleted by this transaction keep their history in the inlined table
+	auto deleted_ids = InlinedRowIdsDeletedByTransaction(table_id, inlined_table.table_name);
+	if (!deleted_ids.empty()) {
+		query += " AND NOT (" + InlinedCurrentRowsFilter("(" + deleted_ids + ")") + ")";
+	}
+	auto result = Execute(transaction.GetSnapshot(), query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to delete flushed inlined data in DuckLake from table " +
 		                               inlined_table.table_name + ": ");
@@ -6170,8 +6189,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
-		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
+		// rows that ended after the flush were deleted by this transaction and are not flushed
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
+		                             flushed.flush_snapshot_id, col_names.end_snapshot, col_names.end_snapshot,
 		                             flushed.flush_snapshot_id);
 	}
 	return result;
