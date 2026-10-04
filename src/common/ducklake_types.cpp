@@ -82,6 +82,10 @@ bool DuckLakeTypes::IsStringType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::BLOB;
 }
 
+bool DuckLakeTypes::IsNested(const LogicalType &type) {
+	return type.IsNested() && type.id() != LogicalTypeId::VARIANT;
+}
+
 bool DuckLakeTypes::RequiresCast(const LogicalType &type) {
 	// There are no types that requires casts as of DuckDB v1.5
 	return false;

@@ -199,7 +199,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 	for (auto &macro : create_macro_info.macros) {
 		for (auto &type : macro->types) {
 			DuckLakeTypes::CheckSupportedType(type, version);
-			if (type.IsNested() && !ducklake_catalog.SupportsV1_1Metadata()) {
+			if (DuckLakeTypes::IsNested(type) && !ducklake_catalog.SupportsV1_1Metadata()) {
 				ThrowUnsupportedByVersion(version, "nested macro parameter types");
 			}
 		}

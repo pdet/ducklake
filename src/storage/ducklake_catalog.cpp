@@ -502,8 +502,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 
 //! Binds a macro dialect type without catalog lookups, since those would reenter the catalog that is loading
 static LogicalType BindMacroDialectType(const string &type) {
-	auto unbound_type = Parser::ParseColumnList("dummy " + type).GetColumn(LogicalIndex(0)).Type();
-	return TypeVisitor::VisitReplace(UnboundType::TryDefaultBind(unbound_type), [](const LogicalType &child) {
+	return TypeVisitor::VisitReplace(UnboundType::TryParseAndDefaultBind(type), [](const LogicalType &child) {
 		if (child.id() != LogicalTypeId::UNBOUND) {
 			return child;
 		}
@@ -522,7 +521,7 @@ static LogicalType ParseMacroParameterType(const string &type) {
 		return BindMacroDialectType(type);
 	}
 	// older versions stored nested types without their child types, so these parameters are loaded untyped
-	return result.IsNested() ? LogicalType::UNKNOWN : result;
+	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
