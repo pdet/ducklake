@@ -5729,16 +5729,14 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 		stats_table_ids.push_back(TableIndex(row.GetValue<idx_t>(0)));
 	}
 
-	vector<string> tables_to_delete_from {"ducklake_snapshot", "ducklake_snapshot_changes"};
-	for (auto &delete_tbl : tables_to_delete_from) {
-		result = Execute(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.%s
+	// the changes of expired snapshots are kept, so a transaction that started before them still conflicts
+	result = Execute(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id IN (%s);
 )",
-		                                    delete_tbl, snapshot_ids));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to delete snapshots in DuckLake: ");
-		}
+	                                    snapshot_ids));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to delete snapshots in DuckLake: ");
 	}
 	// get a list of tables that are no longer required after these deletions
 	result = Query(R"(
@@ -5798,6 +5796,7 @@ WHERE %s (end_snapshot IS NOT NULL AND NOT EXISTS(
 		cleanup_files.push_back(std::move(info));
 	}
 	string deleted_file_ids;
+	vector<string> tables_to_delete_from;
 	if (!cleanup_files.empty()) {
 		string files_scheduled_for_cleanup;
 		for (auto &file : cleanup_files) {
