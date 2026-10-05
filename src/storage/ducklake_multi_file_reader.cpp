@@ -83,7 +83,7 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 }
 
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
-                                           const ColumnFilterInfo &column_filter) {
+                                           const ColumnFilterInfo &column_filter, ClientContext &context) {
 	auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*column_filter.table_filter);
 	if (!filter_data) {
 		return false;
@@ -110,7 +110,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
-		auto file_max = Value(column_stats.max).DefaultTryCastAs(column_filter.column_type);
+		auto file_max = Value(column_stats.max).TryCastAs(context, column_filter.column_type);
 		if (!file_max) {
 			return false;
 		}
@@ -124,7 +124,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_min) {
 			return false;
 		}
-		auto file_min = Value(column_stats.min).DefaultTryCastAs(column_filter.column_type);
+		auto file_min = Value(column_stats.min).TryCastAs(context, column_filter.column_type);
 		if (!file_min) {
 			return false;
 		}
@@ -167,7 +167,7 @@ static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, 
 			continue;
 		}
 		const auto &column_stats = stats_entry->second;
-		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter) ||
+		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter, context) ||
 		    CanSkipFileByPrefixRangeFilter(column_stats, column_filter, context)) {
 			return true;
 		}
