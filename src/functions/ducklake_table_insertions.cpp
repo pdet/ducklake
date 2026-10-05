@@ -55,7 +55,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto start_at_clause = AtClauseFromValue(input.inputs[3]);
 	auto end_at_clause = AtClauseFromValue(input.inputs[4]);
 
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto table_name = GetTableName(input.inputs[2]);
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, Identifier(table_name), end_at_clause, QueryErrorContext());
 	auto &table = GetTableEntry(context, catalog, lookup, input.inputs[1]);

@@ -76,7 +76,7 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;
@@ -126,19 +126,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	return make_uniq<DuckLakeSetOptionData>(catalog, std::move(config_option));
 }
 
-struct DuckLakeSetOptionState : public GlobalTableFunctionState {
-	DuckLakeSetOptionState() {
-	}
-
-	bool finished = false;
-};
-
-unique_ptr<GlobalTableFunctionState> DuckLakeSetOptionInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<DuckLakeSetOptionState>();
-}
-
 void DuckLakeSetOptionExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeSetOptionState>();
+	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeSetOptionData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	transaction.SetConfigOption(bind_data.option);
@@ -147,7 +136,7 @@ void DuckLakeSetOptionExecute(ClientContext &context, TableFunctionInput &data_p
 
 DuckLakeSetOptionFunction::DuckLakeSetOptionFunction()
     : TableFunction("ducklake_set_option", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
-                    DuckLakeSetOptionExecute, DuckLakeSetOptionBind, DuckLakeSetOptionInit) {
+                    DuckLakeSetOptionExecute, DuckLakeSetOptionBind, DuckLakeRunOnceState::Init) {
 	named_parameters["table_name"] = LogicalType::VARCHAR;
 	named_parameters["schema"] = LogicalType::VARCHAR;
 }
