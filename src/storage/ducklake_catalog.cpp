@@ -28,6 +28,8 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/extra_type_info.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
@@ -68,27 +70,38 @@ idx_t EstimateValueMemory(const Value &value) {
 	if (value.IsNull()) {
 		return 0;
 	}
-	switch (value.type().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::BLOB:
+	switch (value.type().InternalType()) {
+	case PhysicalType::VARCHAR:
 		return EstimateStringMemory(StringValue::Get(value));
-	case LogicalTypeId::STRUCT:
+	case PhysicalType::STRUCT:
 		return EstimateChildValueMemory(StructValue::GetChildren(value));
-	case LogicalTypeId::MAP:
-		return EstimateChildValueMemory(MapValue::GetChildren(value));
-	case LogicalTypeId::LIST:
-		return EstimateChildValueMemory(ListValue::GetChildren(value));
+	case PhysicalType::LIST:
+		return EstimateChildValueMemory(value.type().id() == LogicalTypeId::MAP ? MapValue::GetChildren(value)
+		                                                                        : ListValue::GetChildren(value));
 	default:
 		return 0;
 	}
 }
 
 idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
-	// expression nodes have similar sizes, so the smallest one stands in for all of them
 	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD;
 	estimate += expression.GetAlias().GetIdentifierName().size();
-	if (expression.GetExpressionClass() == ExpressionClass::CONSTANT) {
+	switch (expression.GetExpressionClass()) {
+	case ExpressionClass::CONSTANT:
 		estimate += expression.Cast<ConstantExpression>().GetLiteral().text.size();
+		break;
+	case ExpressionClass::FUNCTION:
+		estimate += expression.Cast<FunctionExpression>().FunctionName().GetIdentifierName().size();
+		break;
+	case ExpressionClass::TYPE:
+		estimate += expression.Cast<TypeExpression>().GetTypeName().GetIdentifierName().size();
+		break;
+	case ExpressionClass::CAST:
+		// the iterator skips the target type of a cast
+		estimate += EstimateExpressionMemory(expression.Cast<CastExpression>().TargetType());
+		break;
+	default:
+		break;
 	}
 	ParsedExpressionIterator::EnumerateChildren(
 	    expression, [&](const ParsedExpression &child) { estimate += EstimateExpressionMemory(child); });
@@ -113,7 +126,6 @@ idx_t EstimateTypeInfoMemory(const LogicalType &type) {
 }
 
 idx_t EstimateFieldIdMemory(const DuckLakeFieldId &field_id) {
-	// the field id, its pointer in the parent and its entry in the field reference map
 	idx_t estimate = sizeof(DuckLakeFieldId) + ALLOCATION_OVERHEAD + field_id.Name().size();
 	estimate += sizeof(unique_ptr<DuckLakeFieldId>);
 	estimate += sizeof(FieldIndex) + sizeof(const_reference<DuckLakeFieldId>) + MAP_NODE_OVERHEAD;
@@ -130,7 +142,6 @@ idx_t EstimateFieldIdMemory(const DuckLakeFieldId &field_id) {
 }
 
 idx_t EstimateColumnMemory(const ColumnDefinition &column) {
-	// the column, its name, its physical index and its entry in the name map
 	auto &name = column.Name().GetIdentifierName();
 	idx_t estimate = sizeof(ColumnDefinition) + name.size() + sizeof(idx_t);
 	estimate += EstimateStringMemory(name) + sizeof(column_t) + MAP_NODE_OVERHEAD;

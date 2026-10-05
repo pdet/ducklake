@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require json
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -138,5 +140,42 @@ SELECT count(*) FROM long_defaults.t
 
 query I
 SELECT memory_usage_bytes - getvariable('cache_before_long') - getvariable('cache_short') >= 10000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# two lakes that differ only in the size of a cast default
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_short_cast.db' AS short_cast (DATA_PATH '{DATA_PATH}/issue_1475_short_cast')
+
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_long_cast.db' AS long_cast (DATA_PATH '{DATA_PATH}/issue_1475_long_cast')
+
+statement ok
+SET VARIABLE cache_before_short_cast = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CREATE TABLE short_cast.t (a INTEGER, v VARIANT DEFAULT ('{"k":"xxxxxxxxxx"}'::JSON::VARIANT))
+
+query I
+SELECT count(*) FROM short_cast.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short_cast = (SELECT memory_usage_bytes - getvariable('cache_before_short_cast') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long_cast = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CREATE TABLE long_cast.t (a INTEGER, v VARIANT DEFAULT ('{"k":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'::JSON::VARIANT))
+
+query I
+SELECT count(*) FROM long_cast.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long_cast') - getvariable('cache_short_cast') >= 1000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true
