@@ -225,6 +225,7 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
+	UnregisterCatalog();
 }
 
 void DuckLakeCatalog::Initialize(bool load_builtin) {
@@ -248,6 +249,7 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
+	RegisterCatalog();
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
@@ -1107,7 +1109,10 @@ optional_ptr<BoundAtClause> DuckLakeCatalog::CatalogSnapshot() const {
 }
 
 void DuckLakeCatalog::OnDetach(ClientContext &context) {
-	// detach the metadata database
+	// the metadata database stays attached while another DuckLake uses it
+	if (!UnregisterCatalog()) {
+		return;
+	}
 	auto &db_manager = DatabaseManager::Get(context);
 	db_manager.DetachDatabase(context, Identifier(MetadataDatabaseName()), OnEntryNotFound::RETURN_NULL);
 }
@@ -1364,6 +1369,56 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
 	return GetDatabase().GetObjectCache();
+}
+
+void DuckLakeCatalog::RegisterCatalog() {
+	// these checks run before the metadata database is attached, which replaces any database of the same name
+	auto &name = GetAttached().GetName();
+	bool replace = options.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT;
+	if (!replace && DatabaseManager::Get(GetDatabase()).GetDatabase(name)) {
+		throw BinderException("Failed to attach database: database with name \"%s\" already exists",
+		                      name.GetIdentifierName());
+	}
+	attached_catalogs =
+	    GetObjectCacheInstance().GetOrCreate<DuckLakeAttachedCatalogs>(DuckLakeAttachedCatalogs::ObjectType());
+	lock_guard<mutex> guard(attached_catalogs->lock);
+	for (auto &entry : attached_catalogs->catalogs) {
+		auto &other = entry.get();
+		auto &other_name = other.GetAttached().GetName();
+		if (other_name == name) {
+			if (!replace) {
+				throw BinderException("Failed to attach database: database with name \"%s\" already exists",
+				                      name.GetIdentifierName());
+			}
+			continue;
+		}
+		// only DuckLakes with the same metadata database share their metadata catalog
+		if (StringUtil::CIEquals(other.MetadataDatabaseName(), MetadataDatabaseName()) &&
+		    (other.MetadataType() != MetadataType() || other.MetadataPath() != MetadataPath())) {
+			throw BinderException(
+			    "Failed to attach database: metadata catalog \"%s\" is already used by database \"%s\"",
+			    MetadataDatabaseName(), other_name.GetIdentifierName());
+		}
+	}
+	attached_catalogs->catalogs.push_back(*this);
+}
+
+bool DuckLakeCatalog::UnregisterCatalog() {
+	if (!attached_catalogs) {
+		return true;
+	}
+	lock_guard<mutex> guard(attached_catalogs->lock);
+	auto &catalogs = attached_catalogs->catalogs;
+	bool metadata_catalog_unused = true;
+	for (idx_t i = catalogs.size(); i > 0; i--) {
+		auto &other = catalogs[i - 1].get();
+		if (&other == this) {
+			catalogs.erase_at(i - 1);
+		} else if (StringUtil::CIEquals(other.MetadataDatabaseName(), MetadataDatabaseName())) {
+			metadata_catalog_unused = false;
+		}
+	}
+	return metadata_catalog_unused;
 }
 
 } // namespace duckdb
