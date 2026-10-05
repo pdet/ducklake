@@ -871,6 +871,18 @@ WHERE table_id = %d)",
 	                          table_id.index);
 }
 
+unordered_set<string> DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
+	auto result = Query(GetInlinedTableNamesSql(table_id));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get inlined data tables from DuckLake: ");
+	}
+	unordered_set<string> table_names;
+	for (auto &row : *result) {
+		table_names.insert(row.GetValue<string>(0));
+	}
+	return table_names;
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(

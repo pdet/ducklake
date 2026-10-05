@@ -605,7 +605,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction);
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -671,7 +671,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		transaction_row_start += file.row_count;
 		files.emplace_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction);
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -698,7 +698,7 @@ void DuckLakeMultiFileList::GetTableInsertions() const {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	files = metadata_manager.GetTableInsertions(read_info.table, *read_info.start_snapshot, read_info.snapshot);
 	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction);
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;
@@ -725,7 +725,7 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		files.emplace_back(std::move(file_entry));
 	}
 	// add inlined data tables as sources (if any)
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction);
+	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file.path = table.table_name;

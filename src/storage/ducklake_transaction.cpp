@@ -1546,7 +1546,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (!entry) {
 			return names;
 		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables(*this)) {
+		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables(*this, transaction_snapshot)) {
 			names.push_back(t.table_name);
 		}
 		return names;
