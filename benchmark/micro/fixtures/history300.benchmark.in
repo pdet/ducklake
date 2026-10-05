@@ -15,15 +15,8 @@ WHEN k % 3 = 1 THEN 'DELETE FROM lake.events WHERE id < 1000000 AND id % 1000 = 
 ELSE 'UPDATE lake.events SET x = x + 1 WHERE id % 2000 = ' || k || ';'
 END || ' COMMIT; BEGIN;' FROM range(300) t(k))
 TO '${BENCHMARK_DIR}/history300_gen/schema.sql' (HEADER false, QUOTE '');
-COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/history300_blank'
-(FORMAT CSV, PARTITION_BY (part), OVERWRITE);
-ATTACH '${BENCHMARK_DIR}/history300_blank/blank.db' AS blank;
-DETACH blank;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/history300_blank/blank.db'))
-TO '${BENCHMARK_DIR}/history300.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/history300.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake
-(DATA_PATH '${BENCHMARK_DIR}/history300_files', DATA_INLINING_ROW_LIMIT 0);
+@create history300
+@attach history300 AS lake (DATA_PATH '${BENCHMARK_DIR}/history300_files', DATA_INLINING_ROW_LIMIT 0)
 CREATE TABLE lake.events (id BIGINT, g INTEGER, v VARCHAR, x DOUBLE);
 INSERT INTO lake.events SELECT i, i % 100, 'v' || i, i * 0.5 FROM range(1000000) t(i);
 IMPORT DATABASE '${BENCHMARK_DIR}/history300_gen';
@@ -31,12 +24,13 @@ SELECT CASE WHEN (SELECT count(*) <> 303 OR max(schema_version) <> 7 FROM lake.s
 THEN error('history300: expected 303 snapshots and 7 schema versions') END;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
+@seal history300
 COPY (SELECT 1) TO '${BENCHMARK_DIR}/history300_ready.marker' (FORMAT CSV);
-ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+@attach history300 AS lake (READ_ONLY)
 SET VARIABLE ts_a = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 100);
 SET VARIABLE ts_b = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 200);
 
 reload
-ATTACH 'ducklake:${BENCHMARK_DIR}/history300.db' AS lake (READ_ONLY);
+@attach history300 AS lake (READ_ONLY)
 SET VARIABLE ts_a = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 100);
 SET VARIABLE ts_b = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 200);

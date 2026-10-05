@@ -1,14 +1,12 @@
-# name: benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+# name: benchmark/micro/fixtures/restore_cleanup.benchmark.in
 # description: Restore the work copy of a fixture lake from its pristine metadata and sweep the files written by the run
 # group: [fixtures]
 
-# The empty WAL discards commits that a killed process left behind
+# The copy also discards commits that a killed process left behind
 cleanup
 DETACH DATABASE IF EXISTS lake;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
-TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${work}.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))

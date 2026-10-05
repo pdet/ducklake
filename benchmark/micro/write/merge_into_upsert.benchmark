@@ -22,34 +22,27 @@ SELECT i AS id, i * 3 + 1 AS v, 'upsert_' || i AS payload
 FROM (SELECT range AS i FROM range(150000) UNION ALL SELECT range FROM range(1000000, 1150000));
 
 load
-COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/${lake}_pristine_blank'
-(FORMAT CSV, PARTITION_BY (part), OVERWRITE);
-ATTACH '${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db' AS blank;
-DETACH blank;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db'))
-TO '${BENCHMARK_DIR}/${lake}_pristine.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${lake}_pristine.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE TABLE lake.target AS SELECT i AS id, i * 2 AS v, 'base_' || i AS payload FROM range(1000000) t(i);
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
 COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
 DETACH DATABASE IF EXISTS lake;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
-TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${work}.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
 THEN error('the fixture files were not restored') END;
 
-include benchmark/micro/fixtures/rblob_reload.benchmark.in
+include benchmark/micro/fixtures/restore_reload.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 # The MERGE reads only the row groups holding source keys, so the timing depends on this one-file layout
 assert III

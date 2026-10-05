@@ -12,14 +12,8 @@ EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 COPY (SELECT 'CREATE TABLE lake.main.bg_' || i || ' (id INTEGER, v VARCHAR);' FROM range(500) t(i)
 UNION ALL SELECT 'CREATE TABLE lake.main.ins_' || i || ' (id BIGINT, v VARCHAR);' FROM range(10) t(i))
 TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
-COPY (SELECT 1 AS part, 1 AS v) TO '${BENCHMARK_DIR}/${lake}_pristine_blank'
-(FORMAT CSV, PARTITION_BY (part), OVERWRITE);
-ATTACH '${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db' AS blank;
-DETACH blank;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine_blank/blank.db'))
-TO '${BENCHMARK_DIR}/${lake}_pristine.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${lake}_pristine.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 10);
 BEGIN;
 IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
@@ -28,15 +22,14 @@ CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
 COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
 COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
 DETACH DATABASE IF EXISTS lake;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
-TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${work}.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
 THEN error('the fixture files were not restored') END;
 
-include benchmark/micro/fixtures/rblob_reload.benchmark.in
+include benchmark/micro/fixtures/restore_reload.benchmark.in

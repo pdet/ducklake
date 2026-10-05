@@ -14,7 +14,7 @@ argument work flush_inlined_work
 
 include benchmark/micro/fixtures/flush_inlined.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 run
 SELECT count(*) FILTER (WHERE rows_flushed > 0) AS tables_flushed, sum(rows_flushed) AS rows_flushed

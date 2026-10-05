@@ -1,6 +1,7 @@
 # DuckLake regression benchmark plan
 
-Updated on 2026-10-01 after implementing the four local additions to the 13-benchmark suite from `dc893f72`.
+Updated on 2026-10-01 after implementing the four local additions to the 13-benchmark suite from `dc893f72`, and on
+2026-10-02 after rendering the same suite for PostgreSQL metadata.
 
 Keep the blocking suite small. A new benchmark should expose a material cost that the current suite cannot detect,
 not just exercise another SQL spelling or repeat a workload at a slightly different size.
@@ -18,8 +19,9 @@ Each addition has deterministic result checks, a pristine-state reset, and a min
 restores. The regression threshold is unchanged. Local validation is recorded below; repeated calibration on the
 actual Linux CI runner is still needed to establish noise and runtime headroom.
 
-**PostgreSQL performance is the next separate benchmark suite.** Start with its wide-table commit path, selective
-file-list queries and compaction metadata work. PostgreSQL setup and measurements are deferred to that follow-up;
+**PostgreSQL metadata runs the same 17 benchmarks.** The benchmark definitions name catalog operations instead of
+metadata files, and `run.py --catalog postgres` renders them for a PostgreSQL catalog. The workflow runs that variant
+as a separate job, which stays informational until repeated same-binary comparisons on Linux calibrate its noise.
 SQLite performance is outside this plan. Do not expand the local gate with more TPC-H or catalog-listing variants
 without evidence that they expose a distinct cost.
 
@@ -58,6 +60,11 @@ rows. It no longer constructs a dropped churn table or orphan files.
 [the wrapper](.github/regression/run.py) with `--threads 2 --early-stop`. Both binaries execute the PR's benchmark
 definitions. SQL and options used by a candidate must therefore also work on the comparison base.
 
+The wrapper first renders the definitions for one metadata catalog, `--catalog duckdb` (the default) or `postgres`,
+into a temporary runner root that does not link a local `duckdb_benchmark_data/`, so every comparison starts with
+empty caches. The PostgreSQL job runs the same comparison with each binary loading its own `postgres_scanner` build
+and keeping its metadata in its own database; its suite is labelled `micro_postgres`.
+
 The inner runner compares medians from alternating batches, with additional samples for candidates outside its
 noise band. The wrapper reruns regressed entries and fails if **any one benchmark is at least 10% slower in both
 comparisons**. Execution and result errors also fail the job. Improvements elsewhere cannot offset a regression.
@@ -92,7 +99,7 @@ These checks often add more value than another timing benchmark:
 ## Newly implemented local benchmarks
 
 These scales keep the timed operations focused. Fixture construction, source generation, validation and resets are
-untimed. Each case uses the shared `rblob_reload` and `rblob_cleanup` helpers, with a versioned seed marker.
+untimed. Each case uses the shared `restore_reload` and `restore_cleanup` helpers, with a versioned seed marker.
 
 ### 1. Wide Parquet-backed commits
 
@@ -201,11 +208,12 @@ clean scan without adding new fixture data.
 ## Separate backend and concurrency coverage
 
 A local DuckDB metadata catalog on a local filesystem cannot establish performance for other metadata engines or
-remote storage. PostgreSQL is deferred to a dedicated follow-up suite. These tracks need explicit setup and isolation.
+remote storage. PostgreSQL metadata now runs the whole suite as an informational job. The other tracks still need
+explicit setup and isolation.
 
 | Priority | Track | Initial subset and prerequisites |
 |---|---|---|
-| Follow-up suite | PostgreSQL metadata | Wide commits, pruning/file-list pushdown, and one compaction metadata workload. Reuse the PostgreSQL setup and scanner build in [Catalogs.yml](.github/workflows/Catalogs.yml). Give base and PR independent databases and data prefixes, with equivalent schema/index/data state. |
+| Informational job | PostgreSQL metadata | All 17 benchmarks with the PostgreSQL setup and pinned scanner build of [Catalogs.yml](.github/workflows/Catalogs.yml). Base and PR use separate databases and data directories. Make it blocking after repeated same-binary comparisons on Linux. |
 | Next | Controlled concurrent writers | Two synchronized connections with a fixed number of intervening commits; measure conflict checking/retry behavior and verify committed rows, snapshots and retry counts. Requires a coordinated harness, not sleep-based SQL scripts. |
 | Next | S3-compatible storage | Selective reads over many files, one merge, and cleanup listing/unlink as diagnostics. Reuse [SeaweedFS.yml](.github/workflows/SeaweedFS.yml) and [start-docker.sh](scripts/start-docker.sh). Record requests, bytes and elapsed time; start informational. |
 
@@ -214,9 +222,10 @@ PostgreSQL has dedicated generated SQL and file-list pushdown paths; see
 [extended file-list tests](test/sql/delete/extended_file_list_metadata_query.test) already show how to verify that
 queries reach PostgreSQL rather than falling back to attached metadata scans. Reuse that evidence alongside timing.
 
-The raw local-database copy reset does not apply to PostgreSQL. Backend benchmarks need an equivalent isolated seed
-and a tested restore/recreation method outside timing. Do not let old/new binaries operate on one shared metadata
-database or storage prefix.
+A PostgreSQL fixture that a benchmark mutates keeps an immutable seed schema and gives that benchmark a work schema;
+see [the catalog operations](#name-catalog-operations-instead-of-metadata-files). The other six benchmarks attach their
+seed directly: read-only, except `show_all_tables` and the TPC-H query, whose workloads only read. Do not let old/new
+binaries operate on one shared metadata database or storage prefix.
 
 For concurrency, distinguish conflict-processing cost from end-to-end throughput. A focused conflict microbenchmark
 may disable retry waits to isolate metadata work; a workload benchmark should retain realistic retry behavior and
@@ -289,33 +298,64 @@ Read the pinned runner's behavior when changing directives; the local DuckDB che
 - Batch short operations only when they measure the same important cost. Keep correctness and profiling work outside
   timing, and verify the batch is not dominated by an unrelated query.
 
-### Restore closed local metadata for committed mutations
+### Name catalog operations instead of metadata files
 
-The existing `rblob_reload` and `rblob_cleanup` includes detach the working lake, copy its pristine metadata, attach
-it again, and remove files not referenced by the seed. The seed must be fully detached so its state is in the database
+Benchmark blocks never attach a DuckLake directly; [the renderer](.github/regression/catalog.py) rejects a
+`'ducklake:` attach in benchmark files and in the SQL files their blocks read verbatim. Lines that start with `@` name a
+catalog operation on a metadata store, and the renderer replaces them with SQL for the selected catalog. Everything
+else, including source data, timed SQL, transactions and result checks, is shared.
+
+To run a benchmark by hand, render it with `python3 .github/regression/catalog.py [--catalog postgres] <root>
+<benchmark>...` and pass `--root-dir <root>` to the benchmark runner. For PostgreSQL, also point
+`DUCKDB_BENCHMARK_EXTENSION_DIRECTORY` at the build's `repository/<version>/<platform>` directory, since
+`postgres_scanner` is not linked into the runner, and pass `--pg_database <database>` naming a database you created;
+the benchmarks drop and recreate their schemas in it. The runner lowercases argument defaults, so the renderer only
+accepts a lower case `--postgres-database`.
+
+| Operation | DuckDB | PostgreSQL |
+|---|---|---|
+| `@create STORE` | Copy an empty database to `STORE.db`, with an empty WAL | Drop schema `STORE` |
+| `@attach [IF NOT EXISTS] STORE AS ALIAS [(OPTIONS)]` | Attach `ducklake:STORE.db` | Attach with `METADATA_SCHEMA 'STORE'` in database `${pg_database}` |
+| `@seal STORE` | Nothing | Analyze every table and disable its autovacuum |
+| `@copy SOURCE TO TARGET` | Copy the file and write an empty WAL | Make schema `TARGET` an exact copy of `SOURCE` |
+| `@rollback SOURCE TO TARGET` | `ROLLBACK` | `ROLLBACK`, then copy `SOURCE` to `TARGET` while the lake stays attached |
+
+The PostgreSQL helpers live in [postgres_catalog.sql](.github/regression/postgres_catalog.sql). A copy rejects seeds
+holding objects other than plain heap tables and their indexes and constraints. It truncates and refills each work
+table whose columns, indexes, constraints and storage options match the seed's, which gives the table fresh storage
+without the system-catalog churn of recreating it. Other tables are recreated with `CREATE TABLE ... LIKE ...
+INCLUDING ALL`, tables a run added are dropped, and a work schema holding anything but tables is rebuilt. The copy then
+analyzes every table and checks that both schemas define the same tables. Sealing a finished seed keeps autovacuum
+from running during measurements; copies inherit that setting. A rolled-back mutation leaves dead tuples behind, so
+`@rollback` recopies the work schema but keeps the lake attached, preserving the warm catalog that the DuckDB variant
+measures.
+
+### Restore the metadata of committed mutations
+
+The `restore_reload` and `restore_cleanup` includes detach the working lake, copy its pristine metadata, attach it
+again, and remove files not referenced by the seed. The seed must be fully detached so its state is in the database
 file rather than an outstanding WAL. This pattern supports merge, rewrite, CTAS and committed inserts.
 
 ```sql
 DETACH DATABASE IF EXISTS lake;
-COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/${lake}_pristine.db'))
-TO '${BENCHMARK_DIR}/${work}.db' (FORMAT blob);
-COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/${work}.db.wal' (FORMAT blob);
-ATTACH 'ducklake:${BENCHMARK_DIR}/${work}.db' AS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
 <> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
 THEN error('the fixture files were not restored') END;
 ```
 
-The empty WAL discards commits that a killed process left in the work copy's WAL; otherwise the next ATTACH replays
-them onto the restored copy and every later process fails. A fixture load ends with this block verbatim, because the
-first process runs `load` instead of `reload`.
+The copy discards commits that a killed process left behind: the DuckDB variant writes an empty WAL, since the next
+ATTACH would otherwise replay them onto the restored copy and every later process would fail. A fixture load ends with
+this block verbatim, because the first process runs `load` instead of `reload`. It finishes construction with
+`@seal` before writing its completion marker.
 
 The equality guard detects missing as well as surplus files. It does not replace row-content validation. Never use
 metadata-only restore for an operation that physically deletes seed files, including cleanup with unlinking or a
 CHECKPOINT that performs physical cleanup. Preserve/recreate the complete physical fixture for those workloads.
 
-For rollback-based benchmarks, `BEGIN` belongs in `run` and `ROLLBACK` in cleanup. Verify within the open transaction,
+For rollback-based benchmarks, `BEGIN` belongs in `run` and `@rollback` in cleanup. Verify within the open transaction,
 then verify that the next iteration sees the original state. Reuse the expiration and DELETE cases as examples.
 
 ### Keep fixtures reproducible and isolated
@@ -328,18 +368,19 @@ then verify that the next iteration sees the original state. Reuse the expiratio
 - Write a lowercase, versioned completion marker after fixture construction and validation, before any common
   restore/attach suffix. Change its version when the fixture shape or meaning changes.
 - Ensure `load` finishes in the same attached/options state as `reload`. Handle partial initialization explicitly;
-  a marker's absence does not imply that a previous attempt left no files or tables behind. The `micro` fixtures and
-  `add_files_small_files` start their load by copying a valid empty DuckDB file over the metadata file (a 0-byte
-  file is rejected) and writing an empty WAL, and sweep orphan files before detaching the new seed. The empty file
-  lives in its own `*_blank/` directory, which a `COPY ... (PARTITION_BY, OVERWRITE)` clears first, so a copy torn by
-  a killed load is recreated. The TPC-H template and `show_all_tables` are not restartable yet: delete their cached
-  database by hand after an interrupted load.
-- Both comparison roots are independent on clean CI, but the runner symlinks preexisting local cache entries into
-  them. Use fresh benchmark caches for comparisons or implement isolated copies of immutable seeds. Never run
-  independent benchmark instances against the same mutable metadata or DATA_PATH.
+  a marker's absence does not imply that a previous attempt left no files or tables behind. Every fixture creates its
+  stores with `@create` and sweeps orphan files before detaching the new seed. The DuckDB variant copies a valid empty
+  database over the metadata file (a 0-byte file is rejected) and writes an empty WAL. The empty file lives in its own
+  `*_blank/` directory, which a `COPY ... (PARTITION_BY, OVERWRITE)` clears first, so a copy torn by a killed load is
+  recreated.
+- `run.py` renders a fresh runner root for every comparison and gives each binary its own cache directory and, for
+  PostgreSQL, its own database. Each invocation appends a unique suffix to the first 25 characters of
+  `--postgres-database`. It drops only the databases it created, after stopping the comparison, when the comparison
+  finishes, fails or is interrupted with SIGINT, SIGTERM or SIGHUP. It prints both names when it creates them, so the
+  databases of a killed run or a failed cleanup can be removed by hand. Manually rendered benchmarks still need
+  separate databases and DATA_PATHs for independent instances.
 - Fixture lakes store their DATA_PATH relative to the runner root (`duckdb_benchmark_data/...`). Inspect a cached
-  fixture only from that root. Opening it from the repository creates `<repo>/duckdb_benchmark_data/`, which later
-  local runs symlink into both comparison roots; delete that directory before running `run.py` locally.
+  fixture only from that root.
 - Keep optional diagnostics out of a blocking fixture's load path. Do not restore the removed churn/orphan data to
   `many_files`, or add every proposed workload's tables to `compaction` simply because those fixtures already exist.
 
@@ -347,6 +388,7 @@ then verify that the next iteration sees the original state. Reuse the expiratio
 
 - Put `#` comments between blocks. The runner joins block lines with spaces: SQL `--` comments can swallow the rest
   of a block, and `#` within a block reaches the SQL parser. A `run <file.sql>` is read verbatim instead.
+- A catalog operation takes a whole line. Store names may use `${...}` arguments, which the runner resolves later.
 - `run <file.sql>` does not substitute `${...}` arguments. Use it for fixed SQL or pass needed state through SQL
   variables where supported.
 - Include/cache/run paths are lowercased by directive parsing. Keep paths lowercase.
@@ -365,16 +407,40 @@ A smoke mode should exercise fresh load, cached reload, warmup and at least two 
 A single execution can miss a broken reset. A separate list/reference check can catch missing includes cheaply.
 
 The older `ingest/add_files_lineitem` and `ingest/add_files_orders` templates are outside the gate. Their shared
-`add_files.benchmark.in` still lacks the reset used by the small-file benchmark, and its `argument table_name lineitem`
-overrides the orders template parameter. Fix or retire those definitions before using them as performance evidence.
+`add_files.benchmark.in` still lacks the reset used by the small-file benchmark, attaches its lake directly, and its
+`argument table_name lineitem` overrides the orders template parameter. Fix or retire those definitions before using
+them as performance evidence.
 
-Consider making `show_all_tables` reload/cleanup attach read-only to reduce untimed work, and using a completion
-marker instead of the metadata file as its cache signal. Validate that a change preserves the intended cold-catalog
-measurement; this is a harness improvement, not another benchmark.
+Consider making `show_all_tables` reload/cleanup attach read-only to reduce untimed work. Validate that a change
+preserves the intended cold-catalog measurement; this is a harness improvement, not another benchmark.
 
 ## Validation and historical research
 
 ### Evidence available for the current work
+
+PostgreSQL catalog, measured on macOS against a local PostgreSQL 14 server (CI uses PostgreSQL 15), with the native
+runner, `postgres_scanner` `bc6aab54` and Homebrew's libpq 18 built from DuckDB pin `30ad316060`:
+
+- Rendering the DuckDB variant reproduces the previous SQL of 13 benchmarks exactly. `show_all_tables` and the TPC-H
+  template now use completion markers and restartable loads that sweep orphan files. `tpch05`, which both
+  `ctas_lineitem` and `delete_lineitem` include, gives each lake its own empty database.
+- Every benchmark passed a fresh fixture, a warmup and three measured/restore cycles on PostgreSQL. All metadata lived
+  in seed and work schemas, with no metadata file in the cache directory.
+- The same-binary A/A comparison through `run.py --catalog postgres` passed in **335 seconds**, with separate base and
+  PR databases. All 17 finished within 3%. `rewrite_data_files_deletes` and `warm_small_queries` started at -26.5% and
+  -33.6% and confirmed at -0.6% and +0.9% after twenty pairs each. The DuckDB variant through the new `run.py` passed
+  in **233 seconds** with every entry within 3% and no confirmations.
+- In isolation, 20 runs of `warm_small_queries` took 0.16 to 0.22 seconds on PostgreSQL without a trend, compared with
+  0.21 to 0.23 seconds on DuckDB. The A/A run above recreated every work table on each restore, and autovacuum
+  processed PostgreSQL's system catalogs during it.
+- Restores now truncate and refill the work tables. For the 539-table `commit` fixture that took 0.33 to 0.38 seconds
+  instead of 0.44 to 0.47, and changed 1,612 system-catalog rows instead of 39,321. In two fresh databases, 12
+  restores of each kind left the timed INSERT workload reading the same 60,321 metadata rows. Its catalog index fetches
+  stayed between 65,711 and 65,918 after truncation, but moved from 10,396 to about 65,800 and then to about 34,000
+  across the recreating series, as autovacuum changed the catalogs.
+- A SIGKILL during the `snap1000` load, and SIGKILLs during measured runs and restores of `insert_commits_inlined` and
+  `expire_snapshots`, were all followed by passing runs. The minimal sqltest for sealing and copying passed with 68
+  assertions; like the other PostgreSQL sqltests, it needs `postgres_scanner` and the `ducklakedb` database.
 
 - After the review fixes (empty-WAL restore, restartable fixture loads, stronger result checks), the four sqltests
   pass with **301 assertions** under every test config. Each leaves a stale work WAL that the next restore must
@@ -396,7 +462,7 @@ measurement; this is a harness improvement, not another benchmark.
 - After strengthening NULL handling in result checks, all four additions passed fresh and cached runs again, each
   with a warmup and three measured/reset cycles. The timed queries were unchanged.
 - This is local macOS validation, not a base-versus-PR performance comparison or repeated Linux CI calibration.
-  Neither PostgreSQL performance nor SQLite performance was measured.
+  SQLite performance was not measured.
 - Earlier notes recorded a same-binary run of the **old 18-entry suite** on DuckDB `30ad316060`: 203 seconds locally.
   That remains historical evidence, not a CI runtime forecast for the current suite.
 - Earlier pruning checks observed 0-3 of 4,096 files read by each query. After removal of cleanup-only setup, all 40

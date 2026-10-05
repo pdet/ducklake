@@ -18,7 +18,7 @@ argument work ctas_work
 
 include benchmark/micro/fixtures/tpch05.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 run
 CREATE TABLE lake.lineitem AS FROM src.lineitem;
