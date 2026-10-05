@@ -14,7 +14,7 @@ argument work partitioned_merge_work
 
 include benchmark/micro/fixtures/partitioned_compaction.benchmark.in
 
-include benchmark/micro/fixtures/rblob_cleanup.benchmark.in
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
 run
 SELECT sum(files_processed) AS processed, sum(files_created) AS created
@@ -22,7 +22,7 @@ FROM ducklake_merge_adjacent_files('lake', 'events');
 
 # Merged rows keep the row ids of the seed lake, which still reads the original files
 result_query IIIIIII
-ATTACH IF NOT EXISTS 'ducklake:${BENCHMARK_DIR}/${lake}_pristine.db' AS seed (READ_ONLY);
+@attach IF NOT EXISTS ${lake}_pristine AS seed (READ_ONLY)
 WITH current_rows AS (
 SELECT part, count(*) AS n, sum(id) AS ids, sum(v) AS vals, count(DISTINCT filename) AS files
 FROM lake.events GROUP BY part

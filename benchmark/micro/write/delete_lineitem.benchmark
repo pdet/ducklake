@@ -23,7 +23,7 @@ BEGIN;
 DELETE FROM lake.lineitem WHERE l_orderkey % 2 = 0;
 
 cleanup
-ROLLBACK;
+@rollback ${lake}_pristine TO ${work}
 
 # A committed delete leaves nothing to delete in the next run
 result_query III
