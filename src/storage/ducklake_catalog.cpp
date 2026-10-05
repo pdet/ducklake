@@ -28,6 +28,7 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/extra_type_info.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
@@ -54,10 +55,13 @@ constexpr idx_t ALLOCATION_OVERHEAD = 2 * sizeof(void *);
 constexpr idx_t MAP_NODE_OVERHEAD = 3 * sizeof(void *) + ALLOCATION_OVERHEAD;
 
 idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
-	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD;
-	if (expression.GetExpressionClass() != ExpressionClass::CONSTANT) {
-		estimate += expression.ToString().size();
+	// the node sizes of a parsed expression are close enough to each other to use the smallest one
+	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD + expression.GetName().size();
+	if (expression.GetExpressionClass() == ExpressionClass::CONSTANT) {
+		estimate += expression.Cast<ConstantExpression>().GetLiteral().text.size();
 	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expression, [&](const ParsedExpression &child) { estimate += EstimateExpressionMemory(child); });
 	return estimate;
 }
 
