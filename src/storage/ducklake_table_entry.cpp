@@ -488,12 +488,25 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 	return metadata_manager.GetNetDataFileRowCount(GetTableId(), transaction.GetSnapshot());
 }
 
-vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction) const {
+vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
+                                                                          DuckLakeSnapshot snapshot) const {
+	// another attach can drop superseded inlined tables without bumping the schema version
+	bool may_be_dropped =
+	    inlined_data_tables.size() > 1 ||
+	    (!inlined_data_tables.empty() && snapshot.schema_version < transaction.GetSnapshot().schema_version);
+	unordered_set<string> registered_tables;
+	if (may_be_dropped) {
+		registered_tables = transaction.GetMetadataManager().GetInlinedTableNames(GetTableId());
+	}
 	vector<DuckLakeInlinedTableInfo> result;
 	for (auto &inlined_table : inlined_data_tables) {
-		if (!transaction.InlinedTableFlushed(inlined_table.table_name)) {
-			result.push_back(inlined_table);
+		if (transaction.InlinedTableFlushed(inlined_table.table_name)) {
+			continue;
 		}
+		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
+			continue;
+		}
+		result.push_back(inlined_table);
 	}
 	return result;
 }
@@ -502,7 +515,7 @@ idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
-	for (auto &inlined_table : GetInlinedDataTables(transaction)) {
+	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 	}
 	return total;

@@ -667,7 +667,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				continue;
 			}
 			auto &table = table_ref.get();
-			for (auto &inlined_table : table.GetInlinedDataTables(transaction)) {
+			for (auto &inlined_table : table.GetInlinedDataTables(transaction, transaction.GetSnapshot())) {
 				DuckLakeDataFlusher compactor(context, ducklake_catalog, transaction, *input.binder, table.GetTableId(),
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());
