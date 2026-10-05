@@ -83,7 +83,7 @@ SELECT memory_usage_bytes - getvariable('cache_before') >= 10000 FROM duckdb_mem
 ----
 true
 
-# two lakes that differ only in the size of the initial defaults that their dropped defaults left behind
+# two lakes whose initial defaults, left behind by a dropped default, differ in size
 statement ok
 DROP TABLE ducklake.default_tree
 
@@ -177,5 +177,41 @@ SELECT count(*) FROM long_cast.t
 
 query I
 SELECT memory_usage_bytes - getvariable('cache_before_long_cast') - getvariable('cache_short_cast') >= 1000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# the type metadata of a variant column and the payload of a column comment
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_variant.db' AS variants (DATA_PATH '{DATA_PATH}/issue_1475_variant')
+
+statement ok
+CREATE TABLE variants.v AS SELECT * FROM (PIVOT (SELECT i FROM range(500) t(i)) ON i USING first('{"a":1}'::JSON::VARIANT)) WHERE false
+
+statement ok
+SET VARIABLE cache_before_variants = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'variants' AND table_name = 'v'
+----
+500
+
+query I
+SELECT (memory_usage_bytes - getvariable('cache_before_variants')) // 500 >= 1200 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+SET VARIABLE cache_before_comment = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+COMMENT ON COLUMN variants.v."0" IS 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'variants' AND table_name = 'v'
+----
+500
+
+query I
+SELECT memory_usage_bytes > getvariable('cache_before_comment') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true

@@ -76,8 +76,7 @@ idx_t EstimateValueMemory(const Value &value) {
 	case PhysicalType::STRUCT:
 		return EstimateChildValueMemory(StructValue::GetChildren(value));
 	case PhysicalType::LIST:
-		return EstimateChildValueMemory(value.type().id() == LogicalTypeId::MAP ? MapValue::GetChildren(value)
-		                                                                        : ListValue::GetChildren(value));
+		return EstimateChildValueMemory(ListValue::GetChildren(value));
 	default:
 		return 0;
 	}
@@ -110,6 +109,7 @@ idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
 
 idx_t EstimateTypeInfoMemory(const LogicalType &type) {
 	switch (type.id()) {
+	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::STRUCT: {
 		idx_t estimate = sizeof(StructTypeInfo);
 		for (const auto &child : StructType::GetChildTypes(type)) {
@@ -145,6 +145,7 @@ idx_t EstimateColumnMemory(const ColumnDefinition &column) {
 	auto &name = column.Name().GetIdentifierName();
 	idx_t estimate = sizeof(ColumnDefinition) + name.size() + sizeof(idx_t);
 	estimate += EstimateStringMemory(name) + sizeof(column_t) + MAP_NODE_OVERHEAD;
+	estimate += EstimateValueMemory(column.Comment());
 	if (column.HasDefaultValue()) {
 		estimate += EstimateExpressionMemory(column.DefaultValue());
 	}
