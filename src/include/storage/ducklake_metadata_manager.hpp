@@ -202,6 +202,10 @@ public:
 		return true;
 	}
 
+	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
+	virtual bool CommitsEachStatement() const {
+		return false;
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -476,10 +480,9 @@ public:
 	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	//! We delete at the flush
-	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
-	//! If it conflicts we batch everything at the retry
+	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const DuckLakeInlinedColNames &col_names);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 

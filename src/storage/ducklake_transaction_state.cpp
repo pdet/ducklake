@@ -73,6 +73,15 @@ bool DuckLakeTransactionState::SchemaChangesMade() const {
 	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
 }
 
+bool DuckLakeTransactionState::InlinedTableFlushed(const string &table_name) const {
+	for (auto &flushed_table : flushed_inlined_tables) {
+		if (flushed_table.inlined_table.table_name == table_name) {
+			return true;
+		}
+	}
+	return false;
+}
+
 namespace {
 
 template <class T, class MAP>
@@ -1869,11 +1878,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                            new_inlined_data_tables_result);
 	}
 
-	// in case of a retry, we generate the deletion of inlined data from the tables
-	if (!flushed_inlined_tables.empty()) {
-		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
-		                                                                           context.InlinedColNames());
-	}
+	// delete the flushed inlined rows and inlined file deletions
+	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
+	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
 
 	// drop data files
 	if (!dropped_files.empty()) {
