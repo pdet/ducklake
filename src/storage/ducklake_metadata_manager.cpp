@@ -2972,7 +2972,11 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
-		if (column.default_value_type == "literal") {
+		if (column.default_value_type == "literal" && value == "NULL") {
+			// the text NULL marks a missing default, so this constant is stored as an expression
+			default_val = SQLString::ToString(column.default_value.ToSQLString());
+			default_val_type = "'expression'";
+		} else if (column.default_value_type == "literal") {
 			default_val = SQLString::ToString(value);
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
