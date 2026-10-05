@@ -787,6 +787,22 @@ string DuckLakeUtil::InlinedVariantExpression(const string &expression, const Lo
 	}
 }
 
+string DuckLakeUtil::InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
+                                              const LogicalType &type) {
+	if (GetInlinedStorageType(metadata_manager, type) != type) {
+		expression = InlinedVariantExpression(expression, type, true);
+	}
+	if (!metadata_manager.TypeIsNativelySupported(type)) {
+		if (type.IsNested()) {
+			expression = "CAST(" + expression + " AS VARCHAR)";
+		} else if (type.id() == LogicalTypeId::VARCHAR) {
+			// PostgreSQL stores strings as BYTEA to preserve embedded NUL bytes.
+			expression = "encode(" + expression + ")";
+		}
+	}
+	return expression;
+}
+
 vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto context = transaction.context.lock();

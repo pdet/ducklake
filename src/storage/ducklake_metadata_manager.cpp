@@ -442,6 +442,7 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 			delete_global_entries->GetErrorObject().Throw("Failed to clean up global schema_versions entries: ");
 		}
 	}
+	MigrateInlinedDataTypes();
 }
 
 void DuckLakeMetadataManager::MigrateV04() {
@@ -470,6 +471,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
@@ -3343,20 +3345,8 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 
 	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id), "NULL"};
 	for (idx_t c = 0; c < data.ColumnCount(); c++) {
-		auto &type = data.Types()[c];
-		auto expression = "col" + to_string(c + 1);
-		if (DuckLakeUtil::GetInlinedStorageType(metadata_manager, type) != type) {
-			expression = DuckLakeUtil::InlinedVariantExpression(expression, type, true);
-		}
-		if (!metadata_manager.TypeIsNativelySupported(type)) {
-			if (type.IsNested()) {
-				expression = "CAST(" + expression + " AS VARCHAR)";
-			} else if (type.id() == LogicalTypeId::VARCHAR) {
-				// PostgreSQL stores strings as BYTEA to preserve embedded NUL bytes.
-				expression = "encode(" + expression + ")";
-			}
-		}
-		projections.push_back(std::move(expression));
+		projections.push_back(
+		    DuckLakeUtil::InlinedStorageExpression(metadata_manager, "col" + to_string(c + 1), data.Types()[c]));
 	}
 	auto select = make_uniq<SelectNode>();
 	select->select_list = Parser::ParseExpressionList(StringUtil::Join(projections, ", "));

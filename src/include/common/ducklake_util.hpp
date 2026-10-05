@@ -127,6 +127,9 @@ public:
 	//! SQL expression encoding or decoding VARIANT leaves in an inlined column
 	static string InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
 	                                       idx_t depth = 0);
+	//! SQL expression converting a value of the given type to the representation stored in an inlined column
+	static string InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
+	                                       const LogicalType &type);
 	//! Formats inlined rows as comma separated cell literals in storage types
 	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
 };
