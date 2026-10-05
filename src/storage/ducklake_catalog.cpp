@@ -26,6 +26,8 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/type_expression.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/extra_type_info.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
@@ -46,12 +48,62 @@ idx_t EstimateStringMemory(const string &value) {
 	return sizeof(string) + value.length();
 }
 
-idx_t EstimateFieldIdCount(const DuckLakeFieldId &field_id) {
-	idx_t count = 1;
-	for (const auto &child : field_id.Children()) {
-		count += EstimateFieldIdCount(*child);
+//! Bookkeeping and rounding of the allocator for each heap allocation
+constexpr idx_t ALLOCATION_OVERHEAD = 2 * sizeof(void *);
+//! Memory of a std::map or std::unordered_map node besides its key and value
+constexpr idx_t MAP_NODE_OVERHEAD = 3 * sizeof(void *) + ALLOCATION_OVERHEAD;
+
+idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
+	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD;
+	if (expression.GetExpressionClass() != ExpressionClass::CONSTANT) {
+		estimate += expression.ToString().size();
 	}
-	return count;
+	return estimate;
+}
+
+idx_t EstimateTypeInfoMemory(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		idx_t estimate = sizeof(StructTypeInfo);
+		for (const auto &child : StructType::GetChildTypes(type)) {
+			estimate += sizeof(child) + child.first.GetIdentifierName().size() + EstimateTypeInfoMemory(child.second);
+		}
+		return estimate;
+	}
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		return sizeof(ListTypeInfo) + EstimateTypeInfoMemory(ListType::GetChildType(type));
+	default:
+		return type.AuxInfo() ? sizeof(ExtraTypeInfo) : 0;
+	}
+}
+
+idx_t EstimateFieldIdMemory(const DuckLakeFieldId &field_id) {
+	// the field id, its pointer in the parent and its entry in the field reference map
+	idx_t estimate = sizeof(DuckLakeFieldId) + ALLOCATION_OVERHEAD + field_id.Name().size();
+	estimate += sizeof(unique_ptr<DuckLakeFieldId>);
+	estimate += sizeof(FieldIndex) + sizeof(const_reference<DuckLakeFieldId>) + MAP_NODE_OVERHEAD;
+	auto &default_value = field_id.GetColumnData().default_value;
+	if (default_value) {
+		estimate += EstimateExpressionMemory(*default_value);
+	}
+	for (const auto &child : field_id.Children()) {
+		// the child and its entry in the child map
+		estimate += EstimateFieldIdMemory(*child);
+		estimate += EstimateStringMemory(child->Name()) + sizeof(idx_t) + MAP_NODE_OVERHEAD;
+	}
+	return estimate;
+}
+
+idx_t EstimateColumnMemory(const ColumnDefinition &column) {
+	// the column, its name, its physical index and its entry in the name map
+	auto &name = column.Name().GetIdentifierName();
+	idx_t estimate = sizeof(ColumnDefinition) + name.size() + sizeof(idx_t);
+	estimate += EstimateStringMemory(name) + sizeof(column_t) + MAP_NODE_OVERHEAD;
+	if (column.HasDefaultValue()) {
+		estimate += EstimateExpressionMemory(column.DefaultValue());
+	}
+	return estimate;
 }
 
 idx_t EstimateTagMemory(const CatalogEntry &entry) {
@@ -69,13 +121,13 @@ idx_t EstimateTableEntryMemory(const DuckLakeTableEntry &table) {
 	estimate += table.DataPath().size();
 
 	estimate += EstimateTagMemory(table);
-	estimate += table.GetColumns().LogicalColumnCount() * sizeof(ColumnDefinition);
 	for (const auto &column : table.GetColumns().Logical()) {
-		estimate += EstimateStringMemory(column.Name().GetIdentifierName());
+		estimate += EstimateColumnMemory(column);
 	}
 	estimate += table.GetConstraints().size() * sizeof(Constraint);
 	for (const auto &field_id : table.GetFieldData().GetFieldIds()) {
-		estimate += EstimateFieldIdCount(*field_id) * sizeof(DuckLakeFieldId);
+		// the column type shares its type info with the field id
+		estimate += EstimateFieldIdMemory(*field_id) + EstimateTypeInfoMemory(field_id->Type());
 	}
 	estimate += table.GetInlinedDataTables().size() * sizeof(DuckLakeInlinedTableInfo);
 	for (const auto &inlined_table : table.GetInlinedDataTables()) {

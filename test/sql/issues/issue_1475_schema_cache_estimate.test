@@ -1,0 +1,55 @@
+# name: test/sql/issues/issue_1475_schema_cache_estimate.test
+# description: A cached catalog accounts for the memory of its columns, defaults and nested fields (#1475)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1475')
+
+statement ok
+CREATE TABLE ducklake.wide AS SELECT * FROM (PIVOT (SELECT i FROM range(1000) t(i)) ON i USING first(i)) WHERE false
+
+# loads the catalog into the schema cache
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'wide'
+----
+1000
+
+query I
+SELECT memory_usage_bytes // 1000 >= 700 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+CREATE TABLE ducklake.nested AS SELECT * FROM (PIVOT (SELECT i FROM range(1000) t(i)) ON i USING first({'a': i, 'b': 'x', 'c': [i]})) WHERE false
+
+statement ok
+DROP TABLE ducklake.wide
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'nested'
+----
+1000
+
+query I
+SELECT memory_usage_bytes // 1000 >= 2200 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+CREATE TABLE ducklake.mixed (m MAP(VARCHAR, INTEGER), d DECIMAL(18, 3), ts TIMESTAMP DEFAULT now(), s VARCHAR DEFAULT 'abc')
+
+query II
+SELECT column_name, column_default FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'mixed' ORDER BY column_index
+----
+m	NULL
+d	NULL
+ts	now()
+s	'abc'
