@@ -491,9 +491,12 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
                                                                           DuckLakeSnapshot snapshot) const {
 	// another attach can drop superseded inlined tables without bumping the schema version
-	bool may_be_dropped =
-	    inlined_data_tables.size() > 1 ||
-	    (!inlined_data_tables.empty() && snapshot.schema_version < transaction.GetSnapshot().schema_version);
+	bool may_be_dropped = inlined_data_tables.size() > 1;
+	if (inlined_data_tables.size() == 1) {
+		// the only inlined table can be superseded after an older or pinned snapshot
+		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
+		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
+	}
 	unordered_set<string> registered_tables;
 	if (may_be_dropped) {
 		registered_tables = transaction.GetMetadataManager().GetInlinedTableNames(GetTableId());

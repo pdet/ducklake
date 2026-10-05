@@ -92,3 +92,32 @@ query II
 SELECT count(*), sum(id) FROM maintainer.t AT (VERSION => getvariable('insert_snapshot'))
 ----
 2	3
+
+# an attach pinned to a snapshot reads through the same kind of entry
+statement ok
+CREATE TABLE writer.p (id INTEGER)
+
+statement ok
+INSERT INTO writer.p VALUES (1), (2)
+
+statement ok
+SET VARIABLE pinned_snapshot = (SELECT max(snapshot_id) FROM writer.snapshots())
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS pinned (DATA_PATH '{DATA_PATH}/issue_1495', METADATA_CATALOG 'issue_1495_meta', SNAPSHOT_VERSION getvariable('pinned_snapshot'))
+
+query I
+SELECT count(*) FROM pinned.p
+----
+2
+
+statement ok
+ALTER TABLE writer.p ADD COLUMN v INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('writer', table_name => 'p')
+
+query II
+SELECT count(*), sum(id) FROM pinned.p
+----
+2	3
