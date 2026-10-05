@@ -442,6 +442,7 @@ DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE table_id IS NULL;
 			delete_global_entries->GetErrorObject().Throw("Failed to clean up global schema_versions entries: ");
 		}
 	}
+	MigrateInlinedDataTypes();
 }
 
 void DuckLakeMetadataManager::MigrateV04() {
@@ -470,6 +471,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = '
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
@@ -2007,7 +2009,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
                                                                   const FilterPushdownInfo &filter_info,
                                                                   const string &partition_value_table) {
 	auto partition_data = table.GetPartitionData();
-	if (!partition_data) {
+	// a transaction-local spec has no committed files written with it, so there is nothing to prune
+	if (!partition_data || DuckLakeTransaction::IsTransactionLocal(partition_data->partition_id)) {
 		return string();
 	}
 	auto context_ptr = transaction.context.lock();
@@ -2057,7 +2060,11 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 		}
 		result += clause;
 	}
-	return result;
+	if (result.empty()) {
+		return result;
+	}
+	// partition values are only comparable for files written with the current partition spec
+	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
@@ -2965,7 +2972,11 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 
 	if (!column.default_value.IsNull()) {
 		auto value = column.default_value.GetValue<string>();
-		if (column.default_value_type == "literal") {
+		if (column.default_value_type == "literal" && value == "NULL") {
+			// the text NULL marks a missing default, so this constant is stored as an expression
+			default_val = SQLString::ToString(column.default_value.ToSQLString());
+			default_val_type = "'expression'";
+		} else if (column.default_value_type == "literal") {
 			default_val = SQLString::ToString(value);
 		} else if (column.default_value_type == "expression") {
 			if (value.empty()) {
@@ -3338,20 +3349,8 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 
 	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id), "NULL"};
 	for (idx_t c = 0; c < data.ColumnCount(); c++) {
-		auto &type = data.Types()[c];
-		auto expression = "col" + to_string(c + 1);
-		if (DuckLakeUtil::GetInlinedStorageType(metadata_manager, type) != type) {
-			expression = DuckLakeUtil::InlinedVariantExpression(expression, type, true);
-		}
-		if (!metadata_manager.TypeIsNativelySupported(type)) {
-			if (type.IsNested()) {
-				expression = "CAST(" + expression + " AS VARCHAR)";
-			} else if (type.id() == LogicalTypeId::VARCHAR) {
-				// PostgreSQL stores strings as BYTEA to preserve embedded NUL bytes.
-				expression = "encode(" + expression + ")";
-			}
-		}
-		projections.push_back(std::move(expression));
+		projections.push_back(
+		    DuckLakeUtil::InlinedStorageExpression(metadata_manager, "col" + to_string(c + 1), data.Types()[c]));
 	}
 	auto select = make_uniq<SelectNode>();
 	select->select_list = Parser::ParseExpressionList(StringUtil::Join(projections, ", "));
@@ -3684,6 +3683,11 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
                                                             bool create_if_not_exists) {
 	// The table name is always deterministic
 	string table_name = InlinedFileDeletionTableName(table_id);
+
+	// this transaction reads the deletions it flushed from its delete files
+	if (!create_if_not_exists && transaction.InlinedFileDeletionsFlushed(table_id)) {
+		return string();
+	}
 
 	// Check per-transaction cache first (covers tables created in this transaction)
 	if (delete_inlined_table_cache.find(table_id.index) != delete_inlined_table_cache.end()) {
@@ -6102,26 +6106,18 @@ void DuckLakeMetadataManager::DeleteInlinedData(const DuckLakeInlinedTableInfo &
 	}
 }
 
-void DuckLakeMetadataManager::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
-                                                       idx_t flush_snapshot_id) {
-	auto result = Execute(StringUtil::Format(R"(
-		DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d
-)",
-	                                         SQLIdentifier(inlined_table.table_name), InlinedColNames().begin_snapshot,
-	                                         flush_snapshot_id));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to delete flushed inlined data in DuckLake from table " +
-		                               inlined_table.table_name + ": ");
-	}
-}
-
 string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                                                 const map<TableIndex, idx_t> &flushed_file_deletions,
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
 		                             flushed.flush_snapshot_id);
+	}
+	for (auto &flushed : flushed_file_deletions) {
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= %d;\n",
+		                             SQLIdentifier(InlinedFileDeletionTableName(flushed.first)), flushed.second);
 	}
 	return result;
 }

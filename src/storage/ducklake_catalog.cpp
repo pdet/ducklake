@@ -24,6 +24,8 @@
 #include "storage/ducklake_view_entry.hpp"
 #include "duckdb/main/database_path_and_type.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/expression/type_expression.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
@@ -225,6 +227,7 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
+	UnregisterCatalog();
 }
 
 void DuckLakeCatalog::Initialize(bool load_builtin) {
@@ -248,6 +251,7 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 			options.config_options["write_deletion_vectors"] = setting_val.GetValue<bool>() ? "true" : "false";
 		}
 	}
+	RegisterCatalog();
 	DuckLakeInitializer initializer(*context, *this, options);
 	initializer.Initialize();
 	db.tags["data_path"] = DataPath();
@@ -431,6 +435,14 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return catalog_set;
 }
 
+static unique_ptr<ParsedExpression> ParseDefaultExpression(const Value &default_value) {
+	auto sql_expr = Parser::ParseExpressionList(default_value.GetValue<string>());
+	if (sql_expr.size() != 1) {
+		throw InternalException("Expected a single expression");
+	}
+	return std::move(sql_expr[0]);
+}
+
 static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) {
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
@@ -443,11 +455,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 			if (col.default_value_type == "literal") {
 				col_data.default_value = ConstantExpression::FromValue(col.default_value);
 			} else if (col.default_value_type == "expression") {
-				auto sql_expr = Parser::ParseExpressionList(col.default_value.GetValue<string>());
-				if (sql_expr.size() != 1) {
-					throw InternalException("Expected a single expression");
-				}
-				col_data.default_value = std::move(sql_expr[0]);
+				col_data.default_value = ParseDefaultExpression(col.default_value);
 			} else {
 				throw NotImplementedException("Column type %s is not supported", col.default_value_type);
 			}
@@ -494,6 +502,30 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(DuckLakeColumnInfo &col) 
 	throw InvalidInputException("Unrecognized nested type \"%s\"", col.type);
 }
 
+//! Binds a macro dialect type without catalog lookups, since those would reenter the catalog that is loading
+static LogicalType BindMacroDialectType(const string &type) {
+	return TypeVisitor::VisitReplace(UnboundType::TryParseAndDefaultBind(type), [](const LogicalType &child) {
+		if (child.id() != LogicalTypeId::UNBOUND) {
+			return child;
+		}
+		// the types that are not built in, such as JSON, are DuckLake types
+		auto &type_expr = UnboundType::GetTypeExpression(child)->Cast<TypeExpression>();
+		return DuckLakeTypes::FromString(type_expr.GetTypeName().GetIdentifierName());
+	});
+}
+
+static LogicalType ParseMacroParameterType(const string &type) {
+	LogicalType result;
+	try {
+		result = DuckLakeTypes::FromString(type);
+	} catch (InvalidInputException &) {
+		// nested types are stored as types of the macro dialect
+		return BindMacroDialectType(type);
+	}
+	// older versions stored nested types without their child types, so these parameters are loaded untyped
+	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -529,13 +561,14 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
-		vector<unique_ptr<ParsedExpression>> expr_list;
 		for (auto &param : impl.parameters) {
-			expr_list = Parser::ParseExpressionList(param.default_value.ToSQLString());
-			if (expr_list.size() != 1) {
-				throw InternalException("Expected a single expression");
-			}
 			macro_function->parameters.push_back(make_uniq<ColumnRefExpression>(Identifier(param.parameter_name)));
+			macro_function->types.push_back(ParseMacroParameterType(param.parameter_type));
+			if (param.default_value_type == "expression") {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name),
+				                                          ParseDefaultExpression(param.default_value));
+				continue;
+			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
 				Value casted_value;
@@ -549,7 +582,6 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 				auto casted_expr = ConstantExpression::FromValue(casted_value);
 				macro_function->default_parameters.insert(Identifier(param.parameter_name), std::move(casted_expr));
 			}
-			macro_function->types.push_back(DuckLakeTypes::FromString(param.parameter_type));
 		}
 		macro_info->macros.push_back(std::move(macro_function));
 	}
@@ -1107,7 +1139,10 @@ optional_ptr<BoundAtClause> DuckLakeCatalog::CatalogSnapshot() const {
 }
 
 void DuckLakeCatalog::OnDetach(ClientContext &context) {
-	// detach the metadata database
+	// the metadata database stays attached while another DuckLake uses it
+	if (!UnregisterCatalog()) {
+		return;
+	}
 	auto &db_manager = DatabaseManager::Get(context);
 	db_manager.DetachDatabase(context, Identifier(MetadataDatabaseName()), OnEntryNotFound::RETURN_NULL);
 }
@@ -1364,6 +1399,56 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
 	return GetDatabase().GetObjectCache();
+}
+
+void DuckLakeCatalog::RegisterCatalog() {
+	// these checks run before the metadata database is attached, which replaces any database of the same name
+	auto &name = GetAttached().GetName();
+	bool replace = options.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT;
+	if (!replace && DatabaseManager::Get(GetDatabase()).GetDatabase(name)) {
+		throw BinderException("Failed to attach database: database with name \"%s\" already exists",
+		                      name.GetIdentifierName());
+	}
+	attached_catalogs =
+	    GetObjectCacheInstance().GetOrCreate<DuckLakeAttachedCatalogs>(DuckLakeAttachedCatalogs::ObjectType());
+	lock_guard<mutex> guard(attached_catalogs->lock);
+	for (auto &entry : attached_catalogs->catalogs) {
+		auto &other = entry.get();
+		auto &other_name = other.GetAttached().GetName();
+		if (other_name == name) {
+			if (!replace) {
+				throw BinderException("Failed to attach database: database with name \"%s\" already exists",
+				                      name.GetIdentifierName());
+			}
+			continue;
+		}
+		// only DuckLakes with the same metadata database share their metadata catalog
+		if (StringUtil::CIEquals(other.MetadataDatabaseName(), MetadataDatabaseName()) &&
+		    (other.MetadataType() != MetadataType() || other.MetadataPath() != MetadataPath())) {
+			throw BinderException(
+			    "Failed to attach database: metadata catalog \"%s\" is already used by database \"%s\"",
+			    MetadataDatabaseName(), other_name.GetIdentifierName());
+		}
+	}
+	attached_catalogs->catalogs.push_back(*this);
+}
+
+bool DuckLakeCatalog::UnregisterCatalog() {
+	if (!attached_catalogs) {
+		return true;
+	}
+	lock_guard<mutex> guard(attached_catalogs->lock);
+	auto &catalogs = attached_catalogs->catalogs;
+	bool metadata_catalog_unused = true;
+	for (idx_t i = catalogs.size(); i > 0; i--) {
+		auto &other = catalogs[i - 1].get();
+		if (&other == this) {
+			catalogs.erase_at(i - 1);
+		} else if (StringUtil::CIEquals(other.MetadataDatabaseName(), MetadataDatabaseName())) {
+			metadata_catalog_unused = false;
+		}
+	}
+	return metadata_catalog_unused;
 }
 
 } // namespace duckdb

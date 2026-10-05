@@ -194,16 +194,24 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
                                                                CreateFunctionInfo &info) {
 	unique_ptr<CatalogEntry> macro_entry;
 	auto &create_macro_info = info.Cast<CreateMacroInfo>();
-	auto version = ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
+	auto &ducklake_catalog = ParentCatalog().Cast<DuckLakeCatalog>();
+	auto version = ducklake_catalog.GetDuckLakeVersion();
 	for (auto &macro : create_macro_info.macros) {
 		for (auto &type : macro->types) {
 			DuckLakeTypes::CheckSupportedType(type, version);
+			if (DuckLakeTypes::IsNested(type) && !ducklake_catalog.SupportsV1_1Metadata()) {
+				ThrowUnsupportedByVersion(version, "nested macro parameter types");
+			}
 		}
 		for (auto &entry : macro->default_parameters) {
 			Value default_value;
 			if (DuckLakeUtil::TryGetLiteralValue(*entry.second, default_value)) {
 				DuckLakeTypes::CheckSupportedType(default_value.IsNull() ? LogicalType::SQLNULL : default_value.type(),
 				                                  version);
+			}
+			if (!ducklake_catalog.SupportsV1_1Metadata() &&
+			    !DuckLakeUtil::TryGetMacroDefaultLiteral(*entry.second, default_value)) {
+				ThrowUnsupportedByVersion(version, "macro parameter defaults that are not scalar constants");
 			}
 		}
 	}

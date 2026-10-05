@@ -212,7 +212,6 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	}
 
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.DeleteFlushedInlinedData(inlined_table, snapshot.snapshot_id);
 	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
 	return SinkFinalizeType::READY;
 }
@@ -465,6 +464,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
        AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
        AND (existing_del.end_snapshot IS NULL
             OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
+WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 	)",
 	                                                                            inlined_table_name, table_id.index));
 	if (deletions_result->HasError()) {
@@ -598,13 +598,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
 
 	// Register the delete files
 	transaction.AddDeletes(table_id, std::move(delete_files));
-
-	// Delete the flushed inlined deletions
-	auto delete_result =
-	    metadata_manager.Execute(snapshot, StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s", inlined_table_name));
-	if (delete_result->HasError()) {
-		delete_result->GetErrorObject().Throw("Failed to delete inlined file deletions after flush: ");
-	}
+	transaction.MarkInlinedFileDeletionsFlushed(table_id, snapshot.snapshot_id);
 }
 
 //===--------------------------------------------------------------------===//
@@ -612,9 +606,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         TableIndex bind_index, vector<Identifier> &return_names) {
-	input.binder->SetAlwaysRequireRebind();
 	// gather a list of files to compact
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
@@ -674,8 +667,7 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 				continue;
 			}
 			auto &table = table_ref.get();
-			auto &inlined_tables = table.GetInlinedDataTables();
-			for (auto &inlined_table : inlined_tables) {
+			for (auto &inlined_table : table.GetInlinedDataTables(transaction)) {
 				DuckLakeDataFlusher compactor(context, ducklake_catalog, transaction, *input.binder, table.GetTableId(),
 				                              inlined_table);
 				flushes.push_back(compactor.GenerateFlushCommand());
