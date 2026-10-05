@@ -43,7 +43,7 @@ SELECT count(*) FROM ducklake.t WHERE c > 10
 ----
 0
 
-# a file with values whose bounds are not recorded keeps the bounds of the table unknown
+# a float file with a NaN records no bounds although it has values
 statement ok
 CREATE TABLE ducklake.n (v DOUBLE)
 
@@ -59,7 +59,7 @@ INSERT INTO ducklake.n VALUES (0.2)
 statement ok
 COMMIT
 
-# the file with the NaN has values whose bounds were not recorded, so the table keeps none
+# the table keeps no bounds, the file with the NaN has values whose bounds were not recorded
 query I
 SELECT count(*) FROM meta.ducklake_table_column_stats WHERE table_id = 2 AND min_value IS NULL AND max_value IS NULL
 ----

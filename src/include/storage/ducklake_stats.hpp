@@ -72,7 +72,6 @@ public:
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
-	//! Take the min (max) of the other stats, bounds included
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
