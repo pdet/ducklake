@@ -88,10 +88,10 @@ statement ok
 DROP TABLE ducklake.default_tree
 
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_short.db' AS short_defaults (DATA_PATH '{DATA_PATH}/issue_1475_short')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short.db' AS short_defaults (DATA_PATH '{DATA_PATH}/issue_1475_short')
 
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_long.db' AS long_defaults (DATA_PATH '{DATA_PATH}/issue_1475_long')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long.db' AS long_defaults (DATA_PATH '{DATA_PATH}/issue_1475_long')
 
 statement ok
 CREATE TABLE short_defaults.t (a INTEGER)
@@ -145,10 +145,10 @@ true
 
 # two lakes that differ only in the size of a cast default
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_short_cast.db' AS short_cast (DATA_PATH '{DATA_PATH}/issue_1475_short_cast')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short_cast.db' AS short_cast (DATA_PATH '{DATA_PATH}/issue_1475_short_cast')
 
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_long_cast.db' AS long_cast (DATA_PATH '{DATA_PATH}/issue_1475_long_cast')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long_cast.db' AS long_cast (DATA_PATH '{DATA_PATH}/issue_1475_long_cast')
 
 statement ok
 SET VARIABLE cache_before_short_cast = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
@@ -182,7 +182,7 @@ true
 
 # the type metadata of a variant column and the payload of a column comment
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_variant.db' AS variants (DATA_PATH '{DATA_PATH}/issue_1475_variant')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_variant.db' AS variants (DATA_PATH '{DATA_PATH}/issue_1475_variant')
 
 statement ok
 CREATE TABLE variants.v AS SELECT * FROM (PIVOT (SELECT i FROM range(500) t(i)) ON i USING first('{"a":1}'::JSON::VARIANT)) WHERE false
@@ -218,10 +218,10 @@ true
 
 # two lakes whose default expressions differ in the length of their argument names
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_short_names.db' AS short_names (DATA_PATH '{DATA_PATH}/issue_1475_short_names')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_short_names.db' AS short_names (DATA_PATH '{DATA_PATH}/issue_1475_short_names')
 
 statement ok
-ATTACH 'ducklake:{DATA_PATH}/issue_1475_long_names.db' AS long_names (DATA_PATH '{DATA_PATH}/issue_1475_long_names')
+ATTACH 'ducklake:{TEST_DIR}/issue_1475_long_names.db' AS long_names (DATA_PATH '{DATA_PATH}/issue_1475_long_names')
 
 statement ok
 CREATE TABLE short_names.t (s VARCHAR DEFAULT struct_pack(x := 1)::VARCHAR)
