@@ -1464,6 +1464,11 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 	return stats;
 }
 
+string DuckLakeMetadataManager::BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type) {
+	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", bound,
+	                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity", type_name);
+}
+
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
                                                        const LogicalType &type, unordered_set<string> &referenced_stats,
                                                        const string &stats_alias) {

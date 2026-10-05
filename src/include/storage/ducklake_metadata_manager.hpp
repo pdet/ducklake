@@ -623,6 +623,8 @@ protected:
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);
+	//! Unknown bounds must not exclude a file that can satisfy the data filter
+	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
