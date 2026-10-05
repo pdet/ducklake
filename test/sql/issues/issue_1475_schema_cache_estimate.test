@@ -215,3 +215,40 @@ query I
 SELECT memory_usage_bytes > getvariable('cache_before_comment') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true
+
+# two lakes whose default expressions differ in the length of their argument names
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_short_names.db' AS short_names (DATA_PATH '{DATA_PATH}/issue_1475_short_names')
+
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_long_names.db' AS long_names (DATA_PATH '{DATA_PATH}/issue_1475_long_names')
+
+statement ok
+CREATE TABLE short_names.t (s VARCHAR DEFAULT struct_pack(x := 1)::VARCHAR)
+
+statement ok
+CREATE TABLE long_names.t (s VARCHAR DEFAULT struct_pack(xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx := 1)::VARCHAR)
+
+statement ok
+SET VARIABLE cache_before_short_names = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM short_names.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short_names = (SELECT memory_usage_bytes - getvariable('cache_before_short_names') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long_names = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT count(*) FROM long_names.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long_names') > getvariable('cache_short_names') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true

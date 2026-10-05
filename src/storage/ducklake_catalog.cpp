@@ -82,10 +82,10 @@ idx_t EstimateValueMemory(const Value &value) {
 	}
 }
 
-idx_t EstimateQualifiedNameMemory(const QualifiedName &name) {
+idx_t EstimateIdentifierMemory(const vector<Identifier> &names) {
 	idx_t estimate = 0;
-	for (const auto &part : name.Path()) {
-		estimate += EstimateStringMemory(part.GetIdentifierName());
+	for (const auto &name : names) {
+		estimate += EstimateStringMemory(name.GetIdentifierName());
 	}
 	return estimate;
 }
@@ -98,11 +98,19 @@ idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
 	case ExpressionClass::CONSTANT:
 		estimate += expression.Cast<ConstantExpression>().GetLiteral().text.size();
 		break;
-	case ExpressionClass::FUNCTION:
-		estimate += EstimateQualifiedNameMemory(expression.Cast<FunctionExpression>().GetQualifiedName());
+	case ExpressionClass::COLUMN_REF:
+		estimate += EstimateIdentifierMemory(expression.Cast<ColumnRefExpression>().ColumnNames());
 		break;
+	case ExpressionClass::FUNCTION: {
+		auto &function = expression.Cast<FunctionExpression>();
+		estimate += EstimateIdentifierMemory(function.GetQualifiedName().Path());
+		for (const auto &argument : function.GetArguments()) {
+			estimate += sizeof(FunctionArgument) + argument.GetName().size();
+		}
+		break;
+	}
 	case ExpressionClass::TYPE:
-		estimate += EstimateQualifiedNameMemory(expression.Cast<TypeExpression>().GetQualifiedName());
+		estimate += EstimateIdentifierMemory(expression.Cast<TypeExpression>().GetQualifiedName().Path());
 		break;
 	case ExpressionClass::CAST:
 		// the iterator skips the target type of a cast
