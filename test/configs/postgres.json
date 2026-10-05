@@ -102,7 +102,7 @@
       ]
     },
     {
-      "reason": "FIXME: duckdb 3363c469 TableFunctionMultiFileWrapper::InitializeGlobalState counts files on bind_data.file_list instead of the pushed-down global file list, so DuckLake issues the file-list metadata query twice",
+      "reason": "FIXME: duckdb TableFunctionMultiFileWrapper::InitializeGlobalState counts files on bind_data.file_list instead of the pushed-down global file list, so DuckLake issues the file-list metadata query twice",
       "paths": [
         "test/sql/stats/file_list_metadata_query.test"
       ]

@@ -996,6 +996,12 @@
       "paths": [
         "test/sql/storage/alter/alter_based_on_unfinished_insert_fails.test"
       ]
+    },
+    {
+      "reason": "Asserts insertion order of a large parallel CTAS copy via LIMIT/OFFSET without ORDER BY; DuckLake does not preserve it.",
+      "paths": [
+        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
+      ]
     }
   ]
 }
