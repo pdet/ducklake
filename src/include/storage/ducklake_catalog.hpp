@@ -29,6 +29,7 @@
 
 namespace duckdb {
 struct DuckLakeGlobalStatsInfo;
+class DuckLakeCatalog;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
@@ -104,6 +105,22 @@ struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 		return ObjectType();
 	}
 	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! The DuckLakes of a database instance, including those that are still attaching
+struct DuckLakeAttachedCatalogs : public ObjectCacheEntry {
+	mutex lock;
+	vector<reference<DuckLakeCatalog>> catalogs;
+
+	static string ObjectType() {
+		return "ducklake_attached_catalogs";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return optional_idx();
+	}
 };
 
 //! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
@@ -369,6 +386,10 @@ private:
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
+	//! Fails when the name or the metadata catalog of this DuckLake belongs to another DuckLake
+	void RegisterCatalog();
+	//! Returns whether no other DuckLake uses the metadata catalog
+	bool UnregisterCatalog();
 
 private:
 	mutex name_maps_lock;
@@ -412,6 +433,8 @@ private:
 	std::recursive_mutex metadata_query_lock;
 	//! Optional callback for instrumenting metadata queries
 	QueryCallback query_callback;
+	//! Set once this DuckLake is registered
+	shared_ptr<DuckLakeAttachedCatalogs> attached_catalogs;
 };
 
 } // namespace duckdb

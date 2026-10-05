@@ -1,5 +1,6 @@
 #include "storage/ducklake_transaction_state.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/type_visitor.hpp"
 
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
@@ -70,6 +71,15 @@ bool DuckLakeTransactionState::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
 	       !dropped_views.empty() || !renamed_views.empty() || !new_scalar_macros.empty() ||
 	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
+}
+
+bool DuckLakeTransactionState::InlinedTableFlushed(const string &table_name) const {
+	for (auto &flushed_table : flushed_inlined_tables) {
+		if (flushed_table.inlined_table.table_name == table_name) {
+			return true;
+		}
+	}
+	return false;
 }
 
 namespace {
@@ -531,6 +541,18 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 	}
 }
 
+//! DuckLake types carry no child types, so nested types are stored as types of the macro dialect
+static string MacroParameterTypeToString(const LogicalType &type) {
+	if (!DuckLakeTypes::IsNested(type)) {
+		return DuckLakeTypes::ToString(type);
+	}
+	// child types are stored as DuckLake types so they can be bound without a connection
+	auto ducklake_type = TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
+		return DuckLakeTypes::IsNested(child) ? child : DuckLakeTypes::FromString(DuckLakeTypes::ToString(child));
+	});
+	return ducklake_type.ToString();
+}
+
 void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> entry, NewMacroInfo &result) {
 	DuckLakeMacroInfo new_macro_info;
 	auto &macro_entry = entry.get().Cast<MacroCatalogEntry>();
@@ -563,21 +585,17 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 		for (idx_t i = 0; i < impl->parameters.size(); i++) {
 			DuckLakeMacroParameters parameter;
 			parameter.parameter_name = impl->parameters[i]->GetName().GetIdentifierName();
-			parameter.parameter_type = DuckLakeTypes::ToString(impl->types[i]);
+			parameter.parameter_type = MacroParameterTypeToString(impl->types[i]);
 			auto default_it = impl->default_parameters.find(Identifier(parameter.parameter_name));
 			if (default_it != impl->default_parameters.end()) {
 				Value default_value;
-				if (!DuckLakeUtil::TryGetLiteralValue(*default_it->second, default_value)) {
-					throw NotImplementedException("Non-constant default value for macro parameter \"%s\"",
-					                              parameter.parameter_name);
+				if (DuckLakeUtil::TryGetMacroDefaultLiteral(*default_it->second, default_value)) {
+					parameter.default_value = default_value.ToString();
+					parameter.default_value_type = DuckLakeTypes::ToString(default_value.type());
+				} else {
+					parameter.default_value = default_it->second->ToString();
+					parameter.default_value_type = "expression";
 				}
-				auto default_type = default_value.type();
-				if (default_value.IsNull() && (DuckLakeTypes::IsStringType(default_type) || default_type.IsNested())) {
-					// the text NULL is a valid string and nested types are stored without their children
-					default_type = LogicalType::SQLNULL;
-				}
-				parameter.default_value = default_value.ToString();
-				parameter.default_value_type = DuckLakeTypes::ToString(default_type);
 			} else {
 				parameter.default_value_type = "unknown";
 			}
@@ -1934,11 +1952,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 
-	// in case of a retry, we generate the deletion of inlined data from the tables after their deletes
-	if (!flushed_inlined_tables.empty()) {
-		batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(flushed_inlined_tables,
-		                                                                           context.InlinedColNames());
-	}
+	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
+	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
+	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
 
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
