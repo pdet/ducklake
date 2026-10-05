@@ -54,9 +54,39 @@ constexpr idx_t ALLOCATION_OVERHEAD = 2 * sizeof(void *);
 //! Memory of a std::map or std::unordered_map node besides its key and value
 constexpr idx_t MAP_NODE_OVERHEAD = 3 * sizeof(void *) + ALLOCATION_OVERHEAD;
 
+idx_t EstimateValueMemory(const Value &value);
+
+idx_t EstimateChildValueMemory(const vector<Value> &children) {
+	idx_t estimate = 0;
+	for (const auto &child : children) {
+		estimate += sizeof(Value) + EstimateValueMemory(child);
+	}
+	return estimate;
+}
+
+idx_t EstimateValueMemory(const Value &value) {
+	if (value.IsNull()) {
+		return 0;
+	}
+	switch (value.type().id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
+		return EstimateStringMemory(StringValue::Get(value));
+	case LogicalTypeId::STRUCT:
+		return EstimateChildValueMemory(StructValue::GetChildren(value));
+	case LogicalTypeId::MAP:
+		return EstimateChildValueMemory(MapValue::GetChildren(value));
+	case LogicalTypeId::LIST:
+		return EstimateChildValueMemory(ListValue::GetChildren(value));
+	default:
+		return 0;
+	}
+}
+
 idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
-	// the node sizes of a parsed expression are close enough to each other to use the smallest one
-	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD + expression.GetName().size();
+	// expression nodes have similar sizes, so the smallest one stands in for all of them
+	idx_t estimate = sizeof(ConstantExpression) + ALLOCATION_OVERHEAD;
+	estimate += expression.GetAlias().GetIdentifierName().size();
 	if (expression.GetExpressionClass() == ExpressionClass::CONSTANT) {
 		estimate += expression.Cast<ConstantExpression>().GetLiteral().text.size();
 	}
@@ -87,12 +117,12 @@ idx_t EstimateFieldIdMemory(const DuckLakeFieldId &field_id) {
 	idx_t estimate = sizeof(DuckLakeFieldId) + ALLOCATION_OVERHEAD + field_id.Name().size();
 	estimate += sizeof(unique_ptr<DuckLakeFieldId>);
 	estimate += sizeof(FieldIndex) + sizeof(const_reference<DuckLakeFieldId>) + MAP_NODE_OVERHEAD;
-	auto &default_value = field_id.GetColumnData().default_value;
-	if (default_value) {
-		estimate += EstimateExpressionMemory(*default_value);
+	auto &column_data = field_id.GetColumnData();
+	estimate += EstimateValueMemory(column_data.initial_default);
+	if (column_data.default_value) {
+		estimate += EstimateExpressionMemory(*column_data.default_value);
 	}
 	for (const auto &child : field_id.Children()) {
-		// the child and its entry in the child map
 		estimate += EstimateFieldIdMemory(*child);
 		estimate += EstimateStringMemory(child->Name()) + sizeof(idx_t) + MAP_NODE_OVERHEAD;
 	}

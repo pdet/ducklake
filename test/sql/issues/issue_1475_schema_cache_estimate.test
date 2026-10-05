@@ -80,3 +80,63 @@ query I
 SELECT memory_usage_bytes - getvariable('cache_before') >= 10000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true
+
+# two lakes that differ only in the size of the initial defaults that their dropped defaults left behind
+statement ok
+DROP TABLE ducklake.default_tree
+
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_short.db' AS short_defaults (DATA_PATH '{DATA_PATH}/issue_1475_short')
+
+statement ok
+ATTACH 'ducklake:{DATA_PATH}/issue_1475_long.db' AS long_defaults (DATA_PATH '{DATA_PATH}/issue_1475_long')
+
+statement ok
+CREATE TABLE short_defaults.t (a INTEGER)
+
+statement ok
+CREATE TABLE long_defaults.t (a INTEGER)
+
+statement ok
+SET VARIABLE cache_before_short = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+loop i 0 20
+
+statement ok
+ALTER TABLE short_defaults.t ADD COLUMN s{i} VARCHAR DEFAULT 'wwwwwwwwww'
+
+statement ok
+ALTER TABLE short_defaults.t ALTER COLUMN s{i} DROP DEFAULT
+
+endloop
+
+query I
+SELECT count(*) FROM short_defaults.t
+----
+0
+
+statement ok
+SET VARIABLE cache_short = (SELECT memory_usage_bytes - getvariable('cache_before_short') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+SET VARIABLE cache_before_long = (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+loop i 0 20
+
+statement ok
+ALTER TABLE long_defaults.t ADD COLUMN s{i} VARCHAR DEFAULT 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+
+statement ok
+ALTER TABLE long_defaults.t ALTER COLUMN s{i} DROP DEFAULT
+
+endloop
+
+query I
+SELECT count(*) FROM long_defaults.t
+----
+0
+
+query I
+SELECT memory_usage_bytes - getvariable('cache_before_long') - getvariable('cache_short') >= 10000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
