@@ -59,6 +59,12 @@ INSERT INTO ducklake.n VALUES (0.2)
 statement ok
 COMMIT
 
+# the file with the NaN has values whose bounds were not recorded, so the table keeps none
+query I
+SELECT count(*) FROM meta.ducklake_table_column_stats WHERE table_id = 2 AND min_value IS NULL AND max_value IS NULL
+----
+1
+
 # a NaN compares above every number, so a pruned file would lose this row
 query I
 SELECT count(*) FROM ducklake.n WHERE v > 1e300
@@ -78,6 +84,9 @@ statement ok
 CALL ducklake.set_option('skip_stats_columns', 'v', table_name => 's')
 
 statement ok
+BEGIN
+
+statement ok
 INSERT INTO ducklake.s VALUES (1, 100)
 
 statement ok
@@ -85,6 +94,9 @@ CALL ducklake.set_option('skip_stats_columns', '', table_name => 's')
 
 statement ok
 INSERT INTO ducklake.s VALUES (2, 500)
+
+statement ok
+COMMIT
 
 query II
 SELECT min_value, max_value FROM meta.ducklake_table_column_stats WHERE table_id = 3 AND column_id = 2

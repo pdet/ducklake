@@ -128,6 +128,18 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 	return stats;
 }
 
+void DuckLakeColumnStats::CopyMinFrom(const DuckLakeColumnStats &other) {
+	min = other.min;
+	has_min = other.has_min;
+	min_is_exact = other.min_is_exact;
+}
+
+void DuckLakeColumnStats::CopyMaxFrom(const DuckLakeColumnStats &other) {
+	max = other.max;
+	has_max = other.has_max;
+	max_is_exact = other.max_is_exact;
+}
+
 void DuckLakeColumnStats::ClearBounds() {
 	min.clear();
 	max.clear();
@@ -149,7 +161,7 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	// absent bounds only become the bounds of the source if every value so far was NULL
-	bool had_only_nulls = has_num_values && has_null_count && num_values == null_count;
+	bool adopt_bounds = !bounds_unknown && has_num_values && has_null_count && num_values == null_count;
 	bool types_differ = type != new_stats.type;
 	bool bounds_survive = !types_differ || BoundsSurviveTypePromotion(type, new_stats.type);
 	if (types_differ) {
@@ -192,12 +204,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 			return;
 		}
 		// all values in the current stats are null - copy the min/max
-		min = new_stats.min;
-		has_min = new_stats.has_min;
-		min_is_exact = new_stats.min_is_exact;
-		max = new_stats.max;
-		has_max = new_stats.has_max;
-		max_is_exact = new_stats.max_is_exact;
+		CopyMinFrom(new_stats);
+		CopyMaxFrom(new_stats);
 		any_valid = true;
 		return;
 	}
@@ -210,10 +218,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		if (!new_stats.has_min) {
 			has_min = false;
 		} else if (!has_min) {
-			if (had_only_nulls && !bounds_unknown) {
-				min = new_stats.min;
-				has_min = true;
-				min_is_exact = new_stats.min_is_exact;
+			if (adopt_bounds) {
+				CopyMinFrom(new_stats);
 			}
 		} else {
 			// both stats have a min - select the smallest, on a tie the min is exact only if both are exact
@@ -239,10 +245,8 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		if (!new_stats.has_max) {
 			has_max = false;
 		} else if (!has_max) {
-			if (had_only_nulls && !bounds_unknown) {
-				max = new_stats.max;
-				has_max = true;
-				max_is_exact = new_stats.max_is_exact;
+			if (adopt_bounds) {
+				CopyMaxFrom(new_stats);
 			}
 		} else {
 			// both stats have a max - select the largest, on a tie the max is exact only if both are exact
