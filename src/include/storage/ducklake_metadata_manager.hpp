@@ -248,10 +248,6 @@ public:
 	string CastColumnToTarget(const string &column, const LogicalType &type);
 	//! The inlined rows to flush with typed columns, without those this transaction deleted
 	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
-	//! The comma separated ids of the rows whose current version this transaction deleted
-	string InlinedRowIdsDeletedByTransaction(TableIndex table_id, const string &inlined_table_name);
-	//! The filter on the current versions of the rows in a set of row ids
-	string InlinedCurrentRowsFilter(const string &row_id_set);
 	//! The order of the rows in a flushed file
 	string InlinedFlushOrder(const string &sort_order_sql) const;
 

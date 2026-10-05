@@ -3042,38 +3042,24 @@ string DuckLakeMetadataManager::InlinedFlushSource(const string &inlined_table_n
 		}
 		projection.push_back(typed_column);
 	}
-	// rows deleted by this transaction are not flushed, passing their ids as one string keeps planning cheap
-	auto deleted_ids = InlinedRowIdsDeletedByTransaction(table.GetTableId(), inlined_table_name);
 	string filter;
-	if (!deleted_ids.empty()) {
-		auto row_id_set = StringUtil::Format(
-		    "(SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM (SELECT %s AS ids))", SQLString(deleted_ids));
-		filter = " WHERE NOT (" + InlinedCurrentRowsFilter(row_id_set) + ")";
+	auto local_deletes = transaction.GetInlinedDeletes(table.GetTableId(), inlined_table_name);
+	if (local_deletes && !local_deletes->rows.empty()) {
+		vector<string> row_ids;
+		for (auto &row_id : local_deletes->rows) {
+			row_ids.push_back(to_string(row_id));
+		}
+		// rows deleted by this transaction are not flushed, passing the ids as one string keeps planning cheap
+		filter = StringUtil::Format(" WHERE NOT (%s IN (SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM "
+		                            "(SELECT %s AS ids)) AND (%s IS NULL OR %s > {SNAPSHOT_ID}))",
+		                            col_names.row_id, SQLString(StringUtil::Join(row_ids, ",")), col_names.end_snapshot,
+		                            col_names.end_snapshot);
 	}
 	auto source = "{METADATA_CATALOG}." + inlined_table_name;
 	if (!has_casts && filter.empty()) {
 		return source;
 	}
 	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
-}
-
-string DuckLakeMetadataManager::InlinedRowIdsDeletedByTransaction(TableIndex table_id,
-                                                                  const string &inlined_table_name) {
-	auto local_deletes = transaction.GetInlinedDeletes(table_id, inlined_table_name);
-	if (!local_deletes) {
-		return string();
-	}
-	vector<string> row_ids;
-	for (auto &row_id : local_deletes->rows) {
-		row_ids.push_back(to_string(row_id));
-	}
-	return StringUtil::Join(row_ids, ",");
-}
-
-string DuckLakeMetadataManager::InlinedCurrentRowsFilter(const string &row_id_set) {
-	auto col_names = InlinedColNames();
-	return StringUtil::Format("%s IN %s AND (%s IS NULL OR %s > {SNAPSHOT_ID})", col_names.row_id, row_id_set,
-	                          col_names.end_snapshot, col_names.end_snapshot);
 }
 
 string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
