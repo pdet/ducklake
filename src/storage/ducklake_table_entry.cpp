@@ -208,7 +208,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		D_ASSERT(old_field);
 		auto &old_col_name = old_field->Name();
 		for (auto &sort_field : sort_data->fields) {
-			auto parsed = Parser::ParseExpressionList(sort_field.expression);
+			auto parsed = Parser::GetBuiltinParser().ParseExpressionList(sort_field.expression);
 			if (!parsed.empty()) {
 				ReplaceColumnRefName(*parsed[0], old_col_name, new_name);
 				sort_field.expression = parsed[0]->ToString();

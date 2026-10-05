@@ -45,7 +45,7 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 		if (field.dialect != "duckdb") {
 			continue;
 		}
-		auto parsed_expression = Parser::ParseExpressionList(field.expression);
+		auto parsed_expression = Parser::GetBuiltinParser().ParseExpressionList(field.expression);
 		pre_bound_orders.emplace_back(field.sort_direction, field.null_order, std::move(parsed_expression[0]));
 	}
 	return pre_bound_orders;
