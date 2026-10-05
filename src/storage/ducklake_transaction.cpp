@@ -377,32 +377,8 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	}
 
 	// Add stats for new column
-	idx_t total_rows = existing.Count();
-	DuckLakeColumnStats new_col_stats(new_column_type);
-	new_col_stats.num_values = total_rows;
-	new_col_stats.has_num_values = true;
-	if (has_default) {
-		new_col_stats.null_count = 0;
-		new_col_stats.has_null_count = true;
-		if (total_rows > 0) {
-			new_col_stats.any_valid = true;
-			auto default_str = default_value.ToString();
-			new_col_stats.has_min = true;
-			new_col_stats.min = default_str;
-			new_col_stats.has_max = true;
-			new_col_stats.max = std::move(default_str);
-			new_col_stats.min_is_exact = true;
-			new_col_stats.max_is_exact = true;
-		} else {
-			new_col_stats.any_valid = false;
-		}
-	} else {
-		new_col_stats.null_count = total_rows;
-		new_col_stats.has_null_count = true;
-		new_col_stats.any_valid = false;
-	}
-
-	table_changes.new_inlined_data->column_stats.emplace(new_field_index, std::move(new_col_stats));
+	table_changes.new_inlined_data->column_stats.emplace(
+	    new_field_index, DuckLakeColumnStats::FromConstant(new_column_type, default_value, existing.Count()));
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
