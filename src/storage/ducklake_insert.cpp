@@ -126,6 +126,9 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 			column_stats.min_is_exact = StringValue::Get(stats_children[1]) == "true";
 		} else if (stats_name == "max_is_exact") {
 			column_stats.max_is_exact = StringValue::Get(stats_children[1]) == "true";
+		} else if (stats_name == "nan_count") {
+			// NaN count of floating point columns; contains_nan is already set from has_nan
+			continue;
 		} else if (column_stats.extra_stats && column_stats.extra_stats->ParseStats(stats_name, stats_children)) {
 			// handled by extra stats
 			continue;
