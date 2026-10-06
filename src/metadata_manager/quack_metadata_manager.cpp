@@ -77,8 +77,7 @@ string QuackMetadataManager::CastStatsToTarget(const string &stats, const Logica
 	// the server reads a bound without an offset in its own time zone, so such a bound is unknown
 	auto bound = StringUtil::Format(
 	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
-	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", bound,
-	                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity", type.ToString());
+	return BoundOrInfinity(bound, type.ToString(), cast_type);
 }
 
 string QuackMetadataManager::MetadataExistsQuery() const {
