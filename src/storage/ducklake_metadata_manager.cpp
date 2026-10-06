@@ -2967,10 +2967,7 @@ string GetExpressionType(ParsedExpression &expression) {
 }
 
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
-                                 string &result) {
-	if (!result.empty()) {
-		result += ",";
-	}
+                                 vector<string> &result) {
 	string parent_idx = DuckLakeUtil::OptionalIdxOrNull(parent);
 
 	string initial_default_val =
@@ -3007,10 +3004,10 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	auto column_id = column.id.index;
 	auto column_order = column_id;
 
-	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
-	                             table_id.index, column_order, SQLString(column.name), SQLString(column.type),
-	                             initial_default_val, default_val, column.nulls_allowed ? "true" : "false", parent_idx,
-	                             default_val_type, default_val_system);
+	result.push_back(StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
+	                                    table_id.index, column_order, SQLString(column.name), SQLString(column.type),
+	                                    initial_default_val, default_val, column.nulls_allowed ? "true" : "false",
+	                                    parent_idx, default_val_type, default_val_system));
 	for (auto &child : column.children) {
 		ColumnToSQLRecursive(child, table_id, column_id, result);
 	}
@@ -3118,6 +3115,33 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
 }
 
+static constexpr idx_t MAX_VALUES_LIST_LENGTH = 65536;
+
+static string ChunkValuesStatements(const vector<string> &tuples,
+                                    const std::function<string(const string &values)> &make_statement) {
+	string result;
+	string values;
+	for (auto &tuple : tuples) {
+		if (!values.empty()) {
+			values += ", ";
+		}
+		values += tuple;
+		if (values.size() >= MAX_VALUES_LIST_LENGTH) {
+			result += make_statement(values);
+			values.clear();
+		}
+	}
+	if (!values.empty()) {
+		result += make_statement(values);
+	}
+	return result;
+}
+
+string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
+	auto insert_prefix = "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
+	return ChunkValuesStatements(values, [&](const string &tuples) { return insert_prefix + tuples + ";"; });
+}
+
 string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
                                                const vector<DuckLakePath> &resolved_paths) {
 	if (new_tables.empty()) {
@@ -3127,7 +3151,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		throw InternalException("WriteNewTables: resolved_paths size mismatch");
 	}
 
-	string column_insert_sql;
+	vector<string> column_values;
 	string table_insert_sql;
 
 	for (idx_t i = 0; i < new_tables.size(); ++i) {
@@ -3141,7 +3165,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		    StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s)", table.id.index, table.uuid, schema_id,
 		                       SQLString(table.name), SQLString(path.path), path.path_is_relative ? "true" : "false");
 		for (auto &column : table.columns) {
-			ColumnToSQLRecursive(column, table.id, optional_idx(), column_insert_sql);
+			ColumnToSQLRecursive(column, table.id, optional_idx(), column_values);
 		}
 	}
 	string batch_query;
@@ -3149,9 +3173,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 	if (!table_insert_sql.empty()) {
 		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES " + table_insert_sql + ";";
 	}
-	if (!column_insert_sql.empty()) {
-		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
-	}
+	batch_query += InsertValuesSql("ducklake_column", column_values);
 
 	return batch_query;
 }
@@ -3297,13 +3319,13 @@ string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> 
 	if (new_columns.empty()) {
 		return {};
 	}
-	string column_insert_sql;
+	vector<string> column_values;
 	for (auto &new_col : new_columns) {
-		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, column_insert_sql);
+		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, column_values);
 	}
 
 	// insert column entries
-	return "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
+	return InsertValuesSql("ducklake_column", column_values);
 }
 
 string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views) {
@@ -3463,28 +3485,6 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 }
 
 //! Parsing a statement takes memory proportional to its length, so large VALUES lists are split over statements
-static constexpr idx_t MAX_VALUES_LIST_LENGTH = 65536;
-
-static string ChunkValuesStatements(const vector<string> &tuples,
-                                    const std::function<string(const string &values)> &make_statement) {
-	string result;
-	string values;
-	for (auto &tuple : tuples) {
-		if (!values.empty()) {
-			values += ", ";
-		}
-		values += tuple;
-		if (values.size() >= MAX_VALUES_LIST_LENGTH) {
-			result += make_statement(values);
-			values.clear();
-		}
-	}
-	if (!values.empty()) {
-		result += make_statement(values);
-	}
-	return result;
-}
-
 string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_table_name, idx_t row_id_start,
                                                         bool has_preserved_row_ids, const vector<int64_t> *row_ids,
                                                         const vector<string> &cells_per_row) {
