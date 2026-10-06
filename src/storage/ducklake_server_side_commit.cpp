@@ -809,19 +809,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.get_inlined_table_names = [this](TableIndex table_id) {
 		return LookupInlinedTableNames(table_id);
 	};
+	ctx.inlined_file_deletion_table_exists = [this](TableIndex table_id) {
+		return InlinedFileDeletionTableExists(table_id);
+	};
 	ctx.get_net_data_file_row_count = [this](TableIndex table_id) -> idx_t {
-		// The inlined-file-deletion table is deterministically named but created lazily.
-		// Probe its existence via the catalog (an erroring probe would abort the transaction);
-		// if absent, the SQL omits the inlined-deletion subterm.
-		auto inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
-		auto probe_sql = SubstitutePlaceholders(
-		    StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-		                       "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-		                       DuckLakeUtil::SQLLiteralToString(inlined_deletion_table)),
-		    transaction_snapshot);
-		auto probe = fresh_conn.Query(probe_sql);
-		if (!probe || probe->HasError() || probe->RowCount() == 0) {
-			inlined_deletion_table.clear();
+		string inlined_deletion_table;
+		if (InlinedFileDeletionTableExists(table_id)) {
+			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
 		auto sql = SubstitutePlaceholders(
 		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table), transaction_snapshot);
@@ -852,6 +846,19 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		committed_snapshot_id = v;
 	};
 	return ctx;
+}
+
+bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_id) {
+	// The inlined-file-deletion table is deterministically named but created lazily.
+	// Probe its existence via the catalog (an erroring probe would abort the transaction).
+	auto probe_sql = SubstitutePlaceholders(
+	    StringUtil::Format(
+	        "SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
+	        "schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	        DuckLakeUtil::SQLLiteralToString(DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id))),
+	    transaction_snapshot);
+	auto probe = fresh_conn.Query(probe_sql);
+	return probe && !probe->HasError() && probe->RowCount() > 0;
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
