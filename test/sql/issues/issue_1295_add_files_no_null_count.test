@@ -13,11 +13,13 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1295_no_null_count')
 
+# the values are read from the file and not from folder names that look like partitions
 statement ok
 CREATE TABLE ducklake.t (http_status_code INTEGER NOT NULL, backlink_count INTEGER NOT NULL)
 
 statement error
-CALL ducklake_add_data_files('ducklake', 't', 'data/parquet/no_null_count.parquet')
+CALL ducklake_add_data_files('ducklake', 't', 'data/parquet/no_null_count/backlink_count=1/http_status_code=__HIVE_DEFAULT_PARTITION__/no_null_count.parquet',
+    hive_partitioning => false)
 ----
 NOT NULL constraint failed: t.backlink_count
 
@@ -30,7 +32,8 @@ statement ok
 CREATE TABLE ducklake.n (http_status_code INTEGER NOT NULL, backlink_count INTEGER)
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'n', 'data/parquet/no_null_count.parquet')
+CALL ducklake_add_data_files('ducklake', 'n', 'data/parquet/no_null_count/backlink_count=1/http_status_code=__HIVE_DEFAULT_PARTITION__/no_null_count.parquet',
+    hive_partitioning => false)
 
 query II
 SELECT count(http_status_code), count(backlink_count) FROM ducklake.n

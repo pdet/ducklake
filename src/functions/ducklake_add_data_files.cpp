@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
+#include "common/parquet_file_scanner.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -1233,15 +1234,20 @@ void DuckLakeFileProcessor::CheckNotNullValues(const ParquetFileMetadata &file_m
 		return;
 	}
 	// without a null count in the footer the column itself is read
-	auto result =
-	    transaction.ExecuteRaw(StringUtil::Format("SELECT 1 FROM read_parquet(%s) WHERE %s IS NULL LIMIT 1",
-	                                              SQLString(file_metadata.filepath), SQLIdentifier(column.name)));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
+	DuckLakeFileData file;
+	file.path = file_metadata.filepath;
+	ParquetFileScanner scanner(context, file);
+	auto column_idx = scanner.FindColumn(column.name);
+	if (!column_idx.IsValid()) {
+		throw InternalException("Column \"%s\" not found in file \"%s\"", column.name, file.path);
 	}
-	auto chunk = result->Fetch();
-	if (chunk && chunk->size() > 0) {
-		table.ThrowNotNullViolation(column_name->second);
+	scanner.SetColumnIds({column_idx.GetIndex()});
+	DataChunk chunk;
+	chunk.Initialize(context, {scanner.GetTypes()[column_idx.GetIndex()]});
+	while (scanner.Scan(chunk)) {
+		if (VectorOperations::HasNull(chunk.data[0])) {
+			table.ThrowNotNullViolation(column_name->second);
+		}
 	}
 }
 
