@@ -35,7 +35,22 @@ SELECT (SELECT x FROM dl.aliased), (SELECT x FROM dl.suffixed), (SELECT x FROM d
 ----
 42	42	42
 
-# the stored SQL of a view never holds the name of its own catalog
+# the table references of a view are stored without the name of its catalog
+query I
+SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
+----
+0
+
+# the source of a pivot is stored that way as well
+statement ok
+CREATE VIEW dl.pivoted AS PIVOT dl.t ON x IN (42) USING count(*)
+
+statement ok
+CREATE VIEW dl.unpivoted AS UNPIVOT dl.t ON x INTO NAME n VALUE val
+
+statement ok
+CREATE VIEW dl.joined AS SELECT * FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val) q, dl.t
+
 query I
 SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
 ----
@@ -51,6 +66,11 @@ query III
 SELECT (SELECT x FROM other.aliased), (SELECT x FROM other.suffixed), (SELECT x FROM other.plain)
 ----
 42	42	42
+
+query III
+SELECT (SELECT count(*) FROM other.pivoted), (SELECT count(*) FROM other.unpivoted), (SELECT count(*) FROM other.joined)
+----
+1	1	1
 
 # a view of a table of another catalog keeps that name
 statement ok
