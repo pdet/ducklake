@@ -276,7 +276,8 @@
         "test/sql/function/variant/variant_extract_try_cast.test",
         "test/sql/alter/rename_table/test_rename_table_view.test",
         "test/sql/alter/alter_schema_set_schema_options.test",
-        "test/sql/create/create_schema_options.test"
+        "test/sql/create/create_schema_options.test",
+        "test/sql/alter/drop_col/test_drop_col_dotted_name.test"
       ]
     },
     {
@@ -906,7 +907,8 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_count_boundary.test",
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
-        "test/sql/storage/overflow_strings/null_overflow_string_memory.test"
+        "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
+        "test/sql/storage/compression/constant/constant_negative_zero.test"
       ]
     },
     {
