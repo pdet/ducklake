@@ -2042,6 +2042,9 @@ void DuckLakeTransactionState::CheckDeletedFileConflicts(const TransactionChange
 			break;
 		}
 	}
+	if (files_against_inlined_deletes.empty()) {
+		return;
+	}
 	for (auto &table_id : tables) {
 		if (other_changes.tables_deleted_inlined.find(table_id) == other_changes.tables_deleted_inlined.end()) {
 			continue;

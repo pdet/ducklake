@@ -123,3 +123,33 @@ query II
 SELECT count(*), count(*) FILTER (WHERE id >= 100 OR id = 1) FROM ducklake.t
 ----
 68	0
+
+# flushing the inlined deletes of a data file does not conflict with a later inlined delete of that file
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT i AS id FROM range(100) t(i)
+
+statement ok
+DELETE FROM ducklake.t2 WHERE id = 10
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't2')
+
+statement ok con2
+DELETE FROM ducklake.t2 WHERE id = 20
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT count(*), count(*) FILTER (WHERE id = 10), count(*) FILTER (WHERE id = 20) FROM ducklake.t2
+----
+98	0	0
