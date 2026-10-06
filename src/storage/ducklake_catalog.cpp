@@ -1000,27 +1000,34 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
 
-	// Load from the metadata manager
+	// load the stats of every table of the snapshot in one query and cache them all, including the tables
+	// without stats, so scanning the tables of a snapshot costs one query instead of one per table
 	auto schema_entry = GetSchemaCacheEntry(transaction, snapshot);
-	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot, table_id);
+	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot);
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
-	unique_ptr<DuckLakeTableStats> table_stats;
-	auto it = lake_stats->table_stats.find(table_id);
-	if (it != lake_stats->table_stats.end()) {
-		table_stats = std::move(it->second);
+	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
+	for (auto &table_entry : schema_entry->catalog_set.GetTableIdMap()) {
+		auto current_id = table_entry.first;
+		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
+		auto stats_entry = lake_stats->table_stats.find(current_id);
+		if (stats_entry == lake_stats->table_stats.end()) {
+			// cache negative result to avoid repeated metadata queries on empty tables
+			entry = make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version);
+		} else {
+			entry =
+			    make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version, std::move(*stats_entry->second));
+		}
+		if (current_id == table_id) {
+			requested_entry = entry;
+		}
+		cache.Put(StatsCacheKey(snapshot.next_file_id, current_id), std::move(entry));
 	}
-
-	if (!table_stats) {
-		// cache negative result to avoid repeated metadata queries on empty tables
-		cache.Put(std::move(key), make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version));
+	if (!requested_entry || !requested_entry->has_stats) {
 		return nullptr;
 	}
-
-	auto entry = make_shared_ptr<DuckLakeTableStatsCacheEntry>(snapshot.schema_version, std::move(*table_stats));
-	cache.Put(std::move(key), entry);
-	auto *raw = entry.get();
-	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
+	auto *raw = requested_entry.get();
+	return shared_ptr<DuckLakeTableStats>(std::move(requested_entry), &raw->stats);
 }
 
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
