@@ -177,7 +177,6 @@ public:
 private:
 	void ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &result);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
-	//! Refuses a file whose statistics show NULL values in a NOT NULL column
 	void CheckNotNullColumns(const DuckLakeDataFile &file) const;
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix, bool repeated);
@@ -1202,18 +1201,20 @@ void DuckLakeFileProcessor::CheckNotNullColumns(const DuckLakeDataFile &file) co
 	if (not_null_fields.empty()) {
 		return;
 	}
-	for (auto &entry : file.column_stats) {
-		auto &stats = entry.second;
-		if (!stats.has_null_count || stats.null_count == 0) {
-			continue;
-		}
-		auto &column = table.GetColumnByFieldId(entry.first);
-		auto &column_name = column.Name().GetIdentifierName();
+	// the constraint is only enforced for the root columns, like it is for an insert
+	for (auto &field_id : table.GetFieldData().GetFieldIds()) {
+		auto &column_name = field_id->Name();
 		if (!not_null_fields.count(column_name)) {
 			continue;
 		}
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
-		                          SQLIdentifier(column_name));
+		auto entry = file.column_stats.find(field_id->GetFieldIndex());
+		if (entry == file.column_stats.end()) {
+			continue;
+		}
+		auto &stats = entry->second;
+		if (stats.has_null_count && stats.null_count > 0) {
+			table.ThrowNotNullViolation(column_name);
+		}
 	}
 }
 
