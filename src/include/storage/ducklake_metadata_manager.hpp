@@ -628,6 +628,8 @@ protected:
 	                                          const FileColumnStatsCTEBodyGenerator &generate_body);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
+	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
+	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
@@ -636,8 +638,6 @@ private:
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual bool ValueIsFinite(const Value &val);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
-	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
-	                                 StatsCastType cast_type = StatsCastType::ORDERING);
 	virtual string GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,
 	                                      const LogicalType &type, unordered_set<string> &referenced_stats,
 	                                      const string &stats_alias);

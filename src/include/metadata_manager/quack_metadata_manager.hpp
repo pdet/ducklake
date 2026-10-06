@@ -42,6 +42,7 @@ public:
 
 protected:
 	string MetadataExistsQuery() const override;
+	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 };
 
 } // namespace duckdb
