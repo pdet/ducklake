@@ -212,7 +212,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	// record_count (total ever inserted) equals the net (delete-adjusted) row count. count(*) is unaffected
 	// either way: it does not consult MinMaxIsExact and subtracts delete counts independently.
 	auto table_stats = table.GetTableStats(*transaction);
-	bool min_max_exact = table_stats && table_stats->record_count == net_count;
+	bool min_max_exact = table_stats && !table_stats->record_count_unknown && table_stats->record_count == net_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;
