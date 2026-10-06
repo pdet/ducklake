@@ -70,16 +70,14 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 
 string QuackMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) {
 	auto cast = DuckLakeMetadataManager::CastStatsToTarget(stats, type, cast_type);
-	if (type.id() != LogicalTypeId::TIMESTAMP_TZ && type.id() != LogicalTypeId::TIMESTAMP_TZ_NS) {
+	if (cast_type == StatsCastType::ORDERING ||
+	    (type.id() != LogicalTypeId::TIMESTAMP_TZ && type.id() != LogicalTypeId::TIMESTAMP_TZ_NS)) {
 		return cast;
 	}
 	// the server reads a bound without an offset in its own time zone, so such a bound is unknown
-	cast = StringUtil::Format(
+	auto bound = StringUtil::Format(
 	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
-	if (cast_type == StatsCastType::ORDERING) {
-		return cast;
-	}
-	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", cast,
+	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", bound,
 	                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity", type.ToString());
 }
 
