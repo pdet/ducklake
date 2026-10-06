@@ -185,6 +185,8 @@ private:
 	void ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &result);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
 	void CheckNotNullStats(FieldIndex field_index, const DuckLakeColumnStats &stats) const;
+	void CheckNotNullValues(const ParquetFileMetadata &file_metadata, const ParquetColumn &column,
+	                        FieldIndex field_index) const;
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix, bool repeated);
 	vector<unique_ptr<DuckLakeNameMapEntry>> MapColumns(ParquetFileMetadata &file,
@@ -1172,6 +1174,9 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 				}
 			}
 
+			if (!aggregated.has_null_count) {
+				CheckNotNullValues(file_metadata, column, field_index);
+			}
 			result.column_stats.emplace(field_index, std::move(aggregated));
 		}
 	}
@@ -1219,6 +1224,25 @@ void DuckLakeFileProcessor::CheckNotNullStats(FieldIndex field_index, const Duck
 		return;
 	}
 	table.ThrowNotNullViolation(column_name->second);
+}
+
+void DuckLakeFileProcessor::CheckNotNullValues(const ParquetFileMetadata &file_metadata, const ParquetColumn &column,
+                                               FieldIndex field_index) const {
+	auto column_name = not_null_columns.find(field_index.index);
+	if (column_name == not_null_columns.end()) {
+		return;
+	}
+	// without a null count in the footer the column itself is read
+	auto result =
+	    transaction.ExecuteRaw(StringUtil::Format("SELECT 1 FROM read_parquet(%s) WHERE %s IS NULL LIMIT 1",
+	                                              SQLString(file_metadata.filepath), SQLIdentifier(column.name)));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to add data files to DuckLake: ");
+	}
+	auto chunk = result->Fetch();
+	if (chunk && chunk->size() > 0) {
+		table.ThrowNotNullViolation(column_name->second);
+	}
 }
 
 DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFileMetadata &file_metadata,
