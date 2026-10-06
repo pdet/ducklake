@@ -289,11 +289,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 	idx_t target_file_size = catalog.GetTargetFileSize(context, table);
 
-	DuckLakeFileSizeOptions filter_options;
-	filter_options.min_file_size = options.min_file_size;
-	filter_options.max_file_size = options.max_file_size;
-	filter_options.target_file_size = target_file_size;
-	filter_options.newer_than = options.newer_than;
+	DuckLakeFileSizeOptions filter_options(options, target_file_size);
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
@@ -793,16 +789,12 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
                                DuckLakeCatalog &ducklake_catalog, TableFunctionBindInput &input,
                                DuckLakeTableEntry &cur_table, CompactionType type, double delete_threshold,
-                               uint64_t max_files, optional_idx min_file_size, optional_idx max_file_size,
-                               const Value &newer_than, vector<unique_ptr<LogicalOperator>> &compactions) {
+                               uint64_t max_files, const DuckLakeMergeAdjacentOptions &merge_options,
+                               vector<unique_ptr<LogicalOperator>> &compactions) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES: {
-		DuckLakeMergeAdjacentOptions options;
-		options.min_file_size = min_file_size;
-		options.max_file_size = max_file_size;
-		options.newer_than = newer_than;
 		DuckLakeCompactor compactor(context, ducklake_catalog, transaction, *input.binder, cur_table.GetTableId(),
-		                            max_files, options);
+		                            max_files, merge_options);
 		compactor.GenerateCompactions(cur_table, compactions);
 		break;
 	}
@@ -837,6 +829,17 @@ double GetDeleteThreshold(optional_ptr<DuckLakeSchemaEntry> schema_entry, const 
 	return delete_threshold;
 }
 
+static Value GetTimestampOption(const TableFunctionBindInput &input, const char *name) {
+	auto entry = input.named_parameters.find(name);
+	if (entry == input.named_parameters.end()) {
+		return Value();
+	}
+	if (entry->second.IsNull()) {
+		throw BinderException("The %s option must be a non-null timestamp.", name);
+	}
+	return entry->second;
+}
+
 unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunctionBindInput &input, TableIndex bind_index,
                                            CompactionType type) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
@@ -856,7 +859,8 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		}
 	}
 
-	optional_idx min_file_size;
+	DuckLakeMergeAdjacentOptions merge_options;
+	auto &min_file_size = merge_options.min_file_size;
 	auto min_file_size_entry = input.named_parameters.find("min_file_size");
 	if (min_file_size_entry != input.named_parameters.end()) {
 		if (min_file_size_entry->second.IsNull()) {
@@ -865,7 +869,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		min_file_size = UBigIntValue::Get(min_file_size_entry->second);
 	}
 
-	optional_idx max_file_size;
+	auto &max_file_size = merge_options.max_file_size;
 	auto max_file_size_entry = input.named_parameters.find("max_file_size");
 	if (max_file_size_entry != input.named_parameters.end()) {
 		if (max_file_size_entry->second.IsNull()) {
@@ -882,13 +886,11 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
-	Value newer_than;
-	auto newer_than_entry = input.named_parameters.find("newer_than");
-	if (newer_than_entry != input.named_parameters.end()) {
-		if (newer_than_entry->second.IsNull()) {
-			throw BinderException("The newer_than option must be a non-null timestamp.");
-		}
-		newer_than = newer_than_entry->second;
+	merge_options.newer_than = GetTimestampOption(input, "newer_than");
+	merge_options.older_than = GetTimestampOption(input, "older_than");
+	if (!merge_options.newer_than.IsNull() && !merge_options.older_than.IsNull() &&
+	    merge_options.newer_than >= merge_options.older_than) {
+		throw BinderException("The newer_than option must be less than older_than.");
 	}
 
 	if (input.inputs.size() == 1) {
@@ -903,8 +905,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 					                                             cur_table.GetTableId(), "true") == "true") {
 						auto delete_threshold = GetDeleteThreshold(&dl_cur_schema, cur_table, ducklake_catalog, input);
 						GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type,
-						                   delete_threshold, max_files, min_file_size, max_file_size, newer_than,
-						                   compactions);
+						                   delete_threshold, max_files, merge_options, compactions);
 					}
 				}
 			});
@@ -940,7 +941,7 @@ unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableFunction
 	if (auto_compact) {
 		auto delete_threshold = GetDeleteThreshold(dl_schema, ducklake_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, ducklake_table, type, delete_threshold,
-		                   max_files, min_file_size, max_file_size, newer_than, compactions);
+		                   max_files, merge_options, compactions);
 	}
 
 	return GenerateCompactionOperator(input, bind_index, compactions);
@@ -965,6 +966,7 @@ TableFunctionSet DuckLakeMergeAdjacentFilesFunction::GetFunctions() {
 		function.named_parameters["max_file_size"] = LogicalType::UBIGINT;
 		function.named_parameters["max_compacted_files"] = LogicalType::UBIGINT;
 		function.named_parameters["newer_than"] = LogicalType::TIMESTAMP_TZ;
+		function.named_parameters["older_than"] = LogicalType::TIMESTAMP_TZ;
 		if (type.size() == 2) {
 			function.named_parameters["schema"] = LogicalType::VARCHAR;
 		}

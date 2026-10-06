@@ -2584,16 +2584,19 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
 		}
 		file_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+		// filter on snapshot ids (commit order), not snapshot_time (transaction start), so late commits count as newer
+		auto first_snapshot_at = [](const Value &timestamp) {
+			auto timestamp_tz = timestamp.GetValue<timestamp_tz_t>();
+			auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(timestamp_tz.value));
+			return StringUtil::Format("(SELECT COALESCE(MIN(snapshot_id), 9223372036854775807) FROM "
+			                          "{METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_time::TIMESTAMPTZ >= '%s')",
+			                          timestamp_filter);
+		};
 		if (!options.newer_than.IsNull()) {
-			// only consider files written at or after this timestamp - the timestamp is mapped to the first
-			// snapshot created at or after it, and files are filtered on their begin_snapshot
-			auto newer_than = options.newer_than.GetValue<timestamp_tz_t>();
-			auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(newer_than.value));
-			file_filter_clause +=
-			    StringUtil::Format(" AND data.begin_snapshot >= (SELECT COALESCE(MIN(snapshot_id), "
-			                       "9223372036854775807) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE "
-			                       "snapshot_time::TIMESTAMPTZ >= '%s')",
-			                       timestamp_filter);
+			file_filter_clause += " AND data.begin_snapshot >= " + first_snapshot_at(options.newer_than);
+		}
+		if (!options.older_than.IsNull()) {
+			file_filter_clause += " AND data.begin_snapshot < " + first_snapshot_at(options.older_than);
 		}
 	} else if (type == CompactionType::REWRITE_DELETES) {
 		// Load inlined row IDs before selecting rewrite candidates.
