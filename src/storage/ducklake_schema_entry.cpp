@@ -254,10 +254,8 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
-	// replace our catalog name with a generic {DUCKLAKE_CATALOG}.
+	// references to this catalog are printed without its name, so the SQL is stored as it is
 	auto query_sql = info.query->ToString();
-	auto &catalog_name = ParentCatalog().GetName();
-	query_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, catalog_name + ".", "{DUCKLAKE_CATALOG}.");
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);

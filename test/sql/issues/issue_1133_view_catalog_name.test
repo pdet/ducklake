@@ -1,0 +1,68 @@
+# name: test/sql/issues/issue_1133_view_catalog_name.test
+# description: A view keeps working when the lake is attached under another name (#1133)
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1133.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1133', METADATA_CATALOG 'issue_1133_meta')
+
+statement ok
+CREATE TABLE dl.t (x INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# an alias or a column qualifier that happens to be the name of the catalog is not a catalog reference
+statement ok
+CREATE VIEW dl.aliased AS SELECT dl.x FROM dl.t AS dl
+
+# the same for an identifier that merely ends with the name of the catalog
+statement ok
+CREATE VIEW dl.suffixed AS SELECT tbdl.x FROM dl.t AS tbdl
+
+statement ok
+CREATE VIEW dl.plain AS SELECT x FROM dl.t
+
+query III
+SELECT (SELECT x FROM dl.aliased), (SELECT x FROM dl.suffixed), (SELECT x FROM dl.plain)
+----
+42	42	42
+
+# the stored SQL of a view never holds the name of its own catalog
+query I
+SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
+----
+0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/issue_1133')
+
+query III
+SELECT (SELECT x FROM other.aliased), (SELECT x FROM other.suffixed), (SELECT x FROM other.plain)
+----
+42	42	42
+
+# a view of a table of another catalog keeps that name
+statement ok
+CREATE TABLE elsewhere (z INTEGER)
+
+statement ok
+INSERT INTO elsewhere VALUES (7)
+
+statement ok
+CREATE VIEW other.cross_catalog AS SELECT z FROM memory.main.elsewhere
+
+query I
+SELECT z FROM other.cross_catalog
+----
+7
