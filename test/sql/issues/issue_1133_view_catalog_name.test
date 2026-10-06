@@ -51,6 +51,12 @@ CREATE VIEW dl.unpivoted AS UNPIVOT dl.t ON x INTO NAME n VALUE val
 statement ok
 CREATE VIEW dl.joined AS SELECT * FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val) q, dl.t
 
+statement ok
+CREATE VIEW dl.in_subquery AS SELECT (SELECT count(*) FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val)) AS c
+
+statement ok
+CREATE VIEW dl.in_cte AS WITH RECURSIVE r AS (SELECT * FROM (UNPIVOT dl.t ON x INTO NAME n VALUE val)) SELECT count(*) AS c FROM r
+
 query I
 SELECT count(*) FROM issue_1133_meta.ducklake_view WHERE sql LIKE '%dl.t%'
 ----
@@ -71,6 +77,11 @@ query III
 SELECT (SELECT count(*) FROM other.pivoted), (SELECT count(*) FROM other.unpivoted), (SELECT count(*) FROM other.joined)
 ----
 1	1	1
+
+query II
+SELECT (SELECT c FROM other.in_subquery), (SELECT c FROM other.in_cte)
+----
+1	1
 
 # a view of a table of another catalog keeps that name
 statement ok

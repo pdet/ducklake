@@ -24,8 +24,8 @@
 #include "duckdb/parser/tableref/pivotref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/parser/tableref/subqueryref.hpp"
-#include "duckdb/parser/query_node/select_node.hpp"
-#include "duckdb/parser/query_node/set_operation_node.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp"
 
 namespace duckdb {
 
@@ -246,59 +246,28 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 	throw NotImplementedException("DuckLake does not support indexes");
 }
 
-static void StripCatalogFromPivotSources(QueryNode &node, const Identifier &catalog_name);
+//! The binder strips the name of the view's own catalog from its table references, but not from a pivot
+static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name);
 
-static void StripCatalogFromPivotSources(TableRef &ref, const Identifier &catalog_name) {
-	switch (ref.type) {
-	case TableReferenceType::PIVOT: {
-		auto &pivot = ref.Cast<PivotRef>();
-		RemotePushdownOptimizer::StripCatalogName(*pivot.source, catalog_name);
-		StripCatalogFromPivotSources(*pivot.source, catalog_name);
-		break;
-	}
-	case TableReferenceType::JOIN: {
-		auto &join = ref.Cast<JoinRef>();
-		StripCatalogFromPivotSources(*join.left, catalog_name);
-		StripCatalogFromPivotSources(*join.right, catalog_name);
-		break;
-	}
-	case TableReferenceType::SUBQUERY: {
-		auto &subquery = ref.Cast<SubqueryRef>();
-		StripCatalogFromPivotSources(*subquery.subquery->node, catalog_name);
-		break;
-	}
-	default:
-		break;
-	}
-}
-
-static void StripCatalogFromPivotSources(QueryNode &node, const Identifier &catalog_name) {
-	for (auto &cte : node.cte_map.map) {
-		if (cte.second->query_node) {
-			StripCatalogFromPivotSources(*cte.second->query_node, catalog_name);
+static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name) {
+	auto strip_expression = [&](unique_ptr<ParsedExpression> &expr) {
+		RemotePushdownOptimizer::StripCatalogName(*expr, catalog_name);
+		if (expr->GetExpressionClass() == ExpressionClass::SUBQUERY) {
+			StripCatalogFromPivots(*expr->Cast<SubqueryExpression>().SubqueryMutable()->node, catalog_name);
 		}
-	}
-	switch (node.type) {
-	case QueryNodeType::SELECT_NODE: {
-		auto &select = node.Cast<SelectNode>();
-		if (select.from_table) {
-			StripCatalogFromPivotSources(*select.from_table, catalog_name);
+	};
+	auto strip_ref = [&](TableRef &ref) {
+		// a no-op for everything the binder already stripped, which is every reference outside a pivot
+		RemotePushdownOptimizer::StripCatalogName(ref, catalog_name);
+		if (ref.type == TableReferenceType::PIVOT) {
+			for (auto &pivot : ref.Cast<PivotRef>().pivots) {
+				for (auto &expr : pivot.pivot_expressions) {
+					RemotePushdownOptimizer::StripCatalogName(*expr, catalog_name);
+				}
+			}
 		}
-		break;
-	}
-	case QueryNodeType::SET_OPERATION_NODE: {
-		for (auto &child : node.Cast<SetOperationNode>().children) {
-			StripCatalogFromPivotSources(*child, catalog_name);
-		}
-		break;
-	}
-	default:
-		break;
-	}
-}
-
-static void StripCatalogFromPivotSources(SelectStatement &statement, const Identifier &catalog_name) {
-	StripCatalogFromPivotSources(*statement.node, catalog_name);
+	};
+	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, strip_expression, strip_ref);
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
@@ -315,9 +284,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
-	// the binder strips the name of this catalog from the table references of the view, except from the source of a
-	// pivot, so that one is stripped here before the SQL is written
-	StripCatalogFromPivotSources(*info.query, ParentCatalog().GetName());
+	StripCatalogFromPivots(*info.query->node, ParentCatalog().GetName());
 	auto query_sql = info.query->ToString();
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
