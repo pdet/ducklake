@@ -108,17 +108,22 @@ statement ok
 ALTER TABLE ducklake.d ALTER COLUMN a SET DEFAULT 'd'
 
 statement ok
+INSERT INTO ducklake.d VALUES (NULL, 2)
+
+statement ok
 COMMIT
 
 statement ok
-INSERT INTO ducklake.d VALUES (NULL, 2)
+INSERT INTO ducklake.d (v) VALUES (3)
 
 query I
 SELECT rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'd')
 ----
-2
+3
 
-query II
-SELECT count(*), count(a) FROM ducklake.d
+query TR
+SELECT a, v FROM ducklake.d ORDER BY v
 ----
-2	1
+x	1.0
+NULL	2.0
+d	3.0
