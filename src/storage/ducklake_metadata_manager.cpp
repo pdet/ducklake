@@ -3117,22 +3117,31 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
 }
 
-string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
-	// binding one VALUES list of every row at once needs memory in the order of the whole list
-	static constexpr idx_t VALUES_PER_STATEMENT = 500;
+static constexpr idx_t MAX_VALUES_LIST_LENGTH = 65536;
+
+static string ChunkValuesStatements(const vector<string> &tuples,
+                                    const std::function<string(const string &values)> &make_statement) {
 	string result;
-	for (idx_t start = 0; start < values.size(); start += VALUES_PER_STATEMENT) {
-		auto end = MinValue<idx_t>(start + VALUES_PER_STATEMENT, values.size());
-		result += "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
-		for (idx_t i = start; i < end; i++) {
-			if (i > start) {
-				result += ", ";
-			}
-			result += values[i];
+	string values;
+	for (auto &tuple : tuples) {
+		if (!values.empty()) {
+			values += ", ";
 		}
-		result += ";";
+		values += tuple;
+		if (values.size() >= MAX_VALUES_LIST_LENGTH) {
+			result += make_statement(values);
+			values.clear();
+		}
+	}
+	if (!values.empty()) {
+		result += make_statement(values);
 	}
 	return result;
+}
+
+string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
+	auto insert_prefix = "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
+	return ChunkValuesStatements(values, [&](const string &tuples) { return insert_prefix + tuples + ";"; });
 }
 
 string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
@@ -3478,28 +3487,6 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 }
 
 //! Parsing a statement takes memory proportional to its length, so large VALUES lists are split over statements
-static constexpr idx_t MAX_VALUES_LIST_LENGTH = 65536;
-
-static string ChunkValuesStatements(const vector<string> &tuples,
-                                    const std::function<string(const string &values)> &make_statement) {
-	string result;
-	string values;
-	for (auto &tuple : tuples) {
-		if (!values.empty()) {
-			values += ", ";
-		}
-		values += tuple;
-		if (values.size() >= MAX_VALUES_LIST_LENGTH) {
-			result += make_statement(values);
-			values.clear();
-		}
-	}
-	if (!values.empty()) {
-		result += make_statement(values);
-	}
-	return result;
-}
-
 string DuckLakeMetadataManager::FormatInlinedDataInsert(const string &inlined_table_name, idx_t row_id_start,
                                                         bool has_preserved_row_ids, const vector<int64_t> *row_ids,
                                                         const vector<string> &cells_per_row) {
