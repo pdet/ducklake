@@ -56,10 +56,10 @@ statement ok
 ALTER TABLE ducklake.sorted SET SORTED BY (k ASC)
 
 statement ok
-CALL ducklake.set_option('target_file_size', '256KB', table_name => 'sorted')
+CALL ducklake.set_option('target_file_size', '1MB', table_name => 'sorted')
 
 statement ok
-INSERT INTO ducklake.sorted SELECT (i * 7919) % 1000000 FROM range(300000) t(i)
+INSERT INTO ducklake.sorted SELECT (i * 7919) % 1500000 FROM range(1500000) t(i)
 
 statement ok
 CREATE TEMP TABLE ranges AS
@@ -80,9 +80,9 @@ SELECT count(*) FROM ranges a JOIN ranges b ON a.f < b.f AND a.mn <= b.mx AND b.
 query I
 SELECT count(*) FROM ducklake.sorted
 ----
-300000
+1500000
 
-# the parallel path is still taken when the order does not matter
+# a write that does not care about the order still goes through
 statement ok
 CREATE TABLE ducklake.unordered AS SELECT * FROM read_parquet('{DATA_PATH}/issue_1376_src.parquet')
 
