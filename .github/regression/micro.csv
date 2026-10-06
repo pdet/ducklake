@@ -11,6 +11,7 @@ benchmark/micro/time_travel/table_changes_incremental_poll.benchmark
 benchmark/micro/read/warm_small_queries.benchmark
 benchmark/micro/read/file_pruning_many_files.benchmark
 benchmark/micro/write/insert_commits_inlined.benchmark
+benchmark/micro/write/insert_commits_table_stats.benchmark
 benchmark/micro/write/wide_table_insert_commits.benchmark
 benchmark/micro/write/wide_table_null_first_transaction.benchmark
 benchmark/micro/write/ctas_lineitem.benchmark

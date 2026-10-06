@@ -1131,8 +1131,10 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	auto &stats = new_stats.stats;
 	auto dropped_stats = entry->second;
-	stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
-	bool live_rows_remain = stats.record_count > 0;
+	if (!stats.record_count_unknown) {
+		stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
+	}
+	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
 		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
 	} else {
