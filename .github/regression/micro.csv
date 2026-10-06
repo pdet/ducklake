@@ -1,6 +1,7 @@
 benchmark/micro/show_all_tables.benchmark
 benchmark/micro/compaction/merge_adjacent_small_files.benchmark
 benchmark/micro/compaction/merge_adjacent_partitioned.benchmark
+benchmark/micro/compaction/merge_adjacent_old_partition_spec.benchmark
 benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
 benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark
