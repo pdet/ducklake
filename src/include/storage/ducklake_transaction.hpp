@@ -115,8 +115,6 @@ public:
 	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
 	                            DuckLakeDeleteFile delete_file);
 	void AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files);
-	//! Remove the delete files of a data file that is dropped, they are covered by the drop
-	void DropDeleteFiles(ClientContext &context, TableIndex table_id, const string &data_file_path);
 	static void AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
 	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
