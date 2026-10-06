@@ -1131,8 +1131,10 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	auto &stats = new_stats.stats;
 	auto dropped_stats = entry->second;
-	stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
-	bool live_rows_remain = stats.record_count > 0;
+	if (!stats.record_count_unknown) {
+		stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
+	}
+	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
 		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
 	} else {
@@ -1438,6 +1440,10 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT: {
+			if (local_change.type == LocalChangeType::DROP_NULL) {
+				// rows that are NULL in this column may only be inlined under the new schema version
+				column_schema_change = true;
+			}
 			auto &remaining = field_alter_remaining[local_change.field_index];
 			remaining--;
 			// This is an older thus superseded entry for a field that is altered for multiple times in this
@@ -1977,11 +1983,16 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	// get all changes made to the system after the snapshot was started
+	// replacement delete files keep an older begin_snapshot, so also match on new file ids
+	// each filter gets its own scan, so it is pushed into the metadata database
 	string sql = R"(
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE begin_snapshot > {SNAPSHOT_ID}
+	UNION ALL
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_delete_file
+	WHERE delete_file_id >= {NEXT_FILE_ID}
 	UNION ALL
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_data_file
