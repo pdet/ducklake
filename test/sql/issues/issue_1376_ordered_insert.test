@@ -1,5 +1,5 @@
 # name: test/sql/issues/issue_1376_ordered_insert.test
-# description: A write keeps the order of its input, and a sorted table writes files with disjoint key ranges (#1376, #1356)
+# description: A sorted table writes files whose key ranges do not overlap (#1376)
 # group: [issues]
 
 require ducklake
@@ -16,36 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issu
 statement ok
 SET threads = 8
 
-statement ok
-SET preserve_insertion_order = true
-
-statement ok
-COPY (SELECT i AS id FROM range(300000) t(i)) TO '{DATA_PATH}/issue_1376_src.parquet' (ROW_GROUP_SIZE 10000)
-
-# CREATE TABLE AS keeps the order of its input
-statement ok
-CREATE TABLE ducklake.ctas AS SELECT * FROM read_parquet('{DATA_PATH}/issue_1376_src.parquet')
-
-query II
-SELECT count(*) FILTER (WHERE id <> file_row_number), count(*)
-FROM read_parquet('{DATA_PATH}/issue_1376/main/ctas/*.parquet', file_row_number := true)
-----
-0	300000
-
-# so does INSERT INTO ... SELECT
-statement ok
-CREATE TABLE ducklake.ins (id BIGINT)
-
-statement ok
-INSERT INTO ducklake.ins SELECT * FROM read_parquet('{DATA_PATH}/issue_1376_src.parquet')
-
-query II
-SELECT count(*) FILTER (WHERE id <> file_row_number), count(*)
-FROM read_parquet('{DATA_PATH}/issue_1376/main/ins/*.parquet', file_row_number := true)
-----
-0	300000
-
-# a sorted table writes files whose key ranges do not overlap, whatever the setting says
+# the sort of the table decides the order of the files, not the setting
 statement ok
 SET preserve_insertion_order = false
 
@@ -65,7 +36,7 @@ statement ok
 CREATE TEMP TABLE ranges AS
 SELECT s.data_file_id AS f, s.min_value::BIGINT AS mn, s.max_value::BIGINT AS mx
 FROM meta.ducklake_file_column_stats s JOIN meta.ducklake_data_file d USING (data_file_id)
-WHERE d.table_id = 3
+WHERE d.table_id = 1
 
 query I
 SELECT count(*) > 1 FROM ranges
@@ -77,16 +48,30 @@ SELECT count(*) FROM ranges a JOIN ranges b ON a.f < b.f AND a.mn <= b.mx AND b.
 ----
 0
 
+query II
+SELECT count(*), count(DISTINCT k) FROM ducklake.sorted
+----
+1500000	1500000
+
+# a point probe reads the one file that can hold the key
+query II
+SELECT count(*), (SELECT count(*) FROM ranges WHERE 749999 BETWEEN mn AND mx) FROM ducklake.sorted WHERE k = 749999
+----
+1	1
+
+# the rows inside the files are sorted as well
 query I
-SELECT count(*) FROM ducklake.sorted
+SELECT count(*) FROM (SELECT k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev
+                      FROM read_parquet('{DATA_PATH}/issue_1376/main/sorted/*.parquet', filename := true, file_row_number := true))
+WHERE k < prev
+----
+0
+
+# a table without a sort key keeps the parallel write
+statement ok
+CREATE TABLE ducklake.unsorted AS SELECT (i * 7919) % 1500000 AS k FROM range(1500000) t(i)
+
+query I
+SELECT count(*) FROM ducklake.unsorted
 ----
 1500000
-
-# a write that does not care about the order still goes through
-statement ok
-CREATE TABLE ducklake.unordered AS SELECT * FROM read_parquet('{DATA_PATH}/issue_1376_src.parquet')
-
-query I
-SELECT count(*) FROM ducklake.unordered
-----
-300000

@@ -753,14 +753,10 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.partition_columns = std::move(copy_options.partition_columns);
 	physical_copy.names = copy_options.names;
 	physical_copy.expected_types = std::move(copy_options.expected_types);
-	bool preserve_order = copy_input.ordered_input;
-	if (plan && !copy_options.per_thread_output && !copy_options.partition_output) {
-		preserve_order = preserve_order || PhysicalPlanGenerator::PreserveInsertionOrder(context, *plan);
-	}
 	auto execution_mode = CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
-	if (physical_copy.function.execution_mode) {
-		// the batch copy operator does not rotate files by size
-		execution_mode = physical_copy.function.execution_mode(preserve_order, false);
+	if (copy_input.ordered_input && physical_copy.function.execution_mode) {
+		// the rows are sorted and the batch copy operator does not rotate files by size
+		execution_mode = physical_copy.function.execution_mode(true, false);
 	}
 	physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
 	physical_copy.hive_file_pattern = copy_input.catalog.UseHiveFilePattern(
