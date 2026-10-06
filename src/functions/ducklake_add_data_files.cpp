@@ -177,6 +177,8 @@ public:
 private:
 	void ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &result);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
+	//! Refuses a file whose statistics show NULL values in a NOT NULL column
+	void CheckNotNullColumns(const DuckLakeDataFile &file) const;
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix, bool repeated);
 	vector<unique_ptr<DuckLakeNameMapEntry>> MapColumns(ParquetFileMetadata &file,
@@ -1195,6 +1197,26 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 	}
 }
 
+void DuckLakeFileProcessor::CheckNotNullColumns(const DuckLakeDataFile &file) const {
+	auto not_null_fields = table.GetNotNullFields();
+	if (not_null_fields.empty()) {
+		return;
+	}
+	for (auto &entry : file.column_stats) {
+		auto &stats = entry.second;
+		if (!stats.has_null_count || stats.null_count == 0) {
+			continue;
+		}
+		auto &column = table.GetColumnByFieldId(entry.first);
+		auto &column_name = column.Name().GetIdentifierName();
+		if (!not_null_fields.count(column_name)) {
+			continue;
+		}
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
+		                          SQLIdentifier(column_name));
+	}
+}
+
 DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFileMetadata &file_metadata,
                                                                FieldIndex field_index, const LogicalType &field_type,
                                                                const Value &value) const {
@@ -1360,6 +1382,7 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	auto name_map = make_uniq<DuckLakeNameMap>();
 	name_map->table_id = table.GetTableId();
 	MapColumnStats(file, result);
+	CheckNotNullColumns(result);
 	name_map->column_maps = std::move(file.map_entries);
 
 	// we successfully mapped this file - register the name map and refer to it in the file
