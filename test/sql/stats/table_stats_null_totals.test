@@ -109,7 +109,7 @@ FROM ducklake_meta.ducklake_table_stats
 ----
 1	NULL	6	true
 
-# an update keeps the row id of the old version, so the stats of an unknown count are never taken as exact
+# an unknown count never makes the bounds exact, even after an update kept the row ids
 statement ok
 CREATE TABLE ducklake.v(i INTEGER)
 

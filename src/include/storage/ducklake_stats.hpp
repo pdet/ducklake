@@ -86,7 +86,6 @@ private:
 //! These are the global, table-wide stats
 struct DuckLakeTableStats {
 	idx_t record_count = 0;
-	//! The record count is not known, so it is neither compared nor subtracted
 	bool record_count_unknown = false;
 	idx_t table_size_bytes = 0;
 	idx_t next_row_id = 0;
