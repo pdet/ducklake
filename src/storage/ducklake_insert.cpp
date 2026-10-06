@@ -810,15 +810,13 @@ public:
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      PhysicalOperator &plan, const ColumnList &columns,
                                                      const Identifier &table_name, const DuckLakeSort &sort_data) {
-	auto pre_bound_orders = DuckLakeCompactor::ParseSortOrders(sort_data);
-	if (pre_bound_orders.empty()) {
-		return nullptr;
-	}
-	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
-
 	auto binder = Binder::CreateBinder(context);
 	TableIndex table_index(0);
-	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index, pre_bound_orders);
+	auto orders = DuckLakeCompactor::BindSortOrders(*binder, columns, table_name, table_index,
+	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
+	if (orders.empty()) {
+		return nullptr;
+	}
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
 	DuckLakeInsertColumnBindingResolver resolver(table_index, plan.GetTypes());
