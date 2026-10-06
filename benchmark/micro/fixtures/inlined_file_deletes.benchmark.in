@@ -1,12 +1,12 @@
 # name: benchmark/micro/fixtures/inlined_file_deletes.benchmark.in
-# description: Lake with 20 tables of two 2048-row files that each have an inlined deletion in their first file
+# description: Lake with 20 tables of two 2048-row files, each with an inlined deletion in its first file
 # group: [fixtures]
 
 argument lake inlined_file_deletes
 
 cache_file ${lake}_ready.marker
 
-# A row limit of 10 keeps the 2048-row inserts in files and inlines the single-row deletions
+# A row limit of 10 keeps the 2048-row inserts in files and inlines the deletions
 load
 EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 COPY (SELECT stmt FROM (

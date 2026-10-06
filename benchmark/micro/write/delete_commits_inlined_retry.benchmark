@@ -20,7 +20,7 @@ include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 init
 SET ducklake_retry_wait_ms = 0;
 
-# lake2 shares the metadata catalog of lake, and the handle touched last commits first, so every commit of lake retries
+# lake2 shares the metadata catalog of lake and its commit lands first, so every commit of lake retries
 run
 @attach ${work} AS lake2 (METADATA_CATALOG '__ducklake_metadata_lake')
 BEGIN; CALL ducklake_flush_inlined_data('lake', table_name => 't0'); DELETE FROM lake2.t0 WHERE id = 2048; COMMIT;
