@@ -195,6 +195,8 @@ struct DuckLakeCopyInput {
 	TableIndex table_id;
 	InsertVirtualColumns virtual_columns = InsertVirtualColumns::NONE;
 	optional_idx get_table_index;
+	//! Whether the rows reach the copy in the order they must be written in
+	bool ordered_input = false;
 };
 
 } // namespace duckdb
