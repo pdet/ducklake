@@ -645,6 +645,33 @@ void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, 
 	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
 }
 
+void LocalTableChanges::DropDeleteFiles(ClientContext &context, TableIndex table_id, const string &data_file_path) {
+	lock_guard<mutex> guard(lock);
+	auto entry = changes.find(table_id);
+	if (entry == changes.end()) {
+		return;
+	}
+	auto &table_delete_map = entry->second.new_delete_files;
+	auto file_entry = table_delete_map.find(data_file_path);
+	if (file_entry == table_delete_map.end()) {
+		return;
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &delete_files = file_entry->second;
+	for (idx_t i = 0; i < delete_files.size(); i++) {
+		// flushed delete files also hold the deletes of earlier snapshots
+		if (delete_files[i].source == DeleteFileSource::FLUSH) {
+			continue;
+		}
+		fs.RemoveFile(delete_files[i].file_name);
+		delete_files.erase_at(i);
+		i--;
+	}
+	if (delete_files.empty()) {
+		table_delete_map.erase(file_entry);
+	}
+}
+
 LocalTableChangeIterationHelper::LocalTableChangeIterationHelper(
     mutex &local_changes_lock, const map<TableIndex, LocalTableDataChanges> &changes_p)
     : lock(local_changes_lock), changes(changes_p) {
@@ -1937,6 +1964,8 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
                                    idx_t file_size_bytes) {
+	auto context_ref = context.lock();
+	state->local_changes.DropDeleteFiles(*context_ref, table_id, path);
 	state->tables_deleted_from.insert(table_id);
 	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
 	if (!inserted.second) {
