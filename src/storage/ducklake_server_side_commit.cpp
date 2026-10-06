@@ -649,6 +649,9 @@ void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
+	DuckLakeMetadataManager::FillMissingTableSizes(global_stats, [&](string query) {
+		return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
+	});
 
 	for (auto &gs : global_stats) {
 		existing_table_stats.emplace(gs.table_id, BuildTableStats(gs));

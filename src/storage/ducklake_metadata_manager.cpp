@@ -1221,6 +1221,15 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 }
 
 template <class ROW>
+idx_t ReadRecordCount(const ROW &row, idx_t record_count_column, idx_t next_row_id_column) {
+	if (row.IsNull(record_count_column)) {
+		// row ids are never reused, so next_row_id bounds a missing record count
+		return row.template GetValue<uint64_t>(next_row_id_column);
+	}
+	return row.template GetValue<uint64_t>(record_count_column);
+}
+
+template <class ROW>
 void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0,
                              bool has_exactness = false) {
 	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
@@ -1229,9 +1238,11 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		DuckLakeGlobalStatsInfo new_entry;
 		new_entry.table_id = table_id;
 		new_entry.initialized = true;
-		new_entry.record_count = row.template GetValue<uint64_t>(2 + from_column);
+		new_entry.record_count = ReadRecordCount(row, 2 + from_column, 3 + from_column);
 		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
-		new_entry.table_size_bytes = row.template GetValue<uint64_t>(4 + from_column);
+		new_entry.missing_table_size = row.IsNull(4 + from_column);
+		new_entry.table_size_bytes =
+		    new_entry.missing_table_size ? 0 : row.template GetValue<uint64_t>(4 + from_column);
 		global_stats.push_back(std::move(new_entry));
 	}
 
@@ -1322,9 +1333,8 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	if (include_column_stats) {
 		query += "LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id)\n";
 	}
-	query += "WHERE record_count IS NOT NULL\n  AND file_size_bytes IS NOT NULL\n";
 	if (table_id.IsValid()) {
-		query += StringUtil::Format("  AND table_id = %llu\n", table_id.GetIndex());
+		query += StringUtil::Format("WHERE table_id = %llu\n", table_id.GetIndex());
 	}
 	if (include_column_stats) {
 		query += "ORDER BY table_id\n";
@@ -1346,19 +1356,57 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 	return TransformGlobalStats(result);
 }
 
+void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+                                                    const std::function<unique_ptr<QueryResult>(string)> &executor) {
+	string table_ids;
+	for (auto &entry : stats) {
+		if (!entry.missing_table_size) {
+			continue;
+		}
+		if (!table_ids.empty()) {
+			table_ids += ", ";
+		}
+		table_ids += to_string(entry.table_id.index);
+	}
+	if (table_ids.empty()) {
+		return;
+	}
+	auto result = executor(StringUtil::Format(R"(
+SELECT table_id, SUM(file_size_bytes)
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE end_snapshot IS NULL AND table_id IN (%s)
+GROUP BY table_id;)",
+	                                          table_ids));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get the table sizes from DuckLake: ");
+	}
+	map<TableIndex, idx_t> table_sizes;
+	for (auto &row : *result) {
+		table_sizes.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
+	}
+	for (auto &entry : stats) {
+		auto table_size = table_sizes.find(entry.table_id);
+		if (entry.missing_table_size && table_size != table_sizes.end()) {
+			entry.table_size_bytes = table_size->second;
+		}
+	}
+}
+
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
 	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata()));
-	return TransformGlobalStats(*result);
+	auto global_stats = TransformGlobalStats(*result);
+	FillMissingTableSizes(global_stats, [&](string query) { return Query(snapshot, query); });
+	return global_stats;
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
-	auto result = Query(snapshot, TableStatsQuery("table_id, record_count", false, optional_idx()));
+	auto result = Query(snapshot, TableStatsQuery("table_id, record_count, next_row_id", false, optional_idx()));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table record counts from DuckLake: ");
 	}
 	map<TableIndex, idx_t> record_counts;
 	for (auto &row : *result) {
-		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
+		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), ReadRecordCount(row, 1, 2));
 	}
 	return record_counts;
 }
@@ -4866,8 +4914,6 @@ SELECT
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
-WHERE record_count IS NOT NULL
-    AND file_size_bytes IS NOT NULL
 ORDER BY table_id NULLS FIRST;
 	)";
 }
@@ -4897,7 +4943,9 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
                                                        const std::function<unique_ptr<QueryResult>(string)> &executor,
                                                        bool include_exactness) {
 	auto result = executor(GetSnapshotAndStatsAndChangesQuery(include_exactness));
-	return ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
+	auto change_info = ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
+	FillMissingTableSizes(current_snapshot.stats, executor);
+	return change_info;
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
