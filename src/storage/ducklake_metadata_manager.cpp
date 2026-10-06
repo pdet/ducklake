@@ -2969,10 +2969,7 @@ string GetExpressionType(ParsedExpression &expression) {
 }
 
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
-                                 string &result) {
-	if (!result.empty()) {
-		result += ",";
-	}
+                                 vector<string> &result) {
 	string parent_idx = DuckLakeUtil::OptionalIdxOrNull(parent);
 
 	string initial_default_val =
@@ -3009,10 +3006,10 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	auto column_id = column.id.index;
 	auto column_order = column_id;
 
-	result += StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
-	                             table_id.index, column_order, SQLString(column.name), SQLString(column.type),
-	                             initial_default_val, default_val, column.nulls_allowed ? "true" : "false", parent_idx,
-	                             default_val_type, default_val_system);
+	result.push_back(StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
+	                                    table_id.index, column_order, SQLString(column.name), SQLString(column.type),
+	                                    initial_default_val, default_val, column.nulls_allowed ? "true" : "false",
+	                                    parent_idx, default_val_type, default_val_system));
 	for (auto &child : column.children) {
 		ColumnToSQLRecursive(child, table_id, column_id, result);
 	}
@@ -3120,6 +3117,24 @@ string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &ta
 	return InlinedTableDdlSql(table_name, column_defs, InlinedColNames());
 }
 
+string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
+	// binding one VALUES list of every row at once needs memory in the order of the whole list
+	static constexpr idx_t VALUES_PER_STATEMENT = 500;
+	string result;
+	for (idx_t start = 0; start < values.size(); start += VALUES_PER_STATEMENT) {
+		auto end = MinValue<idx_t>(start + VALUES_PER_STATEMENT, values.size());
+		result += "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
+		for (idx_t i = start; i < end; i++) {
+			if (i > start) {
+				result += ", ";
+			}
+			result += values[i];
+		}
+		result += ";";
+	}
+	return result;
+}
+
 string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
                                                const vector<DuckLakePath> &resolved_paths) {
 	if (new_tables.empty()) {
@@ -3129,7 +3144,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		throw InternalException("WriteNewTables: resolved_paths size mismatch");
 	}
 
-	string column_insert_sql;
+	vector<string> column_values;
 	string table_insert_sql;
 
 	for (idx_t i = 0; i < new_tables.size(); ++i) {
@@ -3143,7 +3158,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		    StringUtil::Format("(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s)", table.id.index, table.uuid, schema_id,
 		                       SQLString(table.name), SQLString(path.path), path.path_is_relative ? "true" : "false");
 		for (auto &column : table.columns) {
-			ColumnToSQLRecursive(column, table.id, optional_idx(), column_insert_sql);
+			ColumnToSQLRecursive(column, table.id, optional_idx(), column_values);
 		}
 	}
 	string batch_query;
@@ -3151,9 +3166,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 	if (!table_insert_sql.empty()) {
 		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES " + table_insert_sql + ";";
 	}
-	if (!column_insert_sql.empty()) {
-		batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
-	}
+	batch_query += InsertValuesSql("ducklake_column", column_values);
 
 	return batch_query;
 }
@@ -3299,13 +3312,13 @@ string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> 
 	if (new_columns.empty()) {
 		return {};
 	}
-	string column_insert_sql;
+	vector<string> column_values;
 	for (auto &new_col : new_columns) {
-		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, column_insert_sql);
+		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, column_values);
 	}
 
 	// insert column entries
-	return "INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES " + column_insert_sql + ";";
+	return InsertValuesSql("ducklake_column", column_values);
 }
 
 string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views) {
