@@ -88,10 +88,8 @@ static optional<Value> TryCastStatsBound(const string &bound, const LogicalType 
 		timestamp_t result;
 		bool has_offset;
 		string_t time_zone;
-		int32_t nanos;
 		auto cast_result =
-		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone, &nanos);
-		// a bound without an offset is a local time, which does not keep the order of the instants it maps to
+		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
 		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
 			return nullopt;
 		}

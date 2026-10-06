@@ -62,25 +62,34 @@ analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 statement ok
 SET TimeZone = 'America/New_York'
 
-statement ok
-CREATE TABLE dl.dst (v TIMESTAMP)
+foreach type TIMESTAMPTZ TIMESTAMPTZ_NS
 
 statement ok
-INSERT INTO dl.dst SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+CREATE TABLE dl.dst_{type} (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.dst_{type} SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
 
 statement ok
 BEGIN
 
 statement ok
-ALTER TABLE dl.dst ALTER COLUMN v TYPE TIMESTAMPTZ
+ALTER TABLE dl.dst_{type} ALTER COLUMN v TYPE {type}
 
 statement ok
-INSERT INTO dl.dst VALUES (TIMESTAMPTZ '2020-03-08 09:00:00+00')
+INSERT INTO dl.dst_{type} VALUES ('2020-03-08 09:00:00+00'::{type})
 
 statement ok
 COMMIT
 
+statement ok
+CREATE TABLE expected_{type} AS FROM dl.dst_{type}
+
 query I
-SELECT count(*) FROM dl.dst WHERE v < TIMESTAMPTZ '2020-03-08 07:20:00+00'
+SELECT
+    (SELECT count(*) FROM dl.dst_{type} WHERE v < '2020-03-08 07:20:00+00'::{type}) =
+    (SELECT count(*) FROM expected_{type} WHERE v < '2020-03-08 07:20:00+00'::{type})
 ----
-1200
+true
+
+endloop

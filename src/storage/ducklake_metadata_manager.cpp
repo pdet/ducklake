@@ -1480,7 +1480,7 @@ string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const Log
 	if (cast_type == StatsCastType::ORDERING || !StatsBoundsRequireOffset(type)) {
 		return cast;
 	}
-	// a bound without an offset is a local time, which does not keep the order of the instants it maps to
+	// Local time bounds can change order across daylight saving transitions
 	auto bound = StringUtil::Format(
 	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
 	return BoundOrInfinity(bound, type.ToString(), cast_type);
