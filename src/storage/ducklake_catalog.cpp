@@ -1000,8 +1000,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
 
-	// load the stats of every table of the snapshot in one query and cache them all, including the tables
-	// without stats, so scanning the tables of a snapshot costs one query instead of one per table
+	// one query for the whole snapshot, caching the tables without stats as well
 	auto schema_entry = GetSchemaCacheEntry(transaction, snapshot);
 	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot);
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
