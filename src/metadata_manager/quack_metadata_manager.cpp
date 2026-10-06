@@ -68,18 +68,6 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 	return result;
 }
 
-string QuackMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) {
-	auto cast = DuckLakeMetadataManager::CastStatsToTarget(stats, type, cast_type);
-	if (cast_type == StatsCastType::ORDERING ||
-	    (type.id() != LogicalTypeId::TIMESTAMP_TZ && type.id() != LogicalTypeId::TIMESTAMP_TZ_NS)) {
-		return cast;
-	}
-	// the server reads a bound without an offset in its own time zone, so such a bound is unknown
-	auto bound = StringUtil::Format(
-	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
-	return BoundOrInfinity(bound, type.ToString(), cast_type);
-}
-
 string QuackMetadataManager::MetadataExistsQuery() const {
 	return "SELECT COUNT(*) FROM information_schema.tables "
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";

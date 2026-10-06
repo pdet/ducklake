@@ -7,6 +7,7 @@
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -82,8 +83,24 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 	}
 }
 
+static optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
+	if (StatsBoundsRequireOffset(type)) {
+		timestamp_t result;
+		bool has_offset;
+		string_t time_zone;
+		int32_t nanos;
+		auto cast_result =
+		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone, &nanos);
+		// a bound without an offset is a local time, which does not keep the order of the instants it maps to
+		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
+			return nullopt;
+		}
+	}
+	return Value(bound).DefaultTryCastAs(type);
+}
+
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
-                                           const ColumnFilterInfo &column_filter, ClientContext &context) {
+                                           const ColumnFilterInfo &column_filter) {
 	auto filter_data = DuckLakeUtil::GetOptionalDynamicFilterData(*column_filter.table_filter);
 	if (!filter_data) {
 		return false;
@@ -110,7 +127,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
-		auto file_max = Value(column_stats.max).TryCastAs(context, column_filter.column_type);
+		auto file_max = TryCastStatsBound(column_stats.max, column_filter.column_type);
 		if (!file_max) {
 			return false;
 		}
@@ -124,7 +141,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_min) {
 			return false;
 		}
-		auto file_min = Value(column_stats.min).TryCastAs(context, column_filter.column_type);
+		auto file_min = TryCastStatsBound(column_stats.min, column_filter.column_type);
 		if (!file_min) {
 			return false;
 		}
@@ -167,7 +184,7 @@ static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, 
 			continue;
 		}
 		const auto &column_stats = stats_entry->second;
-		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter, context) ||
+		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter) ||
 		    CanSkipFileByPrefixRangeFilter(column_stats, column_filter, context)) {
 			return true;
 		}

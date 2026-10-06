@@ -1,5 +1,5 @@
 # name: test/sql/stats/timestamptz_retype_stats_time_zone.test
-# description: file stats written before a TIMESTAMP to TIMESTAMPTZ retype are read in the time zone of the reader
+# description: file stats written before a TIMESTAMP to TIMESTAMPTZ retype do not prune matching rows
 # group: [stats]
 
 require ducklake
@@ -58,3 +58,29 @@ query II
 EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE v > TIMESTAMPTZ '2020-01-01 00:00:00+00'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE dl.dst (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.dst SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.dst ALTER COLUMN v TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO dl.dst VALUES (TIMESTAMPTZ '2020-03-08 09:00:00+00')
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM dl.dst WHERE v < TIMESTAMPTZ '2020-03-08 07:20:00+00'
+----
+1200

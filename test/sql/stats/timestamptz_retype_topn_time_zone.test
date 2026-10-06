@@ -1,5 +1,5 @@
 # name: test/sql/stats/timestamptz_retype_topn_time_zone.test
-# description: top n pruning reads file stats written before a TIMESTAMP to TIMESTAMPTZ retype in the time zone of the reader
+# description: top n pruning does not skip files with stats written before a TIMESTAMP to TIMESTAMPTZ retype
 # group: [stats]
 
 require ducklake
@@ -74,3 +74,33 @@ query I
 SELECT min(v) FROM (SELECT v FROM dl.u ORDER BY v DESC LIMIT 50)
 ----
 2020-06-15 13:07:30-04
+
+foreach type TIMESTAMPTZ TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE dl.dst_${type} (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.dst_${type} SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+ALTER TABLE dl.dst_${type} ALTER COLUMN v TYPE ${type}
+
+loop file_nr 0 8
+
+statement ok
+INSERT INTO dl.dst_${type} SELECT (CASE WHEN i % 2 = 0 THEN '2020-03-08 07:10:00+00' ELSE '2020-03-08 07:45:00+00' END)::${type} FROM range(4096) t(i)
+
+endloop
+
+query I
+SELECT (SELECT v FROM dl.dst_${type} ORDER BY v LIMIT 1) = (SELECT v FROM dl.dst_${type} ORDER BY epoch_ns(v) LIMIT 1)
+----
+true
+
+query I
+SELECT (SELECT v FROM dl.dst_${type} ORDER BY v DESC LIMIT 1) = (SELECT v FROM dl.dst_${type} ORDER BY epoch_ns(v) DESC LIMIT 1)
+----
+true
+
+endloop
