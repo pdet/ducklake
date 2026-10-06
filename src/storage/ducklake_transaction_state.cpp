@@ -1981,7 +1981,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor) {
-	// get all changes made to the system after the snapshot was started
 	// replacement delete files keep an older begin_snapshot, so also match on new file ids
 	string sql = R"(
 	SELECT data_file_id
