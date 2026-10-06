@@ -58,7 +58,7 @@ public:
 	vector<pair<idx_t, Identifier>> columns;
 
 public:
-	//! Puts the check on top of a plan that produces the physical columns of the table, if any column needs it
+	//! Adds the check to a plan that produces the physical columns of the table, if a column needs it
 	static PhysicalOperator &Plan(PhysicalPlanGenerator &planner, DuckLakeTableEntry &table, PhysicalOperator &plan);
 
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
