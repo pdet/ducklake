@@ -246,6 +246,10 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! The inlined rows to flush with typed columns, without those this transaction deleted
+	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	//! The order of the rows in a flushed file
+	string InlinedFlushOrder(const string &sort_order_sql) const;
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -475,6 +479,8 @@ public:
 	                                                         const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
+	                                                           const DuckLakeTableEntry &table,
+	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.

@@ -1860,10 +1860,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                            new_inlined_data_tables_result);
 	}
 
-	// delete the flushed inlined rows and inlined file deletions
-	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
-	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
-
 	// drop data files
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
@@ -1937,6 +1933,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			}
 		}
 	}
+
+	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
+	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
+	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
 
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;

@@ -3086,6 +3086,45 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 	return expression;
 }
 
+string DuckLakeMetadataManager::InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table) {
+	auto col_names = InlinedColNames();
+	vector<string> projection {col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot};
+	bool has_casts = false;
+	for (auto &col : table.GetColumns().Physical()) {
+		auto name = SQLIdentifier::ToString(col.Name().GetIdentifierName());
+		auto typed_column = CastColumnToTarget(name, col.Type());
+		if (typed_column != name) {
+			has_casts = true;
+			typed_column += " AS " + name;
+		}
+		projection.push_back(typed_column);
+	}
+	string filter;
+	auto local_deletes = transaction.GetInlinedDeletes(table.GetTableId(), inlined_table_name);
+	if (local_deletes && !local_deletes->rows.empty()) {
+		vector<string> row_ids;
+		for (auto &row_id : local_deletes->rows) {
+			row_ids.push_back(to_string(row_id));
+		}
+		// rows deleted by this transaction are not flushed, passing the ids as one string keeps planning cheap
+		filter = StringUtil::Format(" WHERE NOT (%s IN (SELECT CAST(unnest(string_split(ids, ',')) AS BIGINT) FROM "
+		                            "(SELECT %s AS ids)) AND (%s IS NULL OR %s > {SNAPSHOT_ID}))",
+		                            col_names.row_id, SQLString(StringUtil::Join(row_ids, ",")), col_names.end_snapshot,
+		                            col_names.end_snapshot);
+	}
+	auto source = "{METADATA_CATALOG}." + inlined_table_name;
+	if (!has_casts && filter.empty()) {
+		return source;
+	}
+	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
+}
+
+string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
+	auto col_names = InlinedColNames();
+	auto order = StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
+	return sort_order_sql.empty() ? order : sort_order_sql + ", " + order;
+}
+
 string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 	auto column_type = DuckLakeTypes::FromString(col.type);
 	if (!TypeIsNativelySupported(column_type)) {
@@ -3902,16 +3941,23 @@ WHERE inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID};)",
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
                                                                             const string &inlined_table_name,
+                                                                            const DuckLakeTableEntry &table,
+                                                                            const string &sort_order_sql,
                                                                             const vector<string> &columns_to_read) {
 	auto projection = GetProjection(columns_to_read);
 	auto col_names = InlinedColNames();
+	auto order = InlinedFlushOrder(sort_order_sql);
+	auto source = InlinedFlushSource(inlined_table_name, table);
+	if (!sort_order_sql.empty()) {
+		// a window ORDER BY binds the source columns, never the projection aliases
+		order = "ROW_NUMBER() OVER (ORDER BY " + order + ") ASC";
+	}
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.%s inlined_data
+FROM %s inlined_data
 WHERE {SNAPSHOT_ID} >= %s
-ORDER BY %s, %s;)",
-	                                                 projection, inlined_table_name, col_names.begin_snapshot,
-	                                                 col_names.row_id, col_names.begin_snapshot));
+ORDER BY %s;)",
+	                                                 projection, source, col_names.begin_snapshot, order));
 	return result;
 }
 
@@ -6171,8 +6217,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
-		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d;\n",
+		// rows that ended after the flush were deleted by this transaction and are not flushed
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
+		                             flushed.flush_snapshot_id, col_names.end_snapshot, col_names.end_snapshot,
 		                             flushed.flush_snapshot_id);
 	}
 	for (auto &flushed : flushed_file_deletions) {
