@@ -26,6 +26,11 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/type_expression.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/extra_type_info.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_macro_info.hpp"
@@ -46,12 +51,122 @@ idx_t EstimateStringMemory(const string &value) {
 	return sizeof(string) + value.length();
 }
 
-idx_t EstimateFieldIdCount(const DuckLakeFieldId &field_id) {
-	idx_t count = 1;
-	for (const auto &child : field_id.Children()) {
-		count += EstimateFieldIdCount(*child);
+//! Bookkeeping and rounding of the allocator for each heap allocation
+constexpr idx_t ALLOCATION_OVERHEAD = 2 * sizeof(void *);
+//! Memory of a std::map or std::unordered_map node besides its key and value
+constexpr idx_t MAP_NODE_OVERHEAD = 3 * sizeof(void *) + ALLOCATION_OVERHEAD;
+
+idx_t EstimateValueMemory(const Value &value);
+
+idx_t EstimateChildValueMemory(const vector<Value> &children) {
+	idx_t estimate = 0;
+	for (const auto &child : children) {
+		estimate += sizeof(Value) + EstimateValueMemory(child);
 	}
-	return count;
+	return estimate;
+}
+
+idx_t EstimateValueMemory(const Value &value) {
+	if (value.IsNull()) {
+		return 0;
+	}
+	switch (value.type().InternalType()) {
+	case PhysicalType::VARCHAR:
+		return EstimateStringMemory(StringValue::Get(value));
+	case PhysicalType::STRUCT:
+		return EstimateChildValueMemory(StructValue::GetChildren(value));
+	case PhysicalType::LIST:
+		return EstimateChildValueMemory(ListValue::GetChildren(value));
+	default:
+		return 0;
+	}
+}
+
+idx_t EstimateIdentifierMemory(const vector<Identifier> &names) {
+	idx_t estimate = 0;
+	for (const auto &name : names) {
+		estimate += EstimateStringMemory(name.GetIdentifierName());
+	}
+	return estimate;
+}
+
+idx_t EstimateExpressionMemory(const ParsedExpression &expression) {
+	// the largest expression node stands in for all of them
+	idx_t estimate = sizeof(FunctionExpression) + ALLOCATION_OVERHEAD;
+	estimate += expression.GetAlias().GetIdentifierName().size();
+	switch (expression.GetExpressionClass()) {
+	case ExpressionClass::CONSTANT:
+		estimate += expression.Cast<ConstantExpression>().GetLiteral().text.size();
+		break;
+	case ExpressionClass::COLUMN_REF:
+		estimate += EstimateIdentifierMemory(expression.Cast<ColumnRefExpression>().ColumnNames());
+		break;
+	case ExpressionClass::FUNCTION: {
+		auto &function = expression.Cast<FunctionExpression>();
+		estimate += EstimateIdentifierMemory(function.GetQualifiedName().Path());
+		for (const auto &argument : function.GetArguments()) {
+			estimate += sizeof(FunctionArgument) + argument.GetName().size();
+		}
+		break;
+	}
+	case ExpressionClass::TYPE:
+		estimate += EstimateIdentifierMemory(expression.Cast<TypeExpression>().GetQualifiedName().Path());
+		break;
+	case ExpressionClass::CAST:
+		// the iterator skips the target type of a cast
+		estimate += EstimateExpressionMemory(expression.Cast<CastExpression>().TargetType());
+		break;
+	default:
+		break;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expression, [&](const ParsedExpression &child) { estimate += EstimateExpressionMemory(child); });
+	return estimate;
+}
+
+idx_t EstimateTypeInfoMemory(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::STRUCT: {
+		idx_t estimate = sizeof(StructTypeInfo);
+		for (const auto &child : StructType::GetChildTypes(type)) {
+			estimate += sizeof(child) + child.first.GetIdentifierName().size() + EstimateTypeInfoMemory(child.second);
+		}
+		return estimate;
+	}
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		return sizeof(ListTypeInfo) + EstimateTypeInfoMemory(ListType::GetChildType(type));
+	default:
+		return type.AuxInfo() ? sizeof(ExtraTypeInfo) : 0;
+	}
+}
+
+idx_t EstimateFieldIdMemory(const DuckLakeFieldId &field_id) {
+	idx_t estimate = sizeof(DuckLakeFieldId) + ALLOCATION_OVERHEAD + field_id.Name().size();
+	estimate += sizeof(unique_ptr<DuckLakeFieldId>);
+	estimate += sizeof(FieldIndex) + sizeof(const_reference<DuckLakeFieldId>) + MAP_NODE_OVERHEAD;
+	auto &column_data = field_id.GetColumnData();
+	estimate += EstimateValueMemory(column_data.initial_default);
+	if (column_data.default_value) {
+		estimate += EstimateExpressionMemory(*column_data.default_value);
+	}
+	for (const auto &child : field_id.Children()) {
+		estimate += EstimateFieldIdMemory(*child);
+		estimate += EstimateStringMemory(child->Name()) + sizeof(idx_t) + MAP_NODE_OVERHEAD;
+	}
+	return estimate;
+}
+
+idx_t EstimateColumnMemory(const ColumnDefinition &column) {
+	auto &name = column.Name().GetIdentifierName();
+	idx_t estimate = sizeof(ColumnDefinition) + name.size() + sizeof(idx_t);
+	estimate += EstimateStringMemory(name) + sizeof(column_t) + MAP_NODE_OVERHEAD;
+	estimate += EstimateValueMemory(column.Comment());
+	if (column.HasDefaultValue()) {
+		estimate += EstimateExpressionMemory(column.DefaultValue());
+	}
+	return estimate;
 }
 
 idx_t EstimateTagMemory(const CatalogEntry &entry) {
@@ -69,13 +184,13 @@ idx_t EstimateTableEntryMemory(const DuckLakeTableEntry &table) {
 	estimate += table.DataPath().size();
 
 	estimate += EstimateTagMemory(table);
-	estimate += table.GetColumns().LogicalColumnCount() * sizeof(ColumnDefinition);
 	for (const auto &column : table.GetColumns().Logical()) {
-		estimate += EstimateStringMemory(column.Name().GetIdentifierName());
+		estimate += EstimateColumnMemory(column);
 	}
 	estimate += table.GetConstraints().size() * sizeof(Constraint);
 	for (const auto &field_id : table.GetFieldData().GetFieldIds()) {
-		estimate += EstimateFieldIdCount(*field_id) * sizeof(DuckLakeFieldId);
+		// the column type shares its type info with the field id
+		estimate += EstimateFieldIdMemory(*field_id) + EstimateTypeInfoMemory(field_id->Type());
 	}
 	estimate += table.GetInlinedDataTables().size() * sizeof(DuckLakeInlinedTableInfo);
 	for (const auto &inlined_table : table.GetInlinedDataTables()) {
