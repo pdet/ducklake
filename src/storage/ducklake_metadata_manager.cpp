@@ -1511,12 +1511,25 @@ string DuckLakeMetadataManager::CastValueToTarget(const Value &val, const Logica
 	return DuckLakeUtil::SQLLiteralToString(val.ToString());
 }
 
-string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType) {
+string DuckLakeMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
+                                                  StatsCastType cast_type) {
 	// we need to cast numerics and temporals for correct comparison
-	if (RequiresValueComparison(type)) {
-		return "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
+	if (!RequiresValueComparison(type)) {
+		return stats;
 	}
-	return stats;
+	auto cast = "TRY_CAST(" + stats + " AS " + type.ToString() + ")";
+	if (cast_type == StatsCastType::ORDERING || !StatsBoundsRequireOffset(type)) {
+		return cast;
+	}
+	// Local time bounds can change order across daylight saving transitions
+	auto bound = StringUtil::Format(
+	    "CASE WHEN regexp_matches(%s, ':[0-9]{2}(\\.[0-9]+)?[+-][0-9]{2}(:[0-9]{2})*$') THEN %s END", stats, cast);
+	return BoundOrInfinity(bound, type.ToString(), cast_type);
+}
+
+string DuckLakeMetadataManager::BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type) {
+	return StringUtil::Format("COALESCE(%s, CAST('%s' AS %s))", bound,
+	                          cast_type == StatsCastType::MIN ? "-infinity" : "infinity", type_name);
 }
 
 string DuckLakeMetadataManager::GenerateConstantFilter(ExpressionType comparison_type, const Value &constant,

@@ -19,6 +19,11 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 	return type.IsNumeric() || type.IsTemporal() || type.id() == LogicalTypeId::BOOLEAN;
 }
 
+//! Finite bounds need an explicit UTC offset
+inline bool StatsBoundsRequireOffset(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
+}
+
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;
 
