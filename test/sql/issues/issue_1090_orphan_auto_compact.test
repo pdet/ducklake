@@ -39,7 +39,7 @@ statement ok
 CHECKPOINT ducklake
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/main/t/orphan.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/**') t(path) WHERE ends_with(path, 'orphan.parquet')
 ----
 1
 
@@ -72,7 +72,7 @@ statement ok
 CHECKPOINT ducklake
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/main/t/orphan.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/issue_1090/**') t(path) WHERE ends_with(path, 'orphan.parquet')
 ----
 0
 
