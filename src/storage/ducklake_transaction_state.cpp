@@ -1460,6 +1460,10 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
+			if (local_change.type == LocalChangeType::DROP_NULL) {
+				// rows that are NULL in this column may only be inlined under the new schema version
+				column_schema_change = true;
+			}
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
 				// persist updated sort expressions (column name was updated in the table entry)
