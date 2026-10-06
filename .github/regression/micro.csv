@@ -14,4 +14,5 @@ benchmark/micro/write/ctas_lineitem.benchmark
 benchmark/micro/write/delete_lineitem.benchmark
 benchmark/micro/write/merge_into_upsert.benchmark
 benchmark/ingest/add_files_small_files.benchmark
+benchmark/micro/ingest/add_files_not_null.benchmark
 benchmark/tpch/q09.benchmark
