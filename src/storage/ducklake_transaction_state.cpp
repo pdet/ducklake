@@ -1438,6 +1438,10 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		case LocalChangeType::DROP_NULL:
 		case LocalChangeType::RENAME_COLUMN:
 		case LocalChangeType::SET_DEFAULT: {
+			if (local_change.type == LocalChangeType::DROP_NULL) {
+				// rows that are NULL in this column may only be inlined under the new schema version
+				column_schema_change = true;
+			}
 			auto &remaining = field_alter_remaining[local_change.field_index];
 			remaining--;
 			// This is an older thus superseded entry for a field that is altered for multiple times in this
@@ -1460,10 +1464,6 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
-			if (local_change.type == LocalChangeType::DROP_NULL) {
-				// rows that are NULL in this column may only be inlined under the new schema version
-				column_schema_change = true;
-			}
 			if (local_change.type == LocalChangeType::RENAME_COLUMN) {
 				column_schema_change = true;
 				// persist updated sort expressions (column name was updated in the table entry)

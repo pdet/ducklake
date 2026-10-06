@@ -90,3 +90,35 @@ query II
 SELECT count(*), count(a) FROM ducklake.s
 ----
 2	2
+
+# a later change to the same column in the same transaction does not cancel the new inlined table
+statement ok
+CREATE TABLE ducklake.d (a VARCHAR NOT NULL, v DOUBLE)
+
+statement ok
+INSERT INTO ducklake.d VALUES ('x', 1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.d ALTER COLUMN a DROP NOT NULL
+
+statement ok
+ALTER TABLE ducklake.d ALTER COLUMN a SET DEFAULT 'd'
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.d VALUES (NULL, 2)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('ducklake', table_name => 'd')
+----
+2
+
+query II
+SELECT count(*), count(a) FROM ducklake.d
+----
+2	1
