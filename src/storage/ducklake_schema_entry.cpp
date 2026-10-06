@@ -22,8 +22,6 @@
 #include "common/ducklake_util.hpp"
 #include "duckdb/optimizer/remote_pushdown_optimizer.hpp"
 #include "duckdb/parser/tableref/pivotref.hpp"
-#include "duckdb/parser/tableref/joinref.hpp"
-#include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 
@@ -246,23 +244,34 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateIndex(CatalogTransaction t
 	throw NotImplementedException("DuckLake does not support indexes");
 }
 
-//! The binder strips the name of the view's own catalog from its table references, but not from a pivot
+//! The references of a pivot keep their catalog qualifier after binding, every other one is stripped
 static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name);
+
+static void StripCatalogFromPivots(ParsedExpression &expr, const Identifier &catalog_name) {
+	RemotePushdownOptimizer::StripCatalogName(expr, catalog_name);
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		StripCatalogFromPivots(*expr.Cast<SubqueryExpression>().SubqueryMutable()->node, catalog_name);
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](unique_ptr<ParsedExpression> &child) { StripCatalogFromPivots(*child, catalog_name); });
+}
 
 static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_name) {
 	auto strip_expression = [&](unique_ptr<ParsedExpression> &expr) {
-		RemotePushdownOptimizer::StripCatalogName(*expr, catalog_name);
-		if (expr->GetExpressionClass() == ExpressionClass::SUBQUERY) {
-			StripCatalogFromPivots(*expr->Cast<SubqueryExpression>().SubqueryMutable()->node, catalog_name);
-		}
+		StripCatalogFromPivots(*expr, catalog_name);
 	};
 	auto strip_ref = [&](TableRef &ref) {
-		// a no-op for everything the binder already stripped, which is every reference outside a pivot
 		RemotePushdownOptimizer::StripCatalogName(ref, catalog_name);
-		if (ref.type == TableReferenceType::PIVOT) {
-			for (auto &pivot : ref.Cast<PivotRef>().pivots) {
-				for (auto &expr : pivot.pivot_expressions) {
-					RemotePushdownOptimizer::StripCatalogName(*expr, catalog_name);
+		if (ref.type != TableReferenceType::PIVOT) {
+			return;
+		}
+		for (auto &pivot : ref.Cast<PivotRef>().pivots) {
+			for (auto &expr : pivot.pivot_expressions) {
+				StripCatalogFromPivots(*expr, catalog_name);
+			}
+			for (auto &entry : pivot.entries) {
+				if (entry.expr) {
+					StripCatalogFromPivots(*entry.expr, catalog_name);
 				}
 			}
 		}
