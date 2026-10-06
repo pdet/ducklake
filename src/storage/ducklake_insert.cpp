@@ -756,7 +756,12 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	physical_copy.partition_columns = std::move(copy_options.partition_columns);
 	physical_copy.names = copy_options.names;
 	physical_copy.expected_types = std::move(copy_options.expected_types);
-	physical_copy.parallel = true;
+	auto execution_mode = CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
+	if (copy_input.ordered_input && physical_copy.function.execution_mode) {
+		// the rows are sorted and the batch copy operator does not rotate files by size
+		execution_mode = physical_copy.function.execution_mode(true, false);
+	}
+	physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
 	physical_copy.hive_file_pattern = copy_input.catalog.UseHiveFilePattern(
 	    !is_encrypted, copy_input.schema_id, copy_input.table_id, &copy_input.table_options);
 	if (plan) {
@@ -833,6 +838,8 @@ struct DuckLakeInsertPipeline {
 	reference<PhysicalOperator> root;
 	//! The inline data operator, if data inlining applies
 	optional_ptr<DuckLakeInlineData> inline_data;
+	//! Whether a sort of the table sort key was planned
+	bool sorted = false;
 };
 
 //! Plans the sort and inline data operators between the input and the copy, shared by INSERT and CTAS
@@ -840,11 +847,12 @@ static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, Physica
                                                  PhysicalOperator &plan, const ColumnList &columns,
                                                  const Identifier &table_name, optional_ptr<DuckLakeSort> sort_data,
                                                  bool sort_on_insert, idx_t data_inlining_row_limit) {
-	DuckLakeInsertPipeline result {plan, nullptr};
+	DuckLakeInsertPipeline result {plan, nullptr, false};
 	if (sort_data && sort_on_insert) {
 		auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), columns, table_name, *sort_data);
 		if (sorted_plan) {
 			result.root = *sorted_plan;
+			result.sorted = true;
 		}
 	}
 	if (data_inlining_row_limit > 0) {
@@ -856,6 +864,7 @@ static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, Physica
 			auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), columns, table_name, *sort_data);
 			if (sorted_plan) {
 				result.root = *sorted_plan;
+				result.sorted = true;
 			}
 		}
 	}
@@ -881,6 +890,7 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	    GetInliningLimit(context, ducklake_table));
 
 	DuckLakeCopyInput copy_input(context, ducklake_table);
+	copy_input.ordered_input = pipeline.sorted;
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 	auto &insert = DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
 	if (pipeline.inline_data) {
@@ -927,6 +937,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path, *field_data, partition_data.get());
 	copy_input.table_options = table_options;
+	copy_input.ordered_input = pipeline.sorted;
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 
 	auto &insert =
