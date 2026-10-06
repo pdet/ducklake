@@ -170,6 +170,13 @@ public:
 	    : transaction(transaction), context(context), table(bind_data.table), allow_missing(bind_data.allow_missing),
 	      ignore_extra_columns(bind_data.ignore_extra_columns), hive_partitioning(bind_data.hive_partitioning),
 	      skipped_fields(bind_data.table.GetSkippedStatsFields()) {
+		// the constraint is only enforced for the root columns, like it is for an insert
+		auto not_null_fields = table.GetNotNullFields();
+		for (auto &field_id : table.GetFieldData().GetFieldIds()) {
+			if (not_null_fields.count(field_id->Name())) {
+				not_null_columns.emplace(field_id->GetFieldIndex().index, field_id->Name());
+			}
+		}
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -177,7 +184,7 @@ public:
 private:
 	void ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &result);
 	DuckLakeDataFile AddFileToTable(ParquetFileMetadata &file);
-	void CheckNotNullColumns(const DuckLakeDataFile &file) const;
+	void CheckNotNullStats(FieldIndex field_index, const DuckLakeColumnStats &stats) const;
 	unique_ptr<DuckLakeNameMapEntry> MapColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column,
 	                                           const DuckLakeFieldId &field_id, string prefix, bool repeated);
 	vector<unique_ptr<DuckLakeNameMapEntry>> MapColumns(ParquetFileMetadata &file,
@@ -207,6 +214,8 @@ private:
 	HivePartitioningType hive_partitioning;
 	unordered_set<string> processed_files;
 	unordered_set<idx_t> skipped_fields;
+	//! The root columns of the table that do not allow NULL values, by field index
+	unordered_map<idx_t, string> not_null_columns;
 };
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -1046,6 +1055,9 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 
 		if (!column.column_stats.empty()) {
 			auto &stats_list = column.column_stats;
+			for (auto &stats : stats_list) {
+				CheckNotNullStats(field_index, stats);
+			}
 			auto aggregated = stats_list[0];
 			bool numeric_type = aggregated.type.IsNumeric();
 
@@ -1171,14 +1183,16 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 			continue;
 		}
 
-		result.column_stats.emplace(entry.field_index, ConstantColumnStats(file_metadata, entry.field_index,
-		                                                                   entry.field_type, entry.hive_value));
+		auto hive_stats = ConstantColumnStats(file_metadata, entry.field_index, entry.field_type, entry.hive_value);
+		CheckNotNullStats(entry.field_index, hive_stats);
+		result.column_stats.emplace(entry.field_index, std::move(hive_stats));
 	}
 
 	for (auto &missing : file_metadata.missing_columns) {
 		if (missing.reads_null) {
 			auto column_stats =
 			    ConstantColumnStats(file_metadata, missing.field_index, missing.field_type, Value(missing.field_type));
+			CheckNotNullStats(missing.field_index, column_stats);
 			if (missing.repeated) {
 				column_stats.has_num_values = false;
 				column_stats.has_null_count = false;
@@ -1196,26 +1210,15 @@ void DuckLakeFileProcessor::MapColumnStats(ParquetFileMetadata &file_metadata, D
 	}
 }
 
-void DuckLakeFileProcessor::CheckNotNullColumns(const DuckLakeDataFile &file) const {
-	auto not_null_fields = table.GetNotNullFields();
-	if (not_null_fields.empty()) {
+void DuckLakeFileProcessor::CheckNotNullStats(FieldIndex field_index, const DuckLakeColumnStats &stats) const {
+	if (!stats.has_null_count || stats.null_count == 0) {
 		return;
 	}
-	// the constraint is only enforced for the root columns, like it is for an insert
-	for (auto &field_id : table.GetFieldData().GetFieldIds()) {
-		auto &column_name = field_id->Name();
-		if (!not_null_fields.count(column_name)) {
-			continue;
-		}
-		auto entry = file.column_stats.find(field_id->GetFieldIndex());
-		if (entry == file.column_stats.end()) {
-			continue;
-		}
-		auto &stats = entry->second;
-		if (stats.has_null_count && stats.null_count > 0) {
-			table.ThrowNotNullViolation(column_name);
-		}
+	auto column_name = not_null_columns.find(field_index.index);
+	if (column_name == not_null_columns.end()) {
+		return;
 	}
+	table.ThrowNotNullViolation(column_name->second);
 }
 
 DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFileMetadata &file_metadata,
@@ -1383,7 +1386,6 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	auto name_map = make_uniq<DuckLakeNameMap>();
 	name_map->table_id = table.GetTableId();
 	MapColumnStats(file, result);
-	CheckNotNullColumns(result);
 	name_map->column_maps = std::move(file.map_entries);
 
 	// we successfully mapped this file - register the name map and refer to it in the file
