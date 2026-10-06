@@ -2419,7 +2419,7 @@ LEFT JOIN LATERAL (
 		encryption_key,
 		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot < data.end_snapshot
+	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
 	ORDER BY data_file_id, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (
@@ -2572,11 +2572,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string data_select_list =
 	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
-	    "data.partition_id, "
-	    "CASE WHEN partition_spec.partition_id IS NOT NULL AND "
-	    "(partition_spec.end_snapshot IS NULL OR partition_spec.begin_snapshot < partition_spec.end_snapshot) "
-	    "THEN COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) END AS partition_snapshot_id, "
-	    "partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
+	    "data.partition_id, partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
 	    GetFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
@@ -2713,8 +2709,6 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.partition_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
-		col_idx++;
-		new_entry.partition_snapshot_id = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
 		new_entry.partition_schema_version = row.IsNull(col_idx) ? optional_idx() : row.GetValue<idx_t>(col_idx);
 		col_idx++;
