@@ -298,9 +298,15 @@ struct DuckLakeGlobalStatsInfo {
 	idx_t record_count;
 	idx_t next_row_id;
 	idx_t table_size_bytes;
+	//! The stats row has no record_count
+	bool record_count_unknown = false;
 	//! The stats row has no file_size_bytes
 	bool missing_table_size = false;
 	vector<DuckLakeGlobalColumnStatsInfo> column_stats;
+
+	bool MayHaveRows() const {
+		return record_count_unknown || record_count > 0;
+	}
 };
 
 struct SnapshotChangeInfo {

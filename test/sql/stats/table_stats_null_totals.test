@@ -33,11 +33,11 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
 (DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
 
-# row ids are never reused, so next_row_id stands in for the record count
+# an unknown record count gives no estimate
 query I
 SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 't'
 ----
-4
+0
 
 statement ok
 INSERT INTO ducklake.t VALUES (30)
@@ -55,7 +55,7 @@ SELECT rowid, i FROM ducklake.t WHERE i = 30
 query III
 SELECT count(*), max(record_count), max(next_row_id) FROM ducklake_meta.ducklake_table_stats
 ----
-1	5	5
+1	NULL	5
 
 query III
 SELECT count(*), min(min_value), max(max_value) FROM ducklake_meta.ducklake_table_column_stats
@@ -64,7 +64,7 @@ SELECT count(*), min(min_value), max(max_value) FROM ducklake_meta.ducklake_tabl
 
 # a missing file size is taken from the live data files
 statement ok
-UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL, file_size_bytes = NULL
+UPDATE ducklake_meta.ducklake_table_stats SET file_size_bytes = NULL
 
 statement ok
 DETACH ducklake
@@ -81,11 +81,11 @@ SELECT count(*), max(record_count), max(next_row_id),
 	max(file_size_bytes) = (SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL)
 FROM ducklake_meta.ducklake_table_stats
 ----
-1	6	6	true
+1	NULL	6	true
 
-# dropping a whole data file subtracts from both totals
+# dropping a whole data file without totals
 statement ok
-UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL, file_size_bytes = NULL
+UPDATE ducklake_meta.ducklake_table_stats SET file_size_bytes = NULL
 
 statement ok
 DETACH ducklake
@@ -107,4 +107,48 @@ SELECT count(*), max(record_count), max(next_row_id),
 	max(file_size_bytes) = (SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL)
 FROM ducklake_meta.ducklake_table_stats
 ----
-1	5	6	true
+1	NULL	6	true
+
+# an update keeps the row id of the old version, so the stats of an unknown count are never taken as exact
+statement ok
+CREATE TABLE ducklake.v(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'v')
+
+statement ok
+INSERT INTO ducklake.v VALUES (10), (11)
+
+statement ok
+UPDATE ducklake.v SET i = 20 WHERE i = 10
+
+statement ok
+UPDATE ducklake_meta.ducklake_table_stats SET record_count = NULL
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/table_stats_null_totals', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+11	20
+
+statement ok
+INSERT INTO ducklake.v VALUES (15)
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+11	20
+
+statement ok
+DELETE FROM ducklake.v
+
+query II
+SELECT min(i), max(i) FROM ducklake.v
+----
+NULL	NULL

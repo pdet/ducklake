@@ -14,6 +14,8 @@ argument lake commit_stats
 
 argument work commit_stats_work
 
+argument warm_table lake.main.bg_0
+
 cache_file ${lake}_ready.marker
 
 # Every background table gets a stats row and four column stats rows
@@ -60,16 +62,7 @@ INSERT INTO lake.main.ins VALUES (7, 'row_7');
 INSERT INTO lake.main.ins VALUES (8, 'row_8');
 INSERT INTO lake.main.ins VALUES (9, 'row_9');
 
-# The restore_cleanup block plus a query that loads the catalog, so the first timed INSERT does not pay a cold load
-cleanup
-DETACH DATABASE IF EXISTS lake;
-@copy ${lake}_pristine TO ${work}
-@attach ${work} AS lake
-CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
-SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
-<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
-THEN error('the fixture files were not restored') END;
-SELECT count(*) FROM lake.main.bg_0;
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
 # A missed reset doubles the rows of ins, and every INSERT must have written its own data file
 result_query II

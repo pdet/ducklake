@@ -631,6 +631,7 @@ void DuckLakeServerSideCommit::ReadStagedNameMaps() {
 unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const DuckLakeGlobalStatsInfo &gs) {
 	auto entry = make_uniq<DuckLakeTableStats>();
 	entry->record_count = gs.record_count;
+	entry->record_count_unknown = gs.record_count_unknown;
 	entry->next_row_id = gs.next_row_id;
 	entry->table_size_bytes = gs.table_size_bytes;
 	for (auto &col : gs.column_stats) {
@@ -639,7 +640,7 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 			continue;
 		}
 		entry->column_stats.emplace(col.column_id,
-		                            DuckLakeColumnStats::FromGlobalStats(type_it->second, col, gs.record_count > 0));
+		                            DuckLakeColumnStats::FromGlobalStats(type_it->second, col, gs.MayHaveRows()));
 	}
 	return entry;
 }

@@ -1221,15 +1221,6 @@ ORDER BY sort.table_id, sort.sort_id, sort_expr.sort_key_index
 }
 
 template <class ROW>
-idx_t ReadRecordCount(const ROW &row, idx_t record_count_column, idx_t next_row_id_column) {
-	if (row.IsNull(record_count_column)) {
-		// row ids are never reused, so next_row_id bounds a missing record count
-		return row.template GetValue<uint64_t>(next_row_id_column);
-	}
-	return row.template GetValue<uint64_t>(record_count_column);
-}
-
-template <class ROW>
 void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &global_stats, idx_t from_column = 0,
                              bool has_exactness = false) {
 	auto table_id = TableIndex(row.template GetValue<uint64_t>(0 + from_column));
@@ -1238,7 +1229,8 @@ void TransformGlobalStatsRow(const ROW &row, vector<DuckLakeGlobalStatsInfo> &gl
 		DuckLakeGlobalStatsInfo new_entry;
 		new_entry.table_id = table_id;
 		new_entry.initialized = true;
-		new_entry.record_count = ReadRecordCount(row, 2 + from_column, 3 + from_column);
+		new_entry.record_count_unknown = row.IsNull(2 + from_column);
+		new_entry.record_count = new_entry.record_count_unknown ? 0 : row.template GetValue<uint64_t>(2 + from_column);
 		new_entry.next_row_id = row.template GetValue<uint64_t>(3 + from_column);
 		new_entry.missing_table_size = row.IsNull(4 + from_column);
 		new_entry.table_size_bytes =
@@ -1400,13 +1392,16 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(Duc
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
-	auto result = Query(snapshot, TableStatsQuery("table_id, record_count, next_row_id", false, optional_idx()));
+	auto result = Query(snapshot, TableStatsQuery("table_id, record_count", false, optional_idx()));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get table record counts from DuckLake: ");
 	}
 	map<TableIndex, idx_t> record_counts;
 	for (auto &row : *result) {
-		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), ReadRecordCount(row, 1, 2));
+		if (row.IsNull(1)) {
+			continue;
+		}
+		record_counts.emplace(TableIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
 	}
 	return record_counts;
 }
@@ -5408,6 +5403,7 @@ struct ColumnStatsSQL {
 string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats,
                                                           bool write_stats_exactness) {
 	string batch_query;
+	auto record_count = stats.record_count_unknown ? string("NULL") : to_string(stats.record_count);
 
 	if (!stats.initialized) {
 		string column_stats_values;
@@ -5425,16 +5421,16 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 			column_stats_values += ")";
 		}
 		batch_query +=
-		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %d, %d, %d);",
-		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes);
+		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES (%d, %s, %d, %d);",
+		                       stats.table_id.index, record_count, stats.next_row_id, stats.table_size_bytes);
 		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;",
 		                                  column_stats_values);
 	} else {
 		// stats have been initialized - update them
 		batch_query += StringUtil::Format(
-		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
+		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%s, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
-		    stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
+		    record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
 		// Emit one plain UPDATE per column rather than a single
 		// `UPDATE ... FROM (VALUES ...)`. A DuckDB-backed metadata catalog
 		// corrupts string payloads when an UPDATE pulls its new values from a
