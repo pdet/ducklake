@@ -39,7 +39,6 @@ public:
 
 	DuckLakeTableEntry &table;
 	vector<DuckLakeDataFile> written_files;
-	//! Files the writer produced without rows
 	vector<string> empty_files;
 	idx_t total_insert_count;
 	case_insensitive_set_t not_null_fields;

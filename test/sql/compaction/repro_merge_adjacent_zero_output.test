@@ -1,5 +1,5 @@
 # name: test/sql/compaction/repro_merge_adjacent_zero_output.test
-# description: inserts without rows register no data file, so merge_adjacent_files has nothing to merge
+# description: empty inserts leave no data files to compact
 # group: [compaction]
 
 #              See https://github.com/duckdb/ducklake/issues/525
@@ -44,7 +44,11 @@ WHERE end_snapshot IS NULL;
 ----
 0	0
 
-# merge_adjacent_files has no file to merge
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/repro_merge_zero/**/*.parquet')
+----
+0
+
 query I
 SELECT count(*) FROM ducklake_merge_adjacent_files('lake');
 ----

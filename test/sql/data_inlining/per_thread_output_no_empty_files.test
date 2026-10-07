@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/per_thread_output_no_empty_files.test
-# description: an insert whose rows are all inlined registers no empty data file
+# description: inlined inserts leave no empty data files
 # group: [data_inlining]
 
 require ducklake
@@ -12,7 +12,7 @@ test-env DATA_PATH {TEST_DIR}
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-(DATA_PATH '{DATA_PATH}/per_thread_output_no_empty_files', METADATA_CATALOG 'meta')
+(DATA_PATH '{DATA_PATH}/per_thread_output_no_empty_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CALL dl.set_option('per_thread_output', true)
@@ -28,7 +28,6 @@ SELECT count(*) FROM meta.ducklake_data_file
 ----
 0
 
-# and no file is left behind
 query I
 SELECT count(*) FROM glob('{DATA_PATH}/per_thread_output_no_empty_files/**/*.parquet')
 ----
@@ -43,7 +42,6 @@ SELECT part_id, v FROM dl.t ORDER BY ALL
 2	20
 3	30
 
-# the rows are still inlined, so a flush writes them
 statement ok
 FROM ducklake_flush_inlined_data('dl')
 
@@ -61,16 +59,15 @@ SELECT part_id, v FROM dl.t ORDER BY ALL
 2	20
 3	30
 
-# an insert that is too large to inline still registers its file
 statement ok
-INSERT INTO dl.t SELECT 7, r FROM range(10000) _(r)
+INSERT INTO dl.t SELECT 7, r FROM range(11) _(r)
 
 query II
 SELECT count(*) > 1, sum(record_count) FROM meta.ducklake_data_file
 ----
-true	10005
+true	16
 
 query I
 SELECT count(*) FROM dl.t
 ----
-10005
+16
