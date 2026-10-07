@@ -143,9 +143,8 @@ public:
 	                                   const DuckLakeCommitContext &context);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
-	void CheckDeletedFileConflicts(const TransactionChangeInformation &changes,
-	                               const SnapshotChangeInformation &other_changes,
-	                               const DuckLakeCommitContext &context) const;
+	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
+	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
