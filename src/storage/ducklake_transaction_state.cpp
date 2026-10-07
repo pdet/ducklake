@@ -2171,8 +2171,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
-			// rollback if there is an active transaction
-			context.try_rollback();
+			// a rollback that fails too, as on a lost connection, must not hide the error of the commit
+			try {
+				context.try_rollback();
+			} catch (std::exception &) { // NOLINT: the error of the commit is reported
+			}
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			bool retry_on_error =
 			    can_retry && (retryable_metadata_error || DuckLakeTransaction::RetryOnError(error.Message()));
