@@ -57,7 +57,7 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
-	// the rollback has to follow the failed statement before another writer uses the server transaction
+	// hold the lock through the rollback
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }

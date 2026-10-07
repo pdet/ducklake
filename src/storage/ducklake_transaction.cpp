@@ -1262,7 +1262,15 @@ void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
 		ducklake_catalog.InvalidateSchemaCache(schema_version);
 	};
-	DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+	try {
+		DuckLakeTransactionState::DropEmptySupersededInlinedTables(context);
+	} catch (std::exception &ex) {
+		ReportPostCommitError(ErrorData(ex).Message());
+	}
+}
+
+void DuckLakeTransaction::ReportPostCommitError(const string &message) {
+	DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
 }
 
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
@@ -1421,7 +1429,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.report_post_commit_error = [&](const string &message) {
-		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake post-commit cleanup failed: %s", message));
+		ReportPostCommitError(message);
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();

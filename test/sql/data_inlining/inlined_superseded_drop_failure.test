@@ -48,6 +48,10 @@ SELECT * FROM dl.t ORDER BY x
 2	NULL
 3	3
 
+# a flush with nothing to flush tries the drop again and still commits
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 query I
 SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
 ----
