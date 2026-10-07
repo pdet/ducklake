@@ -710,27 +710,73 @@ static bool IsFoldableScalarType(const LogicalType &type) {
 	return id == LogicalTypeId::VARCHAR || id == LogicalTypeId::BOOLEAN;
 }
 
-bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnSchemaEntry> &columns,
+static unordered_set<string> ReadInlinedTablesBeforeSchemaChange(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                                 const DuckLakeCommitContext &context) {
+	unordered_set<string> result;
+	auto tables = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(table_id));
+	tables->ThrowIfError("Failed to read the inlined data tables from DuckLake: ");
+	for (auto &row : *tables) {
+		result.insert(row.GetValue<string>(0));
+	}
+	return result;
+}
+
+//! The top-level columns of each inlined table of `table_id` at the schema version it was written with
+static map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>>
+ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &context) {
+	map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>> result;
+	auto columns = context.query_metadata(DuckLakeMetadataManager::GetInlinedTableColumnsSql(table_id.index));
+	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
+	for (auto &row : *columns) {
+		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
+		DuckLakeColumnSchemaEntry column {field_index, row.GetValue<string>(1),
+		                                  DuckLakeTypes::FromString(row.GetValue<string>(2)), true};
+		result[row.GetValue<string>(0)].emplace(field_index, std::move(column));
+	}
+	return result;
+}
+
+bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
+                                                    const vector<DuckLakeColumnSchemaEntry> &columns,
                                                     const vector<string> &inlined_table_names,
                                                     DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
                                                     const DuckLakeCommitContext &context) {
-	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is a
-	// non-scalar type we cannot account for the inlined rows exactly - bail (caller keeps the scan fallback).
+	// exact inlined bounds are only computed for top-level foldable scalar columns
 	for (auto &col : columns) {
 		if (!IsFoldableScalarType(col.column_type)) {
 			return false;
 		}
 	}
+	auto older_tables = ReadInlinedTablesBeforeSchemaChange(table_id, snapshot, context);
+	map<string, map<FieldIndex, DuckLakeColumnSchemaEntry>> older_columns;
+	if (!older_tables.empty()) {
+		older_columns = ReadInlinedTableColumns(table_id, context);
+	}
 	for (auto &inlined_table_name : inlined_table_names) {
-		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
+		vector<reference<const DuckLakeColumnSchemaEntry>> sources(columns.begin(), columns.end());
+		if (older_tables.find(inlined_table_name) != older_tables.end()) {
+			// an older inlined table has the names and types of its own schema, and lacks columns added later
+			auto &table_columns = older_columns[inlined_table_name];
+			for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
+				auto source = table_columns.find(columns[col_idx].field_index);
+				if (source == table_columns.end() || !IsFoldableScalarType(source->second.column_type)) {
+					return false;
+				}
+				sources[col_idx] = source->second;
+			}
+		}
+		// one aggregate query with the row count and the bounds, count and NaN flag of every column
 		string select_list = "COUNT(*)";
-		for (auto &col : columns) {
-			auto col_ident = SQLQuotedIdentifier::ToString(col.column_name);
-			bool is_float = col.column_type.IsFloating();
+		for (auto &source : sources) {
+			auto &source_type = source.get().column_type;
+			auto col_expr =
+			    context.cast_inlined_column(SQLQuotedIdentifier::ToString(source.get().column_name), source_type);
+			bool is_float = source_type.IsFloating();
 			string nan_expr =
-			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_ident) : string("false");
-			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_ident,
-			                                  col_ident, col_ident, nan_expr);
+			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_expr) : string("false");
+			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_expr, col_expr,
+			                                  col_expr, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
 		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());
@@ -742,8 +788,10 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 				break;
 			}
 			idx_t col_offset = 1;
-			for (auto &col : columns) {
-				bool is_float = col.column_type.IsFloating();
+			for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
+				auto &col = columns[col_idx];
+				auto &source_type = sources[col_idx].get().column_type;
+				bool is_float = source_type.IsFloating();
 				bool contains_nan = !row.IsNull(col_offset + 3) && row.GetValue<bool>(col_offset + 3);
 				DuckLakeColumnStats col_stats(col.column_type);
 				auto non_null = static_cast<idx_t>(row.GetValue<int64_t>(col_offset + 2));
@@ -755,8 +803,11 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(const vector<DuckLakeColumnS
 					col_stats.has_contains_nan = true;
 					col_stats.contains_nan = contains_nan;
 				}
+				// bounds of an older type are only kept when they read back exactly as the current type
+				bool keep_bounds = source_type == col.column_type ||
+				                   DuckLakeColumnStats::BoundsSurviveTypePromotion(source_type, col.column_type);
 				// do not record float min/max if NaN is present (matches the parquet stats behaviour)
-				if (!(is_float && contains_nan)) {
+				if (keep_bounds && !(is_float && contains_nan)) {
 					if (!row.IsNull(col_offset + 0)) {
 						col_stats.has_min = true;
 						col_stats.min = row.GetValue<string>(col_offset + 0);
@@ -921,7 +972,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			}
 		}
 		auto inlined_table_names = context.get_inlined_table_names(table_id);
-		if (!TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
+		if (!TryMergeInlinedStats(table_id, root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
