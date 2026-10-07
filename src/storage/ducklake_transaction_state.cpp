@@ -1685,13 +1685,33 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	// write new tables
 	vector<DuckLakeTableInfo> new_tables_result;
 	vector<DuckLakeTableInfo> new_inlined_data_tables_result;
+	// the paths of the schemas and tables of the commit, resolved once each
+	unordered_map<idx_t, string> schema_paths;
+	auto get_schema_path = [&](SchemaIndex schema_id) -> const string & {
+		auto entry = schema_paths.find(schema_id.index);
+		if (entry == schema_paths.end()) {
+			auto path = DuckLakeMetadataManager::GetPathForSchema(schema_id, new_schemas_result, context.query_metadata,
+			                                                      data_path, separator);
+			entry = schema_paths.emplace(schema_id.index, std::move(path)).first;
+		}
+		return entry->second;
+	};
+	unordered_map<idx_t, string> table_paths;
+	auto get_table_path = [&](TableIndex table_id) -> const string & {
+		auto entry = table_paths.find(table_id.index);
+		if (entry == table_paths.end()) {
+			auto path = DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result, context.query_metadata,
+			                                                     data_path, separator);
+			entry = table_paths.emplace(table_id.index, std::move(path)).first;
+		}
+		return entry->second;
+	};
 	auto table_relative_paths = [&](const auto &files, auto path_member) {
 		vector<DuckLakePath> result;
 		result.reserve(files.size());
 		for (auto &file : files) {
-			result.push_back(DuckLakeMetadataManager::GetRelativePath(file.table_id, file.*path_member,
-			                                                          new_tables_result, new_schemas_result,
-			                                                          context.query_metadata, data_path, separator));
+			result.push_back(
+			    DuckLakeMetadataManager::GetRelativePath(file.*path_member, get_table_path(file.table_id), separator));
 		}
 		return result;
 	};
@@ -1700,8 +1720,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		vector<DuckLakePath> resolved_table_paths;
 		resolved_table_paths.reserve(result.new_tables.size());
 		for (auto &table : result.new_tables) {
-			resolved_table_paths.push_back(DuckLakeMetadataManager::GetRelativePath(
-			    table.schema_id, table.path, new_schemas_result, context.query_metadata, data_path, separator));
+			resolved_table_paths.push_back(
+			    DuckLakeMetadataManager::GetRelativePath(table.path, get_schema_path(table.schema_id), separator));
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
 		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);

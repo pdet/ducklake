@@ -3682,8 +3682,7 @@ string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLa
 	} else {
 		auto &data_path = catalog.DataPath();
 		path = GetPathForTable(
-		    table_id, new_tables, new_schemas_result, [&](string query) { return Query(query); }, data_path,
-		    GetPathSeparator(data_path));
+		    table_id, new_tables, [&](string query) { return Query(query); }, data_path, GetPathSeparator(data_path));
 	}
 	table_paths.emplace(table_id, path);
 	return path;
@@ -3800,29 +3799,12 @@ WHERE schema_id = %d;)",
 }
 
 string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
-                                                const vector<DuckLakeSchemaInfo> &new_schemas_result,
                                                 const std::function<unique_ptr<QueryResult>(string)> &query_executor,
                                                 const string &base_data_path, const string &separator) {
 	for (const auto &new_table : new_tables) {
 		if (new_table.id == table_id) {
-			// new table - resolve its schema first
-			for (auto &schema : new_schemas_result) {
-				if (schema.id == new_table.schema_id) {
-					auto resolved_schema_path =
-					    FromRelativePath(DuckLakePath {schema.path, false}, base_data_path, separator);
-					return FromRelativePath(DuckLakePath {new_table.path, false}, resolved_schema_path, separator);
-				}
-			}
-			auto schema_query = StringUtil::Format(R"(
-SELECT s.path, s.path_is_relative
-FROM {METADATA_CATALOG}.ducklake_schema s
-WHERE schema_id = %d;)",
-			                                       new_table.schema_id.index);
-			auto result = query_executor(schema_query);
-			for (auto &row : *result) {
-				auto resolved_schema_path = FromRelativePath(ReadPath(row, 0), base_data_path, separator);
-				return FromRelativePath(DuckLakePath {new_table.path, false}, resolved_schema_path, separator);
-			}
+			// tables created or renamed in this commit carry their absolute path
+			return FromRelativePath(DuckLakePath {new_table.path, false}, base_data_path, separator);
 		}
 	}
 	auto query = StringUtil::Format(R"(
@@ -3843,26 +3825,6 @@ WHERE table_id = %d;)",
 	}
 	throw InvalidInputException("Failed to get path for table with id %d - table not found in metadata catalog",
 	                            table_id.index);
-}
-
-DuckLakePath
-DuckLakeMetadataManager::GetRelativePath(SchemaIndex schema_id, const string &path,
-                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                         const string &base_data_path, const string &separator) {
-	return GetRelativePath(
-	    path, GetPathForSchema(schema_id, new_schemas_result, query_executor, base_data_path, separator), separator);
-}
-
-DuckLakePath
-DuckLakeMetadataManager::GetRelativePath(TableIndex table_id, const string &path,
-                                         const vector<DuckLakeTableInfo> &new_tables,
-                                         const vector<DuckLakeSchemaInfo> &new_schemas_result,
-                                         const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-                                         const string &base_data_path, const string &separator) {
-	return GetRelativePath(
-	    path, GetPathForTable(table_id, new_tables, new_schemas_result, query_executor, base_data_path, separator),
-	    separator);
 }
 
 static void AppendBigintOrNull(Appender &appender, optional_idx value) {
