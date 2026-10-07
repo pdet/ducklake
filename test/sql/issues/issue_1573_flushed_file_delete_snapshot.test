@@ -11,7 +11,8 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1573_flush', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/issue_1573_flushed',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.t2 (id INTEGER)
