@@ -1344,9 +1344,9 @@ string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 }
 
 string DuckLakeMetadataManager::GetDataFileSelectList(const string &prefix) {
-	// the format of a file we can read is returned as NULL, so the common case transfers no string
+	// the format DuckLake writes is returned as NULL, so the common case transfers no string
 	return GetFileSelectList(prefix) +
-	       StringUtil::Format(", CASE WHEN LOWER(%s.file_format) = 'parquet' THEN NULL ELSE %s.file_format END AS "
+	       StringUtil::Format(", CASE WHEN %s.file_format = 'parquet' THEN NULL ELSE %s.file_format END AS "
 	                          "%s_unsupported_format",
 	                          prefix, prefix, prefix);
 }
@@ -1384,7 +1384,10 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDataFile(DuckLakeTableEntry &table
                                                        idx_t &col_idx, bool is_encrypted) {
 	auto data = ReadFile(table, row, col_idx, is_encrypted);
 	if (!row.IsNull(col_idx)) {
-		throw NotImplementedException("Unsupported data file format: %s", row.GetValue<string>(col_idx));
+		auto file_format = row.GetValue<string>(col_idx);
+		if (!StringUtil::CIEquals(file_format, "parquet")) {
+			throw NotImplementedException("Unsupported data file format: %s", file_format);
+		}
 	}
 	col_idx++;
 	return data;
