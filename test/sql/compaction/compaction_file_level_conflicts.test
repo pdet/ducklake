@@ -183,7 +183,7 @@ SELECT count(*), count(*) FILTER (WHERE s = 'x' AND i = 1) FROM ducklake.e
 ----
 20009	0
 
-# a rewrite keeps the table stats of a delete that commits first, so the count is not 199
+# a rewrite keeps the table stats of a delete that commits first
 statement ok
 CREATE TABLE ducklake.f(i INTEGER)
 
