@@ -320,6 +320,7 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
+	void ReportPostCommitError(const string &message);
 
 	static DuckLakeGlobalStatsInfo ConvertNewGlobalStats(TableIndex table_id,
 	                                                     const DuckLakeNewGlobalStats &new_global_stats);
