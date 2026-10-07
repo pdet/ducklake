@@ -26,7 +26,7 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/expression/type_expression.hpp"
 #include "duckdb/common/type_visitor.hpp"
-#include "duckdb/common/extra_type_info.hpp"
+#include "duckdb/common/logical_type_info.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
@@ -138,7 +138,7 @@ idx_t EstimateTypeInfoMemory(const LogicalType &type) {
 	case LogicalTypeId::MAP:
 		return sizeof(ListTypeInfo) + EstimateTypeInfoMemory(ListType::GetChildType(type));
 	default:
-		return type.AuxInfo() ? sizeof(ExtraTypeInfo) : 0;
+		return type.HasParameters() ? sizeof(LogicalTypeInfo) : 0;
 	}
 }
 
@@ -551,7 +551,7 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 }
 
 static unique_ptr<ParsedExpression> ParseDefaultExpression(const Value &default_value) {
-	auto sql_expr = Parser::ParseExpressionList(default_value.GetValue<string>());
+	auto sql_expr = Parser::GetBuiltinParser().ParseExpressionList(default_value.GetValue<string>());
 	if (sql_expr.size() != 1) {
 		throw InternalException("Expected a single expression");
 	}
@@ -660,13 +660,13 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	for (auto &impl : macro.implementations) {
 		unique_ptr<MacroFunction> macro_function;
 		if (impl.type == "scalar") {
-			auto sql_expr = Parser::ParseExpressionList(impl.sql);
+			auto sql_expr = Parser::GetBuiltinParser().ParseExpressionList(impl.sql);
 			if (sql_expr.size() != 1) {
 				throw InternalException("Expected a single expression");
 			}
 			macro_function = make_uniq<ScalarMacroFunction>(std::move(sql_expr[0]));
 		} else if (impl.type == "table") {
-			Parser parser;
+			auto parser = Parser::GetBuiltinParser();
 			parser.ParseQuery(impl.sql);
 			if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
 				throw InternalException("Expected a single select statement");

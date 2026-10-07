@@ -72,7 +72,8 @@ unique_ptr<GlobalTableFunctionState> DuckLakeRunOnceState::Init(ClientContext &c
 }
 
 DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(Identifier name_p, table_function_bind_t bind)
-    : TableFunction(std::move(name_p), {LogicalType::VARCHAR}, MetadataFunctionExecute, bind, MetadataFunctionInit) {
+    : TableFunction(std::move(name_p), FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR),
+                    MetadataFunctionExecute, bind, MetadataFunctionInit) {
 }
 
 } // namespace duckdb

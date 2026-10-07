@@ -41,8 +41,13 @@ void DuckLakeSetCommitMessageExecute(ClientContext &context, TableFunctionInput 
 }
 
 DuckLakeSetCommitMessage::DuckLakeSetCommitMessage()
-    : TableFunction("ducklake_set_commit_message", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+    : TableFunction("ducklake_set_commit_message",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("author", LogicalType::VARCHAR)
+                        .AddPositionalOnly("commit_message", LogicalType::VARCHAR),
                     DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind, DuckLakeRunOnceState::Init) {
-	named_parameters["extra_info"] = LogicalType::VARCHAR;
+	GetSignature().WithTypedKwargs("options",
+	                               [&](TypedKwargs &options) { options.Add("extra_info", LogicalType::VARCHAR); });
 }
 } // namespace duckdb
