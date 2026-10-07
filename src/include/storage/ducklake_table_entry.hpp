@@ -94,6 +94,9 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	//! The inlined data tables to read at the snapshot, skipping the flushed and dropped ones
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction,
+	                                                      DuckLakeSnapshot snapshot) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;
@@ -125,6 +128,7 @@ public:
 
 	//! Gets the top-level not-null fields
 	case_insensitive_set_t GetNotNullFields() const;
+	void ThrowNotNullViolation(const string &column_name) const;
 
 	DuckLakeTableInfo GetTableInfo() const;
 	vector<DuckLakeColumnInfo> GetTableColumns() const;
@@ -182,6 +186,7 @@ public:
 	                                              const vector<unique_ptr<ParsedExpression>> &sort_keys);
 
 private:
+	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction, SetNotNullInfo &info);
