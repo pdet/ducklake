@@ -96,7 +96,21 @@ void DuckLakeInitializer::Initialize() {
 			                            "new DuckLake is explicitly disabled",
 			                            options.metadata_path);
 		}
-		InitializeNewDuckLake(transaction, has_explicit_schema);
+		try {
+			InitializeNewDuckLake(transaction, has_explicit_schema);
+		} catch (std::exception &ex) {
+			// another attach may have created the same DuckLake at the same time
+			ErrorData error(ex);
+			transaction.Rollback();
+			// the rollback dropped the metadata attach with the transaction that made it
+			auto reattach = transaction.GetMetadataManager().AttachMetadata(attach_query);
+			reattach->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() +
+			                       "\" at path + \"" + catalog.MetadataPath() + "\"");
+			if (!transaction.GetMetadataManager().MetadataExists()) {
+				error.Throw();
+			}
+			LoadExistingDuckLake(transaction);
+		}
 	}
 	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
 	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
