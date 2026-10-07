@@ -23,10 +23,4 @@ DeleteFileFormat DeleteFileFormatFromString(const string &str) {
 	throw InvalidInputException("Unknown delete file format: %s", str);
 }
 
-void VerifyDataFileFormat(const string &str) {
-	if (!StringUtil::CIEquals(str, "parquet")) {
-		throw NotImplementedException("Unsupported data file format: %s", str);
-	}
-}
-
 } // namespace duckdb

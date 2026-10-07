@@ -27,8 +27,6 @@ enum class DeleteFileFormat : uint8_t {
 
 string DeleteFileFormatToString(DeleteFileFormat format);
 DeleteFileFormat DeleteFileFormatFromString(const string &str);
-//! Throws for a data file format this DuckLake cannot read
-void VerifyDataFileFormat(const string &str);
 
 enum class DeleteFileSource : uint8_t {
 	REGULAR, //! Regular delete file created during a DELETE operation
