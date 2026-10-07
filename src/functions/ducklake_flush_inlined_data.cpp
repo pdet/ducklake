@@ -128,8 +128,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		DeletesPerFile deletes_per_file;
 		auto partition_sql_exprs = table.GetPartitionSQLExpressions();
 
-		// When the table has sort metadata, the file is written in sorted order.
-		// The ORDER BY must match the actual file order so delete positions are correct.
+		// The ORDER BY must match the order in which the flush wrote the rows, so delete positions are correct.
 		auto col_names = metadata_manager.InlinedColNames();
 		string order_by =
 		    StringUtil::Format("%s ASC NULLS LAST, %s ASC NULLS LAST", col_names.row_id, col_names.begin_snapshot);
@@ -245,6 +244,10 @@ public:
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
+		if (!sort_order_sql.empty() && child.type == PhysicalOperatorType::COPY_TO_FILE) {
+			// the rows are sorted, so a single writer must append them in order
+			child.Cast<PhysicalCopyToFile>().parallel = false;
+		}
 		return planner.Make<DuckLakeFlushData>(types, table, std::move(inlined_table), std::move(encryption_key),
 		                                       partition_id, std::move(sort_order_sql), child);
 	}
@@ -378,7 +381,8 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	string sort_order_sql;
 	auto sort_data = latest_table.GetSortData();
-	if (sort_data) {
+	// delete positions assume the sort order, which partitioned and per-thread writes do not keep
+	if (sort_data && !copy_options.partition_output && !copy_options.per_thread_output) {
 		root = DuckLakeCompactor::InsertSort(binder, root, latest_table, sort_data, /*add_tiebreakers=*/true);
 		sort_order_sql = DuckLakeSort::BuildSortOrderSQL(*sort_data, latest_table.GetColumns(), table.GetColumns());
 	}
