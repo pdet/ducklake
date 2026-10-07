@@ -594,32 +594,37 @@ void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, 
 	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
 }
 
-bool LocalTableChanges::HasDatedNewDeletes() const {
-	lock_guard<mutex> guard(lock);
+template <class CHANGES, class FUNC>
+static void ForEachDeleteFile(CHANGES &changes, FUNC &&callback) {
 	for (auto &entry : changes) {
 		for (auto &file_entry : entry.second.new_delete_files) {
 			for (auto &file : file_entry.second) {
-				if (file.DatesNewDeletes()) {
-					return true;
-				}
+				callback(file);
+			}
+		}
+		for (auto &data_file : entry.second.new_data_files) {
+			for (auto &file : data_file.delete_files) {
+				callback(file);
 			}
 		}
 	}
-	return false;
+}
+
+bool LocalTableChanges::HasDatedNewDeletes() const {
+	lock_guard<mutex> guard(lock);
+	bool result = false;
+	ForEachDeleteFile(changes, [&](const DuckLakeDeleteFile &file) { result = result || file.DatesNewDeletes(); });
+	return result;
 }
 
 void LocalTableChanges::SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
                                                 idx_t commit_snapshot) {
 	lock_guard<mutex> guard(lock);
-	for (auto &entry : changes) {
-		for (auto &file_entry : entry.second.new_delete_files) {
-			for (auto &file : file_entry.second) {
-				if (file.DatesNewDeletes()) {
-					DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
-				}
-			}
+	ForEachDeleteFile(changes, [&](DuckLakeDeleteFile &file) {
+		if (file.DatesNewDeletes()) {
+			DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
 		}
-	}
+	});
 }
 
 LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
