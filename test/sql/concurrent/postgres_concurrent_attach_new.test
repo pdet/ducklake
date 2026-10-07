@@ -12,18 +12,18 @@ require-env DUCKLAKE_CI
 
 test-env DATA_PATH {TEST_DIR}
 
-# the catalog does not exist yet, so every attach tries to create it
+# the catalog does not exist yet, so an attach may have to create it
 concurrentloop i 0 4
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_${i}
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_{i}
 (DATA_PATH '{DATA_PATH}/concurrent_attach_new', METADATA_SCHEMA 'concurrent_attach_new', DUCKLAKE_VERSION '1.0')
 
 statement ok
-CREATE TABLE dl_${i}.t_${i} (i INTEGER)
+CREATE TABLE dl_{i}.t_{i} (i INTEGER)
 
 statement ok
-INSERT INTO dl_${i}.t_${i} VALUES (${i})
+INSERT INTO dl_{i}.t_{i} VALUES ({i})
 
 endloop
 

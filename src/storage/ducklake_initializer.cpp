@@ -62,11 +62,7 @@ void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
-	const string attach_query =
-	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = metadata_manager.AttachMetadata(attach_query);
-	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-	                     catalog.MetadataPath() + "\"");
+	AttachMetadata(transaction);
 	// explicitly load all secrets - work-around to secret initialization bug
 	transaction.Query("FROM duckdb_secrets()");
 
@@ -103,10 +99,8 @@ void DuckLakeInitializer::Initialize() {
 			ErrorData error(ex);
 			transaction.Rollback();
 			// the rollback dropped the metadata attach with the transaction that made it
-			auto reattach = transaction.GetMetadataManager().AttachMetadata(attach_query);
-			reattach->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() +
-			                       "\" at path + \"" + catalog.MetadataPath() + "\"");
-			if (!transaction.GetMetadataManager().MetadataExists()) {
+			AttachMetadata(transaction);
+			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
 			}
 			LoadExistingDuckLake(transaction);
@@ -123,6 +117,28 @@ void DuckLakeInitializer::Initialize() {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
 	}
+}
+
+void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
+	const string attach_query =
+	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
+	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	                     catalog.MetadataPath() + "\"");
+}
+
+bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.MetadataExists()) {
+		return false;
+	}
+	// the version is written last, a half written catalog does not have it
+	for (auto &tag : metadata_manager.LoadDuckLake().tags) {
+		if (tag.key == "version") {
+			return true;
+		}
+	}
+	return false;
 }
 
 void DuckLakeInitializer::InitializeDataPath() {
