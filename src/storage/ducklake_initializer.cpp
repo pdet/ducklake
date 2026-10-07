@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -85,7 +86,7 @@ void DuckLakeInitializer::Initialize() {
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
-		LoadExistingDuckLake(transaction);
+		LoadDuckLakeRetryWithoutDevMigration(transaction);
 	} else {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
@@ -103,7 +104,7 @@ void DuckLakeInitializer::Initialize() {
 			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
 			}
-			LoadExistingDuckLake(transaction);
+			LoadDuckLakeRetryWithoutDevMigration(transaction);
 		}
 	}
 	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
@@ -116,6 +117,29 @@ void DuckLakeInitializer::Initialize() {
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
+	}
+}
+
+void DuckLakeInitializer::LoadDuckLakeRetryWithoutDevMigration(DuckLakeTransaction &transaction) {
+	try {
+		LoadExistingDuckLake(transaction);
+	} catch (std::exception &ex) {
+		if (skip_dev_migration) {
+			throw;
+		}
+		// the best-effort migration of a development catalog can leave the metadata transaction unusable
+		ErrorData error(ex);
+		transaction.Rollback();
+		AttachMetadata(transaction);
+		skip_dev_migration = true;
+		try {
+			LoadExistingDuckLake(transaction);
+		} catch (std::exception &) {
+			error.Throw();
+		}
+		DUCKDB_LOG_WARNING(*context.db, StringUtil::Format("DuckLake attached without applying the migration of a "
+		                                                   "development catalog: %s",
+		                                                   error.RawMessage()));
 	}
 }
 
@@ -233,9 +257,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				if (options.automatic_migration) {
 					// an explicitly requested migration fails loudly
 					metadata_manager.MigrateV10(true);
-				} else if (options.access_mode != AccessMode::READ_ONLY) {
-					// a plain attach is best-effort and never fails the attach
-					metadata_manager.MigrateV10Dev();
+				} else if (options.access_mode != AccessMode::READ_ONLY && !skip_dev_migration) {
+					// a failed part leaves the metadata transaction unusable, so the attach starts over
+					if (!metadata_manager.MigrateV10Dev()) {
+						throw TransactionException("DuckLake could not apply the migration of a development catalog");
+					}
 				}
 			}
 			if (catalog_version >= target_version) {

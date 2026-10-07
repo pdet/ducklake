@@ -446,7 +446,8 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, allow_failures, "1.0", "1.1-dev1");
 }
 
-void DuckLakeMetadataManager::MigrateV10Dev() {
+bool DuckLakeMetadataManager::MigrateV10Dev() {
+	bool migrated = true;
 	auto &db = transaction.GetCatalog().GetDatabase();
 	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
 	try {
@@ -456,6 +457,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not apply the v1.1-dev1 schema additions on "
 		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
 		                                          error.RawMessage()));
+		migrated = false;
 	}
 	try {
 		MigrateInlinedColumnNames(true);
@@ -464,7 +466,9 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 		DUCKDB_LOG_WARNING(db, StringUtil::Format("DuckLake could not rename the inlined metadata columns on "
 		                                          "attach, reattach with AUTOMATIC_MIGRATION TRUE: %s",
 		                                          error.RawMessage()));
+		migrated = false;
 	}
+	return migrated;
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
