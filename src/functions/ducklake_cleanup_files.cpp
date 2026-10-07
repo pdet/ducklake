@@ -71,8 +71,6 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		} else if (entry.first == "older_than") {
 			from_timestamp = entry.second.GetValue<timestamp_tz_t>();
 			has_timestamp = true;
-		} else {
-			throw InternalException("Unsupported named parameter for %s", result->GetFunctionName());
 		}
 	}
 	if ((cleanup_all == has_timestamp && cleanup_all == true) ||
