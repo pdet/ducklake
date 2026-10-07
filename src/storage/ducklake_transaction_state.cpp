@@ -718,7 +718,6 @@ static bool IsFoldableScalarType(const LogicalType &type) {
 	return id == LogicalTypeId::VARCHAR || id == LogicalTypeId::BOOLEAN;
 }
 
-//! The inlined tables of `table_id` written before its last schema change
 static unordered_set<string> ReadInlinedTablesBeforeSchemaChange(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                                  const DuckLakeCommitContext &context) {
 	unordered_set<string> result;

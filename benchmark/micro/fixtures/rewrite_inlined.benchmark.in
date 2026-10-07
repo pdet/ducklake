@@ -6,7 +6,7 @@ argument lake rewrite_inlined
 
 cache_file ${lake}_ready.marker
 
-# Three import transactions create the files, the inlined rows, then the deletions; every table differs by k
+# Three import transactions create the files, then the inlined rows, then the deletions
 load
 EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
 COPY (SELECT stmt FROM (
