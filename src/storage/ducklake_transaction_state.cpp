@@ -750,8 +750,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
                                                     const vector<string> &inlined_table_names,
                                                     DuckLakeSnapshot snapshot, DuckLakeTableStats &target,
                                                     const DuckLakeCommitContext &context) {
-	// We can only compute exact inlined min/max for top-level foldable scalar columns. If any column is a
-	// non-scalar type we cannot account for the inlined rows exactly - bail (caller keeps the scan fallback).
+	// exact inlined bounds are only computed for top-level foldable scalar columns
 	for (auto &col : columns) {
 		if (!IsFoldableScalarType(col.column_type)) {
 			return false;
@@ -775,7 +774,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 				sources[col_idx] = source->second;
 			}
 		}
-		// Build one aggregate query: COUNT(*) followed by (MIN, MAX, COUNT(col), nan-flag) per column.
+		// one aggregate query with the row count and the bounds, count and NaN flag of every column
 		string select_list = "COUNT(*)";
 		for (auto &source : sources) {
 			auto &source_type = source.get().column_type;
