@@ -25,11 +25,17 @@ DELETE FROM dl.t WHERE id = 42
 
 query II
 SELECT name, repetition_type FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')
-ORDER BY ALL
+WHERE name IN ('file_path', 'pos') ORDER BY ALL
 ----
-duckdb_schema	REQUIRED
 file_path	REQUIRED
 pos	REQUIRED
+
+# no column of a delete file is optional
+query I
+SELECT count(*) FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')
+WHERE repetition_type <> 'REQUIRED'
+----
+0
 
 query I
 SELECT count(*) FROM dl.t
@@ -48,12 +54,16 @@ FROM ducklake_flush_inlined_data('dl')
 
 query II
 SELECT DISTINCT name, repetition_type
-FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet') ORDER BY ALL
+FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')
+WHERE name = '_ducklake_internal_snapshot_id' ORDER BY ALL
 ----
 _ducklake_internal_snapshot_id	REQUIRED
-duckdb_schema	REQUIRED
-file_path	REQUIRED
-pos	REQUIRED
+
+query I
+SELECT count(*) FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')
+WHERE repetition_type <> 'REQUIRED'
+----
+0
 
 query I
 SELECT count(*) FROM dl.t
