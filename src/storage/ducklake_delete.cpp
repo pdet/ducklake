@@ -245,7 +245,7 @@ void DuckLakeDeleteFileWriter::SetCommitSnapshot(ClientContext &context, DuckLak
 	WriteDeleteFileWithSnapshotsInput input {context,
 	                                         transaction,
 	                                         fs,
-	                                         file_name.substr(0, file_name.size() - fs.ExtractName(file_name).size()),
+	                                         StringUtil::GetFilePath(file_name),
 	                                         delete_file.encryption_key,
 	                                         delete_file.data_file_path,
 	                                         {},
