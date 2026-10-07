@@ -4116,6 +4116,12 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	       InsertValuesSql("ducklake_file_variant_stats", variant_stats_values);
 }
 
+string DuckLakeMetadataManager::GetExistingDataFilesSql(const set<DataFileIndex> &files) {
+	return StringUtil::Format(
+	    "SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE data_file_id IN (%s)",
+	    GenerateIDList(files));
+}
+
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
