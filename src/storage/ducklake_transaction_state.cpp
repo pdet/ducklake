@@ -2074,7 +2074,7 @@ WHERE idt.schema_version < (
 		if (row_count != 0) {
 			continue;
 		}
-		// the registration and the table go together, so a failed drop is tried again by a later flush
+		// keep the registration if the drop fails
 		auto res = context.execute_in_transaction(StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
 		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",

@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Test is slow",
       "paths": [
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow"
