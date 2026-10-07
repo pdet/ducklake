@@ -1,5 +1,5 @@
 # name: benchmark/micro/write/delete_commits_rewrite_retry.benchmark
-# description: Commit 20 deletes that each rewrite a delete file and retry after a concurrent flush, in a lake with 4096 delete files
+# description: Commit 20 deletes that rewrite a delete file after a concurrent flush, in a lake with 4096 delete files
 # group: [write]
 
 name Delete Commits Rewrite Retry
