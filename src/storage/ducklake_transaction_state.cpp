@@ -809,6 +809,21 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	return result;
 }
 
+//! Whether one of the inlined tables has the columns of an older schema of the table
+static bool HasInlinedTableBeforeSchemaChange(TableIndex table_id, const vector<string> &inlined_table_names,
+                                              DuckLakeSnapshot snapshot, const DuckLakeCommitContext &context) {
+	auto result = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(table_id));
+	result->ThrowIfError("Failed to read the inlined data tables from DuckLake: ");
+	for (auto &row : *result) {
+		auto name = row.GetValue<string>(0);
+		if (std::find(inlined_table_names.begin(), inlined_table_names.end(), name) != inlined_table_names.end()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
                                                                 DuckLakeSnapshot snapshot,
                                                                 const CompactionInformation &rewrite_changes,
@@ -926,7 +941,8 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			}
 		}
 		auto inlined_table_names = context.get_inlined_table_names(table_id);
-		if (!TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
+		if (HasInlinedTableBeforeSchemaChange(table_id, inlined_table_names, snapshot, context) ||
+		    !TryMergeInlinedStats(root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;

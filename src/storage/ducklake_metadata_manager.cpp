@@ -831,6 +831,18 @@ WHERE table_id = %d)",
 	                          table_id.index);
 }
 
+string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id) {
+	return StringUtil::Format(R"(
+SELECT table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+WHERE table_id = %d AND schema_version < (
+	SELECT MAX(schema_version)
+	FROM {METADATA_CATALOG}.ducklake_schema_versions
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+))",
+	                          table_id.index, table_id.index);
+}
+
 unordered_set<string> DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
 	auto result = Query(GetInlinedTableNamesSql(table_id));
 	result->ThrowIfError("Failed to get inlined data tables from DuckLake: ");

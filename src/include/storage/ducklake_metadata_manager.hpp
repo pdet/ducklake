@@ -344,6 +344,8 @@ public:
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	//! The inlined data tables written before the last schema change of the table
+	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
