@@ -182,3 +182,76 @@ query II
 SELECT count(*), count(*) FILTER (WHERE s = 'x' AND i = 1) FROM ducklake.e
 ----
 20009	0
+
+# a rewrite keeps the table stats of a delete that commits first, so the count is not 199
+statement ok
+CREATE TABLE ducklake.f(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.f SELECT 100 + range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.f SELECT range FROM range(100)
+
+statement ok
+DELETE FROM ducklake.f WHERE i = 105
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', 'f', delete_threshold => 0)
+----
+1
+
+statement ok con2
+DELETE FROM ducklake.f WHERE i < 100
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.f
+----
+99	100	199
+
+query I
+SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_table_stats
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'f')
+----
+100
+
+# and the table stats of an insert that commits first
+statement ok
+DELETE FROM ducklake.f WHERE i = 106
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+query I con1
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', 'f', delete_threshold => 0)
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.f SELECT 1000000 FROM range(20)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query II
+SELECT count(*), max(i) FROM ducklake.f WHERE i = 1000000
+----
+20	1000000

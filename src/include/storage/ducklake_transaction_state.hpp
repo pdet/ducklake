@@ -238,6 +238,8 @@ public:
 	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
 	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
+	//! The tables other transactions changed after the snapshot of a retried commit
+	set<TableIndex> tables_changed_by_others;
 };
 
 } // namespace duckdb

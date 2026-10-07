@@ -806,6 +806,9 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
                                                                 const CompactionInformation &rewrite_changes,
                                                                 const set<DataFileIndex> &removed_source_ids,
                                                                 const DuckLakeCommitContext &context) {
+	if (tables_changed_by_others.find(table_id) != tables_changed_by_others.end()) {
+		return; // the stats below are read at the transaction snapshot, which misses the other commits
+	}
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
 		return; // no schema visible at the commit snapshot
@@ -2030,6 +2033,14 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot, context);
+
+	tables_changed_by_others.clear();
+	for (auto tables : {&other_changes.altered_tables, &other_changes.inserted_tables,
+	                    &other_changes.tables_deleted_from, &other_changes.tables_inserted_inlined,
+	                    &other_changes.tables_deleted_inlined, &other_changes.tables_flushed_inlined,
+	                    &other_changes.tables_merge_adjacent, &other_changes.tables_rewrite_delete}) {
+		tables_changed_by_others.insert(tables->begin(), tables->end());
+	}
 
 	return snapshot_and_stats;
 }
