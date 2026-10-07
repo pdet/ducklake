@@ -4,6 +4,7 @@
 #include "duckdb/common/file_system.hpp"
 
 #include "storage/ducklake_commit_state.hpp"
+#include "storage/ducklake_delete.hpp"
 #include "storage/ducklake_transaction_state.hpp"
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
@@ -591,6 +592,34 @@ void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, 
 	auto &table_changes = changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
 	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
+}
+
+bool LocalTableChanges::HasDatedNewDeletes() const {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		for (auto &file_entry : entry.second.new_delete_files) {
+			for (auto &file : file_entry.second) {
+				if (file.DatesNewDeletes()) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+void LocalTableChanges::SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
+                                                idx_t commit_snapshot) {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		for (auto &file_entry : entry.second.new_delete_files) {
+			for (auto &file : file_entry.second) {
+				if (file.DatesNewDeletes()) {
+					DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+				}
+			}
+		}
+	}
 }
 
 LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
@@ -1279,6 +1308,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
+	};
+	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
+		// the client context has no active transaction during the commit
+		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		auto result = metadata_manager->Execute(snapshot, query);
