@@ -64,11 +64,26 @@ INSERT INTO dl.t VALUES (2)
 ----
 inny_klucz
 
-# one attempt for this insert after two for the first one
+# nor when the failed query mentions one
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_commit_message('author', 'ducklake_snapshot_pkey')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement error
+COMMIT
+----
+inny_klucz
+
+# one attempt for each of these inserts after two for the first one
 query I
 SELECT last_value FROM postgres_query('pg', 'SELECT last_value FROM localized_retry.attempts')
 ----
-3
+4
 
 statement ok
 CALL postgres_execute('pg', 'DROP TRIGGER fail_once ON localized_retry.ducklake_snapshot')
