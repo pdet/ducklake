@@ -514,8 +514,8 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool allow_failures = false);
-	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, returns false when a part failed
-	virtual bool MigrateV10Dev();
+	//! Logs development migration failures during attach
+	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version

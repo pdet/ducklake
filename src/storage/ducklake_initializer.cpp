@@ -1,5 +1,4 @@
 #include "duckdb/main/attached_database.hpp"
-#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -61,7 +60,6 @@ string DuckLakeInitializer::GetAttachOptions() {
 
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
 	AttachMetadata(transaction);
 	// explicitly load all secrets - work-around to secret initialization bug
@@ -86,7 +84,7 @@ void DuckLakeInitializer::Initialize() {
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
-		LoadDuckLakeRetryWithoutDevMigration(transaction);
+		LoadExistingDuckLake(transaction);
 	} else {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
@@ -98,18 +96,13 @@ void DuckLakeInitializer::Initialize() {
 		} catch (std::exception &ex) {
 			// another attach may have created the same DuckLake at the same time
 			ErrorData error(ex);
-			transaction.Rollback();
-			// the rollback dropped the metadata attach with the transaction that made it
-			AttachMetadata(transaction);
+			RestartMetadataTransaction(transaction);
 			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
 			}
-			LoadDuckLakeRetryWithoutDevMigration(transaction);
+			LoadExistingDuckLake(transaction);
 		}
 	}
-	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
-	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
-	// top of Initialize() would now dangle.
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
@@ -120,27 +113,9 @@ void DuckLakeInitializer::Initialize() {
 	}
 }
 
-void DuckLakeInitializer::LoadDuckLakeRetryWithoutDevMigration(DuckLakeTransaction &transaction) {
-	try {
-		LoadExistingDuckLake(transaction);
-	} catch (std::exception &ex) {
-		if (skip_dev_migration) {
-			throw;
-		}
-		// the best-effort migration of a development catalog can leave the metadata transaction unusable
-		ErrorData error(ex);
-		transaction.Rollback();
-		AttachMetadata(transaction);
-		skip_dev_migration = true;
-		try {
-			LoadExistingDuckLake(transaction);
-		} catch (std::exception &) {
-			error.Throw();
-		}
-		DUCKDB_LOG_WARNING(*context.db, StringUtil::Format("DuckLake attached without applying the migration of a "
-		                                                   "development catalog: %s",
-		                                                   error.RawMessage()));
-	}
+void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transaction) {
+	transaction.Rollback();
+	AttachMetadata(transaction);
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
@@ -156,7 +131,6 @@ bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction
 	if (!metadata_manager.MetadataExists()) {
 		return false;
 	}
-	// the version is written last, a half written catalog does not have it
 	for (auto &tag : metadata_manager.LoadDuckLake().tags) {
 		if (tag.key == "version") {
 			return true;
@@ -206,7 +180,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	}
 }
 
-void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
+void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction, bool skip_dev_migration) {
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
@@ -258,9 +232,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 					// an explicitly requested migration fails loudly
 					metadata_manager.MigrateV10(true);
 				} else if (options.access_mode != AccessMode::READ_ONLY && !skip_dev_migration) {
-					// a failed part leaves the metadata transaction unusable, so the attach starts over
-					if (!metadata_manager.MigrateV10Dev()) {
-						throw TransactionException("DuckLake could not apply the migration of a development catalog");
+					metadata_manager.MigrateV10Dev();
+					if (ValidChecker::IsInvalidated(transaction.GetConnection().context->ActiveTransaction())) {
+						RestartMetadataTransaction(transaction);
+						LoadExistingDuckLake(transaction, true);
+						return;
 					}
 				}
 			}
