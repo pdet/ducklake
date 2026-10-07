@@ -202,6 +202,10 @@ public:
 		return true;
 	}
 
+	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
+	virtual bool CommitsEachStatement() const {
+		return false;
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -240,6 +244,10 @@ public:
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
+	//! The inlined rows to flush with typed columns, without those this transaction deleted
+	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	//! The order of the rows in a flushed file
+	string InlinedFlushOrder(const string &sort_order_sql) const;
 
 	DuckLakeMetadataManager &Get(DuckLakeTransaction &transaction);
 
@@ -285,10 +293,14 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery(bool include_exactness);
+	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
-	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result);
+	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
+	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
+	//! Take the table sizes that stats rows lack from the live data files
+	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -301,7 +313,10 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
-	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, TableIndex table_id);
+	//! The global stats of every table of the snapshot
+	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
+	//! Get the record count of every table that has global stats
+	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
@@ -318,12 +333,18 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
+	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
-	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table);
+	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+	                                        bool require_exact = false);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	//! The inserts of the given rows, in batches
+	static string InsertValuesSql(const string &table_name, const vector<string> &values);
+	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter, const string &separator);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type,
@@ -455,6 +476,8 @@ public:
 	                                                         const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
 	                                                           const string &inlined_table_name,
+	                                                           const DuckLakeTableEntry &table,
+	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
@@ -467,10 +490,9 @@ public:
 	                                                     const string &inlined_table_name);
 
 	virtual void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
-	//! We delete at the flush
-	virtual void DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table, idx_t flush_snapshot_id);
-	//! If it conflicts we batch everything at the retry
+	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
+	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const DuckLakeInlinedColNames &col_names);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
@@ -496,7 +518,10 @@ public:
 	//! Best-effort in place re-run of the v1.1-dev1 migration on a plain attach, failures are logged not thrown
 	virtual void MigrateV10Dev();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
-	virtual void MigrateInlinedColumnNames();
+	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
+	virtual void MigrateInlinedDataTypes() {
+	}
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
 	                              const string &to_version);
 
@@ -615,6 +640,8 @@ protected:
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);
+	//! Unknown bounds must keep the file
+	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
 	virtual string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,

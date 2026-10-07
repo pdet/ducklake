@@ -196,7 +196,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 		D_ASSERT(old_field);
 		auto &old_col_name = old_field->Name();
 		for (auto &sort_field : sort_data->fields) {
-			auto parsed = Parser::ParseExpressionList(sort_field.expression);
+			auto parsed = Parser::GetBuiltinParser().ParseExpressionList(sort_field.expression);
 			if (!parsed.empty()) {
 				ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(
 				    *parsed[0], [&](ColumnRefExpression &colref) {
@@ -356,9 +356,9 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	throw InternalException("DuckLakeTableEntry::GetScanFunction called without entry lookup info");
 }
 
-unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, TableFunction &function) {
+unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, BoundTableFunction &function) {
 	vector<Value> inputs {Value("")};
-	named_parameter_map_t param_map;
+	named_argument_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<Identifier> input_table_names;
 	TableFunctionRef empty_ref;
@@ -368,6 +368,13 @@ unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &cont
 
 	vector<Identifier> bind_names;
 	return function.bind(context, bind_input, return_types, bind_names);
+}
+
+//! The same for a function that is not bound yet: the bind sees it as a bound call would, and nothing is read back
+//! off it afterwards
+unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, const TableFunction &function) {
+	BoundTableFunction bound_function(function);
+	return BindDuckLakeScan(context, bound_function);
 }
 
 TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
@@ -449,7 +456,6 @@ vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
 	for (auto &field : partition_data->fields) {
 		auto &col = GetColumnByFieldId(field.field_id);
 		auto col_name = SQLIdentifier::ToString(col.GetName().GetIdentifierName());
-		col_name = "CAST(" + col_name + " AS " + col.GetType().ToString() + ")";
 		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name, col.GetType()));
 	}
 	return result;
@@ -464,16 +470,15 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
+bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
+	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
+}
+
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
-	if (IsTransactionLocal()) {
-		// no stats for transaction local tables
+	if (!CanUseGlobalStats(transaction)) {
 		return nullptr;
 	}
 	auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
-	if (transaction.HasTransactionLocalInserts(GetTableId())) {
-		// no stats if there are transaction-local inserts
-		return nullptr;
-	}
 	return dl_catalog.GetTableStats(transaction, GetTableId());
 }
 
@@ -482,11 +487,37 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 	return metadata_manager.GetNetDataFileRowCount(GetTableId(), transaction.GetSnapshot());
 }
 
+vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
+                                                                          DuckLakeSnapshot snapshot) const {
+	// another attach can drop superseded inlined tables without bumping the schema version
+	bool may_be_dropped = inlined_data_tables.size() > 1;
+	if (inlined_data_tables.size() == 1) {
+		// the only inlined table can be superseded after an older or pinned snapshot
+		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
+		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
+	}
+	unordered_set<string> registered_tables;
+	if (may_be_dropped) {
+		registered_tables = transaction.GetMetadataManager().GetInlinedTableNames(GetTableId());
+	}
+	vector<DuckLakeInlinedTableInfo> result;
+	for (auto &inlined_table : inlined_data_tables) {
+		if (transaction.InlinedTableFlushed(inlined_table.table_name)) {
+			continue;
+		}
+		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
+			continue;
+		}
+		result.push_back(inlined_table);
+	}
+	return result;
+}
+
 idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
-	for (auto &inlined_table : inlined_data_tables) {
+	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 	}
 	return total;
@@ -681,12 +712,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
                                                         SetNotNullInfo &info) {
+	if (info.column_path.size() > 1) {
+		throw NotImplementedException("Setting a NOT NULL constraint on a nested field is not yet supported");
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	if (!table_info.columns.ColumnExists(info.column_name)) {
-		throw CatalogException("Failed to alter column - column %s does not exist", info.column_name);
+	if (!table_info.columns.ColumnExists(info.column_path[0])) {
+		throw CatalogException("Failed to alter column - column %s does not exist", info.column_path[0]);
 	}
-	auto &col = table_info.columns.GetColumn(info.column_name);
+	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
 	// check if there is an existing constraint
@@ -730,12 +764,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, DropNotNullInfo &info) {
+	if (info.column_path.size() > 1) {
+		throw NotImplementedException("Dropping a NOT NULL constraint on a nested field is not yet supported");
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	if (!table_info.columns.ColumnExists(info.column_name)) {
-		throw CatalogException("Failed to alter column - column %s does not exist", info.column_name);
+	if (!table_info.columns.ColumnExists(info.column_path[0])) {
+		throw CatalogException("Failed to alter column - column %s does not exist", info.column_path[0]);
 	}
-	auto &col = table_info.columns.GetColumn(info.column_name);
+	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
 	// find the existing index
@@ -1037,9 +1074,12 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, ChangeColumnTypeInfo &info) {
+	if (info.column_path.size() > 1) {
+		throw NotImplementedException("Changing the type of a nested field is not yet supported");
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_name));
+	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_path[0]));
 	auto &field_id = GetFieldId(col.Physical());
 	if (!IsSimpleCast(*info.expression)) {
 		throw NotImplementedException("Column type cannot be modified using an expression");
@@ -1057,7 +1097,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &current_field_ids = field_data->GetFieldIds();
 	auto new_field_ids = make_shared_ptr<DuckLakeFieldData>();
 	for (auto &field_id : current_field_ids) {
-		if (new_field_id && field_id->Name() == info.column_name) {
+		if (new_field_id && field_id->Name() == info.column_path[0]) {
 			new_field_ids->Add(std::move(new_field_id));
 			new_field_id.reset();
 		} else {
@@ -1264,9 +1304,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info) {
+	if (info.column_path.size() > 1) {
+		throw NotImplementedException("Setting a default value on a nested field is not yet supported");
+	}
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
-	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_name));
+	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_path[0]));
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
 	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(
@@ -1666,8 +1709,12 @@ DuckLakeColumnInfo DuckLakeTableEntry::GetAddColumnInfo() const {
 
 TableStorageInfo DuckLakeTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo storage_info;
-	auto table_stats = GetTableStats(context);
-	storage_info.cardinality = table_stats ? table_stats->record_count : 0;
+	storage_info.cardinality = 0;
+	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
+	if (CanUseGlobalStats(transaction)) {
+		auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
+		storage_info.cardinality = dl_catalog.GetTableRecordCount(transaction, GetTableId());
+	}
 	return storage_info;
 }
 

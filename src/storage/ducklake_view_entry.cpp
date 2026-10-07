@@ -8,6 +8,7 @@
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "common/ducklake_util.hpp"
@@ -107,9 +108,10 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
 }
 
 unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
+	auto parser = Parser::GetBuiltinParser();
 	// switcharoo of generic {DUCKLAKE_CATALOG}. with actual catalog name
 	auto resolved_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, "{DUCKLAKE_CATALOG}.", catalog.GetName() + ".");
-	return CreateViewInfo::ParseSelect(resolved_sql);
+	return CreateViewInfo::ParseSelect(parser, resolved_sql);
 }
 
 const SelectStatement &DuckLakeViewEntry::GetQuery() {

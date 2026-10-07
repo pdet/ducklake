@@ -6,6 +6,7 @@
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -78,6 +79,20 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 	}
 }
 
+static optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
+	if (StatsBoundsRequireOffset(type)) {
+		timestamp_t result;
+		bool has_offset;
+		string_t time_zone;
+		auto cast_result =
+		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
+		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
+			return nullopt;
+		}
+	}
+	return Value(bound).DefaultTryCastAs(type);
+}
+
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
                                            const ColumnFilterInfo &column_filter) {
 	auto filter_data = ExpressionFilter::GetOptionalDynamicFilterData(*column_filter.table_filter);
@@ -106,7 +121,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
-		auto file_max = Value(column_stats.max).DefaultTryCastAs(column_filter.column_type);
+		auto file_max = TryCastStatsBound(column_stats.max, column_filter.column_type);
 		if (!file_max) {
 			return false;
 		}
@@ -117,7 +132,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_min) {
 			return false;
 		}
-		auto file_min = Value(column_stats.min).DefaultTryCastAs(column_filter.column_type);
+		auto file_min = TryCastStatsBound(column_stats.min, column_filter.column_type);
 		if (!file_min) {
 			return false;
 		}
@@ -181,7 +196,7 @@ unique_ptr<MultiFileReader> DuckLakeMultiFileReader::Copy() const {
 	return std::move(result);
 }
 
-unique_ptr<MultiFileReader> DuckLakeMultiFileReader::CreateInstance(const TableFunction &table_function) {
+unique_ptr<MultiFileReader> DuckLakeMultiFileReader::CreateInstance(const BoundTableFunction &table_function) {
 	auto &function_info = table_function.function_info->Cast<DuckLakeFunctionInfo>();
 	auto result = make_uniq<DuckLakeMultiFileReader>(function_info);
 	return std::move(result);
@@ -199,12 +214,7 @@ shared_ptr<MultiFileList> DuckLakeMultiFileReader::CreateFileList(ClientContext 
 
 MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_id, bool emit_key_value) {
 	MultiFileColumnDefinition column(field_id.Name(), field_id.Type());
-	auto &column_data = field_id.GetColumnData();
-	if (column_data.initial_default.IsNull()) {
-		column.default_expression = ConstantExpression::FromValue(Value(field_id.Type()));
-	} else {
-		column.default_expression = ConstantExpression::FromValue(column_data.initial_default);
-	}
+	column.default_expression = field_id.GetInitialDefault();
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
 	for (auto &child : field_id.Children()) {
 		column.children.push_back(CreateColumnFromFieldId(*child, emit_key_value));
@@ -298,7 +308,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
 			auto transaction = read_info.GetTransaction();
 			auto inlined_deletes = transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path);
-			if (inlined_deletes) {
+			// the flush source query already excludes these rows
+			if (inlined_deletes && read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
 				auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 				delete_filter->Initialize(*inlined_deletes);
 				reader.deletion_filter = std::move(delete_filter);
@@ -555,7 +566,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 	auto &extended_info = reader_data.reader->file.extended_info;
 	idx_t mapping_id;
 	if (extended_info && extended_info->TryGetOption("mapping_id", mapping_id)) {
-		auto transaction = read_info.transaction.lock();
+		auto transaction = read_info.GetTransaction();
 		auto mapping = transaction->GetMappingById(MappingIndex(mapping_id));
 		// use the mapping to generate a new set of global columns for this file
 		auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);

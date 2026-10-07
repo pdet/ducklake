@@ -364,32 +364,8 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	}
 
 	// Add stats for new column
-	idx_t total_rows = existing.Count();
-	DuckLakeColumnStats new_col_stats(new_column_type);
-	new_col_stats.num_values = total_rows;
-	new_col_stats.has_num_values = true;
-	if (has_default) {
-		new_col_stats.null_count = 0;
-		new_col_stats.has_null_count = true;
-		if (total_rows > 0) {
-			new_col_stats.any_valid = true;
-			auto default_str = default_value.ToString();
-			new_col_stats.has_min = true;
-			new_col_stats.min = default_str;
-			new_col_stats.has_max = true;
-			new_col_stats.max = std::move(default_str);
-			new_col_stats.min_is_exact = true;
-			new_col_stats.max_is_exact = true;
-		} else {
-			new_col_stats.any_valid = false;
-		}
-	} else {
-		new_col_stats.null_count = total_rows;
-		new_col_stats.has_null_count = true;
-		new_col_stats.any_valid = false;
-	}
-
-	table_changes.new_inlined_data->column_stats.emplace(new_field_index, std::move(new_col_stats));
+	table_changes.new_inlined_data->column_stats.emplace(
+	    new_field_index, DuckLakeColumnStats::FromConstant(new_column_type, default_value, existing.Count()));
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
@@ -706,6 +682,15 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::Commit() {
+	if (!expired_snapshots.empty()) {
+		try {
+			GetMetadataManager().DeleteSnapshots(expired_snapshots);
+		} catch (...) {
+			// the other changes of the transaction are not committed yet
+			Rollback();
+			throw;
+		}
+	}
 	try {
 		if (ChangesMade()) {
 			FlushChanges();
@@ -1189,6 +1174,7 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		stats.column_stats.push_back(std::move(col_stats));
 	}
 	stats.record_count = new_stats.record_count;
+	stats.record_count_unknown = new_stats.record_count_unknown;
 	stats.next_row_id = new_stats.next_row_id;
 	stats.table_size_bytes = new_stats.table_size_bytes;
 	return stats;
@@ -1358,6 +1344,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		                     "snapshot changes for conflict resolution:");
 		return result;
 	};
+	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
+		return metadata_manager->InlinedDeletionTableExists(
+		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
+	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
@@ -1451,7 +1441,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (!entry) {
 			return names;
 		}
-		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables()) {
+		for (auto &t : entry->Cast<DuckLakeTableEntry>().GetInlinedDataTables(*this, transaction_snapshot)) {
 			names.push_back(t.table_name);
 		}
 		return names;
@@ -1522,7 +1512,12 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 
 void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	auto &metadata_manager = GetMetadataManager();
-	metadata_manager.DeleteSnapshots(snapshots);
+	if (!metadata_manager.CommitsEachStatement()) {
+		metadata_manager.DeleteSnapshots(snapshots);
+		return;
+	}
+	// deleted when the transaction commits, so a rollback keeps them
+	expired_snapshots.insert(expired_snapshots.end(), snapshots.begin(), snapshots.end());
 }
 
 void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table) {
@@ -1530,14 +1525,24 @@ void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inli
 	metadata_manager.DeleteInlinedData(inlined_table);
 }
 
-void DuckLakeTransaction::DeleteFlushedInlinedData(const DuckLakeInlinedTableInfo &inlined_table,
-                                                   idx_t flush_snapshot_id) {
-	auto &metadata_manager = GetMetadataManager();
-	metadata_manager.DeleteFlushedInlinedData(inlined_table, flush_snapshot_id);
+void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
 }
 
-void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
+bool DuckLakeTransaction::InlinedTableFlushed(const string &table_name) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	return state->InlinedTableFlushed(table_name);
+}
+
+void DuckLakeTransaction::MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	state->flushed_inlined_file_deletions[table_id] = flush_snapshot_id;
+}
+
+bool DuckLakeTransaction::InlinedFileDeletionsFlushed(TableIndex table_id) {
+	lock_guard<mutex> guard(flushed_inlined_lock);
+	return state->flushed_inlined_file_deletions.count(table_id) > 0;
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
@@ -1859,6 +1864,10 @@ const set<TableIndex> &DuckLakeTransaction::GetTablesDeleteAttempted() const {
 
 const vector<FlushedInlinedTableInfo> &DuckLakeTransaction::GetFlushedInlinedTables() const {
 	return state->flushed_inlined_tables;
+}
+
+const map<TableIndex, idx_t> &DuckLakeTransaction::GetFlushedInlinedFileDeletions() const {
+	return state->flushed_inlined_file_deletions;
 }
 
 bool DuckLakeTransaction::FileIsDropped(const string &path) const {

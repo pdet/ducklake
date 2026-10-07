@@ -35,7 +35,7 @@ static void AddFileInfo(DuckLakeFileData &file_info, vector<Value> &row_values) 
 
 static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	names.emplace_back("data_file");
@@ -111,10 +111,13 @@ static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, Ta
 
 DuckLakeListFilesFunction::DuckLakeListFilesFunction()
     : DuckLakeBaseMetadataFunction("ducklake_list_files", DuckLakeListFilesBind) {
-	arguments.push_back(LogicalType::VARCHAR);
-	named_parameters["schema"] = LogicalType::VARCHAR;
-	named_parameters["snapshot_version"] = LogicalType::BIGINT;
-	named_parameters["snapshot_time"] = LogicalType::TIMESTAMP_TZ;
+	GetSignature()
+	    .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	    .WithTypedKwargs("options", [&](TypedKwargs &options) {
+		    options.Add("schema", LogicalType::VARCHAR)
+		        .Add("snapshot_version", LogicalType::BIGINT)
+		        .Add("snapshot_time", LogicalType::TIMESTAMP_TZ);
+	    });
 }
 
 } // namespace duckdb

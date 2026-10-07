@@ -1,4 +1,5 @@
 #include "common/ducklake_util.hpp"
+#include "common/ducklake_types.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -550,6 +551,22 @@ string DuckLakeUtil::InlinedVariantExpression(const string &expression, const Lo
 	}
 }
 
+string DuckLakeUtil::InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
+                                              const LogicalType &type) {
+	if (GetInlinedStorageType(metadata_manager, type) != type) {
+		expression = InlinedVariantExpression(expression, type, true);
+	}
+	if (!metadata_manager.TypeIsNativelySupported(type)) {
+		if (type.IsNested()) {
+			expression = "CAST(" + expression + " AS VARCHAR)";
+		} else if (type.id() == LogicalTypeId::VARCHAR) {
+			// PostgreSQL stores strings as BYTEA to preserve embedded NUL bytes.
+			expression = "encode(" + expression + ")";
+		}
+	}
+	return expression;
+}
+
 vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto context = transaction.context.lock();
@@ -737,6 +754,14 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	}
 	result = std::move(*value);
 	return true;
+}
+
+bool DuckLakeUtil::TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result) {
+	if (!TryGetLiteralValue(expr, result)) {
+		return false;
+	}
+	// nested types are stored without their child types and a NULL string would read back as the text NULL
+	return !result.type().IsNested() && !(result.IsNull() && DuckLakeTypes::IsStringType(result.type()));
 }
 
 } // namespace duckdb

@@ -21,7 +21,7 @@ struct DuckLakeSetCommitMessageData final : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeSetCommitMessageBind(ClientContext &context, TableFunctionBindInput &input,
                                                              vector<LogicalType> &return_types,
                                                              vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.push_back("Success");
 	auto extra_info_entry = input.named_parameters.find("extra_info");
@@ -39,8 +39,13 @@ void DuckLakeSetCommitMessageExecute(ClientContext &context, TableFunctionInput 
 }
 
 DuckLakeSetCommitMessage::DuckLakeSetCommitMessage()
-    : TableFunction("ducklake_set_commit_message", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+    : TableFunction("ducklake_set_commit_message",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("author", LogicalType::VARCHAR)
+                        .AddPositionalOnly("commit_message", LogicalType::VARCHAR),
                     DuckLakeSetCommitMessageExecute, DuckLakeSetCommitMessageBind) {
-	named_parameters["extra_info"] = LogicalType::VARCHAR;
+	GetSignature().WithTypedKwargs("options",
+	                               [&](TypedKwargs &options) { options.Add("extra_info", LogicalType::VARCHAR); });
 }
 } // namespace duckdb

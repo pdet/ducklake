@@ -75,7 +75,7 @@ struct DuckLakeSetOptionData : public TableFunctionData {
 
 static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	DuckLakeConfigOption config_option;
 	auto &option = config_option.option.key;
 	auto &value = config_option.option.value;
@@ -131,10 +131,15 @@ void DuckLakeSetOptionExecute(ClientContext &context, TableFunctionInput &data_p
 }
 
 DuckLakeSetOptionFunction::DuckLakeSetOptionFunction()
-    : TableFunction("ducklake_set_option", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
+    : TableFunction("ducklake_set_option",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("option", LogicalType::VARCHAR)
+                        .AddPositionalOnly("value", LogicalType::ANY),
                     DuckLakeSetOptionExecute, DuckLakeSetOptionBind) {
-	named_parameters["table_name"] = LogicalType::VARCHAR;
-	named_parameters["schema"] = LogicalType::VARCHAR;
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("table_name", LogicalType::VARCHAR).Add("schema", LogicalType::VARCHAR);
+	});
 }
 
 } // namespace duckdb

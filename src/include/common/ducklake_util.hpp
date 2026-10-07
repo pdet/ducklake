@@ -41,6 +41,8 @@ class DuckLakeUtil {
 public:
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type
+	static bool TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result);
 	static string ParseQuotedValue(const string &input, idx_t &pos);
 	static string ToQuotedList(const vector<string> &input, char list_separator = ',');
 	static vector<string> ParseQuotedList(const string &input, char list_separator = ',');
@@ -102,6 +104,9 @@ public:
 	//! SQL expression encoding or decoding VARIANT leaves in an inlined column
 	static string InlinedVariantExpression(const string &expression, const LogicalType &type, bool encode,
 	                                       idx_t depth = 0);
+	//! SQL expression converting a value of the given type to the representation stored in an inlined column
+	static string InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
+	                                       const LogicalType &type);
 	//! Formats inlined rows as comma separated cell literals in storage types
 	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
 };

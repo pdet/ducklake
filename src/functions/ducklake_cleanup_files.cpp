@@ -54,7 +54,7 @@ struct CleanupBindData : public TableFunctionData {
 static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctionBindInput &input,
                                             vector<LogicalType> &return_types, vector<Identifier> &names,
                                             CleanupType type) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input.inputs[0]);
+	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto result = make_uniq<CleanupBindData>(catalog, type);
 
 	auto &ducklake_catalog = reinterpret_cast<DuckLakeCatalog &>(catalog);
@@ -94,9 +94,14 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(target_timestamp);
 	}
 
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
-	result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type, ducklake_catalog.Separator());
+	// orphans belong to no table, so only the global auto_compact option can turn their cleanup off
+	bool skip_cleanup = type == CleanupType::ORPHANED_FILES &&
+	                    ducklake_catalog.GetConfigOption<string>("auto_compact", {}, {}, "true") != "true";
+	if (!skip_cleanup) {
+		auto &transaction = DuckLakeTransaction::Get(context, catalog);
+		auto &metadata_manager = transaction.GetMetadataManager();
+		result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type, ducklake_catalog.Separator());
+	}
 
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("path");
@@ -161,19 +166,25 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 }
 
 DuckLakeCleanupOldFilesFunction::DuckLakeCleanupOldFilesFunction()
-    : TableFunction("ducklake_cleanup_old_files", {LogicalType::VARCHAR}, DuckLakeCleanupExecute,
+    : TableFunction("ducklake_cleanup_old_files",
+                    FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR), DuckLakeCleanupExecute,
                     DuckLakeCleanupOldFilesBind, DuckLakeCleanupInit) {
-	named_parameters["older_than"] = LogicalType::TIMESTAMP_TZ;
-	named_parameters["cleanup_all"] = LogicalType::BOOLEAN;
-	named_parameters["dry_run"] = LogicalType::BOOLEAN;
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("older_than", LogicalType::TIMESTAMP_TZ)
+		    .Add("cleanup_all", LogicalType::BOOLEAN)
+		    .Add("dry_run", LogicalType::BOOLEAN);
+	});
 }
 
 DuckLakeCleanupOrphanedFilesFunction::DuckLakeCleanupOrphanedFilesFunction()
-    : TableFunction("ducklake_delete_orphaned_files", {LogicalType::VARCHAR}, DuckLakeCleanupExecute,
+    : TableFunction("ducklake_delete_orphaned_files",
+                    FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR), DuckLakeCleanupExecute,
                     DuckLakeCleanupOrphanedFilesBind, DuckLakeCleanupInit) {
-	named_parameters["older_than"] = LogicalType::TIMESTAMP_TZ;
-	named_parameters["cleanup_all"] = LogicalType::BOOLEAN;
-	named_parameters["dry_run"] = LogicalType::BOOLEAN;
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("older_than", LogicalType::TIMESTAMP_TZ)
+		    .Add("cleanup_all", LogicalType::BOOLEAN)
+		    .Add("dry_run", LogicalType::BOOLEAN);
+	});
 }
 
 } // namespace duckdb
