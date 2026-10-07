@@ -50,6 +50,8 @@ struct DuckLakeCommitContext {
 	};
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Runs metadata-DB statements in a transaction of their own during post-commit cleanup.
+	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
 	//! Optional Appender fast-path.

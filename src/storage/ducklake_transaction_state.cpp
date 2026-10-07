@@ -2075,14 +2075,11 @@ WHERE idt.schema_version < (
 			continue;
 		}
 		// the registration and the table go together, so a failed drop is tried again by a later flush
-		auto res = context.query_metadata(StringUtil::Format(
-		    "BEGIN TRANSACTION;"
+		auto res = context.execute_in_transaction(StringUtil::Format(
 		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
-		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;"
-		    "COMMIT;",
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
 		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name)));
 		if (res->HasError()) {
-			context.query_metadata("ROLLBACK;");
 			if (!failed_drop) {
 				failed_drop = std::move(res);
 			}
