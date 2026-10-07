@@ -28,6 +28,12 @@ SELECT count(*) FROM meta.ducklake_data_file
 ----
 0
 
+# and no file is left behind
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/per_thread_output_no_empty_files/**/*.parquet')
+----
+0
+
 query II
 SELECT part_id, v FROM dl.t ORDER BY ALL
 ----

@@ -256,7 +256,6 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 		}
 		if (data_file.row_count == 0) {
-			// a file without rows holds no data, the writer deletes it
 			global_state.empty_files.push_back(std::move(data_file.file_name));
 			continue;
 		}
@@ -293,9 +292,7 @@ void DuckLakeInsert::RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlob
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (auto &file_name : gstate.empty_files) {
-		fs.TryRemoveFile(file_name);
-	}
+	fs.RemoveFiles(gstate.empty_files);
 	gstate.empty_files.clear();
 }
 
