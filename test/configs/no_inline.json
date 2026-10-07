@@ -17,7 +17,8 @@
     {
       "reason": "Test asserts small inserts are inlined and exercises inlining dependent guard behavior",
       "paths": [
-        "test/sql/data_inlining/inlining_reserved_column_names.test"
+        "test/sql/data_inlining/inlining_reserved_column_names.test",
+        "test/sql/data_inlining/per_thread_output_no_empty_files.test"
       ]
     },
     {
