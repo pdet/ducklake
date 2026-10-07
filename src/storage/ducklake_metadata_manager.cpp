@@ -843,6 +843,28 @@ WHERE table_id = %d AND schema_version < (
 	                          table_id.index, table_id.index);
 }
 
+string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id) {
+	string table_filter;
+	if (table_id.IsValid()) {
+		table_filter = StringUtil::Format("\n\tWHERE idt.table_id = %d", table_id.GetIndex());
+	}
+	return StringUtil::Format(R"(
+WITH inlined AS (
+	SELECT idt.table_id, idt.table_name, COALESCE(sv.begin_snapshot, (
+		SELECT MIN(t.begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table t WHERE t.table_id = idt.table_id
+	)) AS snapshot_id
+	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
+		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
+)
+SELECT inlined.table_name, col.column_name, col.column_type, col.column_id
+FROM inlined
+JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
+WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id)
+)",
+	                          table_filter);
+}
+
 unordered_set<string> DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
 	auto result = Query(GetInlinedTableNamesSql(table_id));
 	result->ThrowIfError("Failed to get inlined data tables from DuckLake: ");
