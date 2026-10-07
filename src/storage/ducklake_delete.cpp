@@ -71,7 +71,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	// the delete file columns never hold NULL, so they are written as required
 	vector<BaseStatistics> not_null_stats;
 	vector<optional_ptr<BaseStatistics>> column_stats;
-	for (auto &type : types_to_write) {
+	for (const auto &type : types_to_write) {
 		not_null_stats.push_back(BaseStatistics::CreateEmpty(type));
 		not_null_stats.back().SetHasNoNull();
 	}
