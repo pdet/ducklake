@@ -221,6 +221,20 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
+	for (auto end = message.find("_pkey"); end != string::npos; end = message.find("_pkey", end + 1)) {
+		auto start = end;
+		while (start > 0 && (StringUtil::CharacterIsAlphaNumeric(message[start - 1]) || message[start - 1] == '_')) {
+			start--;
+		}
+		if (StringUtil::StartsWith(message.substr(start, end - start), "ducklake_")) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format(
