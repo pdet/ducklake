@@ -315,6 +315,10 @@ unique_ptr<BaseStatistics> GetColumnStats(const DuckLakeFieldId &field_id, const
 	}
 }
 
+void DuckLakeTableEntry::ThrowNotNullViolation(const string &column_name) const {
+	throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(name), SQLIdentifier(column_name));
+}
+
 case_insensitive_set_t DuckLakeTableEntry::GetNotNullFields() const {
 	case_insensitive_set_t result;
 	for (auto &constraint : GetConstraints()) {
