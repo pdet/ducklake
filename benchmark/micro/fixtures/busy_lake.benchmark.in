@@ -1,0 +1,68 @@
+# name: benchmark/micro/fixtures/busy_lake.benchmark.in
+# description: Lake with 300 background tables of 30 files each, ten 40-file tables and an events table with history
+# group: [fixtures]
+
+argument lake busy_lake_v1
+
+cache_file ${lake}_ready.marker
+
+# The generated script first gives the ten frag tables 40 files each, then each of 30 commits adds one file to every
+# background table, and finally 20 commits insert into events and 10 commits delete from it
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT stmt FROM (
+SELECT -2 AS o, 0 AS k, f AS i, 'CREATE TABLE lake.frag_' || f || ' (id BIGINT, v VARCHAR);' AS stmt FROM range(10) r(f)
+UNION ALL
+SELECT -2, 1, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT -1, 0, f, 'CALL lake.set_option(''parquet_row_group_size'', 2048, table_name => ''frag_' || f || ''');'
+FROM range(10) r(f)
+UNION ALL
+SELECT -1, 1, 0, 'SET ducklake_target_file_size = ''4KB'';'
+UNION ALL
+SELECT -1, 2, f, 'INSERT INTO lake.frag_' || f || ' SELECT x, ''v'' || x FROM range(' || (40 * 2048) || ') r(x);'
+FROM range(10) r(f)
+UNION ALL
+SELECT -1, 3, 0, 'RESET ducklake_target_file_size; COMMIT; BEGIN;'
+UNION ALL
+SELECT 0, 0, t, 'CREATE TABLE lake.bg_' || t || ' (id BIGINT, v VARCHAR);' FROM range(300) r(t)
+UNION ALL
+SELECT 0, 1, 0, 'COMMIT; BEGIN;'
+UNION ALL
+SELECT 1 + f, 0, t, 'INSERT INTO lake.bg_' || t || ' SELECT x, ''v'' || x FROM range(' || (f * 64) || ', '
+|| (f * 64 + 64) || ') r(x);' FROM range(30) a(f), range(300) b(t)
+UNION ALL
+SELECT 1 + f, 1, 0, 'COMMIT; BEGIN;' FROM range(30) a(f)
+UNION ALL
+SELECT 31 + e, 0, 0, 'INSERT INTO lake.events SELECT x, x % 100, ''v'' || x FROM range(' || (e * 1000) || ', '
+|| (e * 1000 + 1000) || ') r(x); COMMIT; BEGIN;' FROM range(20) a(e)
+UNION ALL
+SELECT 51 + d, 0, 0, 'DELETE FROM lake.events WHERE id % 100 = ' || d || '; COMMIT; BEGIN;' FROM range(10) a(d)
+) ORDER BY o, k, i) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.events (id BIGINT, k INTEGER, v VARCHAR);
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'frag_9')) <> 40
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'bg_299')) <> 30
+OR (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL) <> 9420
+OR (SELECT count(*) FROM lake.events) <> 18000
+THEN error('unexpected busy lake fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

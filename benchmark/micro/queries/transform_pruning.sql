@@ -1,0 +1,40 @@
+SELECT q, c, s FROM (
+SELECT 'q01' AS q, count(*) AS c, sum(v) AS s FROM lake.bk WHERE id = 123457
+UNION ALL SELECT 'q02', count(*), sum(v) FROM lake.bk WHERE id = 474354
+UNION ALL SELECT 'q03', count(*), sum(v) FROM lake.bk WHERE id = 907796
+UNION ALL SELECT 'q04', count(*), sum(v) FROM lake.bk WHERE id = 586963
+UNION ALL SELECT 'q05', count(*), sum(v) FROM lake.bk WHERE id = 898485
+UNION ALL SELECT 'q06', count(*), sum(v) FROM lake.bk WHERE id = 969105
+UNION ALL SELECT 'q07', count(*), sum(v) FROM lake.bk WHERE id = 819166
+UNION ALL SELECT 'q08', count(*), sum(v) FROM lake.bk WHERE id = 488269
+UNION ALL SELECT 'q09', count(*), sum(v) FROM lake.bk WHERE id = 473780
+UNION ALL SELECT 'q10', count(*), sum(v) FROM lake.bk WHERE id IN (532510, 896580, 615917)
+UNION ALL SELECT 'q11', count(*), sum(v) FROM lake.bk WHERE id IN (199126, 193630, 842950)
+UNION ALL SELECT 'q12', count(*), sum(v) FROM lake.bk WHERE id IN (536775, 498873, 660479)
+UNION ALL SELECT 'q13', count(*), sum(v) FROM lake.bk WHERE id IN (643782, 831496, 195217)
+UNION ALL SELECT 'q14', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2021-10-02 03:42:00'
+UNION ALL SELECT 'q15', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2024-07-24 19:06:00'
+UNION ALL SELECT 'q16', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2023-06-03 17:16:00'
+UNION ALL SELECT 'q17', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2022-02-18 00:10:00'
+UNION ALL SELECT 'q18', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2021-09-22 02:18:00'
+UNION ALL SELECT 'q19', count(*), sum(v) FROM lake.ev WHERE ts = TIMESTAMP '2021-05-02 23:38:00'
+UNION ALL SELECT 'q20', count(*), sum(v) FROM lake.ev WHERE ts BETWEEN TIMESTAMP '2024-02-28 21:34:00' AND
+TIMESTAMP '2024-02-29 21:34:00'
+UNION ALL SELECT 'q21', count(*), sum(v) FROM lake.ev WHERE ts BETWEEN TIMESTAMP '2024-08-12 10:38:00' AND
+TIMESTAMP '2024-08-13 10:38:00'
+UNION ALL SELECT 'q22', count(*), sum(v) FROM lake.ev WHERE ts BETWEEN TIMESTAMP '2022-04-04 17:38:00' AND
+TIMESTAMP '2022-04-05 17:38:00'
+UNION ALL SELECT 'q23', count(*), sum(v) FROM lake.ev WHERE ts BETWEEN TIMESTAMP '2021-02-13 16:36:00' AND
+TIMESTAMP '2021-02-14 16:36:00'
+UNION ALL SELECT 'q24', count(*), sum(v) FROM lake.ev WHERE ts >= TIMESTAMP '2022-03-01' + INTERVAL 7 DAY AND
+ts < TIMESTAMP '2022-03-01' + INTERVAL 8 DAY
+UNION ALL SELECT 'q25', count(*), sum(v) FROM lake.ev WHERE ts >= CAST('2023-05-01' AS DATE) AND
+ts < CAST('2023-05-02' AS DATE)
+UNION ALL SELECT 'q26', count(*), sum(v) FROM lake.ev WHERE ts >= DATE '2021-06-01' + INTERVAL (14) DAY AND
+ts < DATE '2021-06-01' + INTERVAL (15) DAY
+UNION ALL SELECT 'q27', count(*), sum(v) FROM lake.ev WHERE ts > TIMESTAMP '2024-12-31 00:00:00' - INTERVAL 6 HOUR
+UNION ALL SELECT 'q28', count(*),
+sum(v) FROM lake.ev WHERE ts < CAST('2021-01-01 12:00:00' AS TIMESTAMP) + INTERVAL 1 HOUR
+UNION ALL SELECT 'q29', count(*), sum(v) FROM lake.ev WHERE ts BETWEEN TIMESTAMP '2022-08-31 23:00:00' AND
+TIMESTAMP '2022-09-01 01:00:00'
+) ORDER BY q;

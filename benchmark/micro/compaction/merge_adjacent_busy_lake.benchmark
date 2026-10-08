@@ -1,0 +1,49 @@
+# name: benchmark/micro/compaction/merge_adjacent_busy_lake.benchmark
+# description: Merge each of ten 40-file tables, with a commit each, in a lake whose 300 other tables hold 9000 files
+# group: [compaction]
+
+name Merge Adjacent Busy Lake
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work busy_merge_work
+
+include benchmark/micro/fixtures/busy_lake.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The file list of each merged table is read from metadata tables that also hold the other 9000 files
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_0');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_1');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_2');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_3');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_4');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_5');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_6');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_7');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_8');
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_merge_adjacent_files('lake', 'frag_9');
+
+# A missed reset leaves nothing to merge
+result_query III
+SELECT processed, created, (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file d
+JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
+WHERE d.end_snapshot IS NULL AND t.end_snapshot IS NULL AND t.table_name LIKE 'frag%')
+FROM __answer
+----
+40	1	10

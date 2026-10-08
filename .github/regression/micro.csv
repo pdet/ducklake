@@ -4,6 +4,8 @@ benchmark/micro/compaction/merge_adjacent_partitioned.benchmark
 benchmark/micro/compaction/merge_adjacent_old_partition_spec.benchmark
 benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
 benchmark/micro/compaction/merge_adjacent_sorted.benchmark
+benchmark/micro/compaction/merge_adjacent_busy_lake.benchmark
+benchmark/micro/compaction/rewrite_data_files_sparse.benchmark
 benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark
 benchmark/micro/maintenance/delete_orphaned_files.benchmark
@@ -37,5 +39,15 @@ benchmark/micro/ingest/add_files_not_null.benchmark
 benchmark/tpch/q09.benchmark
 benchmark/micro/read/tz_pruning_many_files.benchmark
 benchmark/micro/time_travel/at_version_cte_copy.benchmark
+benchmark/micro/time_travel/table_changes_busy_lake.benchmark
 benchmark/micro/read/scan_shared_deletes.benchmark
+benchmark/micro/read/small_queries_busy_lake.benchmark
+benchmark/micro/read/or_pruning_many_files.benchmark
+benchmark/micro/read/scan_deletion_vectors.benchmark
+benchmark/micro/read/transform_pruning.benchmark
 benchmark/micro/write/insert_not_null_struct.benchmark
+benchmark/micro/write/inlined_insert_batch.benchmark
+benchmark/micro/write/inlined_insert_overflow.benchmark
+benchmark/micro/write/delete_deletion_vectors_commits.benchmark
+benchmark/micro/write/update_lineitem.benchmark
+benchmark/micro/write/partitioned_insert_fanout.benchmark

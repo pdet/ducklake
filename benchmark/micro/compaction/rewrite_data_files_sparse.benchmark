@@ -1,0 +1,28 @@
+# name: benchmark/micro/compaction/rewrite_data_files_sparse.benchmark
+# description: Rewrite the 8 of 4096 files whose deletes pass the threshold, among 108 files with deletes, with commit
+# group: [compaction]
+
+name Rewrite Data Files Sparse
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work rewrite_sparse_work
+
+include benchmark/micro/fixtures/sparse_deletes.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Candidate selection starts from the files with deletes, not from every file of the table
+run
+SELECT sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_rewrite_data_files('lake', 'events', delete_threshold => 0.5);
+
+# A missed reset leaves no file past the threshold
+result_query II
+SELECT processed, created FROM __answer
+----
+8	1

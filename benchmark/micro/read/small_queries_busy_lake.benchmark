@@ -1,0 +1,23 @@
+# name: benchmark/micro/read/small_queries_busy_lake.benchmark
+# description: Run 30 counts, min/max and point queries on a warm lake whose 300 background tables hold 9000 files
+# group: [read]
+
+name Small Queries Busy Lake
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work busy_small_queries_work
+
+include benchmark/micro/fixtures/busy_lake.benchmark.in
+
+# No cleanup: the run is read-only and the catalog stays warm; every statement after the first checks its own result
+run benchmark/micro/queries/busy_lake_small_queries.sql
+
+result_query I
+SELECT * FROM __answer
+----
+18000

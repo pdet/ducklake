@@ -1,0 +1,38 @@
+# name: benchmark/micro/read/or_pruning_many_files.benchmark
+# description: One query of 20 branches whose filters are cross-column OR trees of 2 to 63 leaves over ~4096 files
+# group: [read]
+
+name OR Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+# Disjunctions are pruned file by file; q20 is the largest flat OR that fits the 64-node walk of the pruning
+run benchmark/micro/queries/or_pruning.sql
+
+result III
+q01	4	8006017
+q02	4	14075586
+q03	4	14494446
+q04	8	34790827
+q05	8	23944996
+q06	16	65017892
+q07	16	62974554
+q08	32	130548725
+q09	32	144945097
+q10	48	198044648
+q11	60	268793503
+q12	80	354943980
+q13	160	664932480
+q14	320	1362228200
+q15	140	472088110
+q16	141	490386835
+q17	141	522380257
+q18	141	584306041
+q19	141	882264775
+q20	63	251100157

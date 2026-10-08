@@ -1,0 +1,94 @@
+# name: test/sql/metadata/stats_cache_growth.test
+# description: Long runs of commits and reads in a lake with many tables keep the cached stats and record counts bounded
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/stats_cache_growth',
+DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+BEGIN
+
+loop i 0 50
+
+statement ok
+CREATE TABLE ducklake.background_{i} AS SELECT range AS a, range * 2 AS b, 'x' || range AS c FROM range(20)
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE ducklake.t (a INTEGER)
+
+# every commit moves next_file_id and the snapshot, so the next reads load the stats and record counts again
+loop i 0 40
+
+statement ok
+INSERT INTO ducklake.t VALUES ({i})
+
+statement ok
+SELECT count(*), sum(estimated_size) FROM duckdb_tables() WHERE database_name = 'ducklake'
+
+statement ok
+SELECT count(*) FROM ducklake.background_1 WHERE a > 3
+
+endloop
+
+statement ok
+CREATE TEMP TABLE cache_baseline AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+loop i 0 200
+
+statement ok
+INSERT INTO ducklake.t VALUES ({i})
+
+statement ok
+SELECT count(*), sum(estimated_size) FROM duckdb_tables() WHERE database_name = 'ducklake'
+
+statement ok
+SELECT count(*) FROM ducklake.background_1 WHERE a > 3
+
+endloop
+
+query III
+SELECT (SELECT count(*) FROM ducklake.t), (SELECT bytes > 0 FROM cache_baseline),
+(SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE') <= (SELECT bytes * 1.5 FROM cache_baseline)
+----
+240	true	true
+
+# schema changes keep next_file_id, so the stats of dropped tables must not pile up in that generation
+statement ok
+CREATE TEMP TABLE churn_baseline AS SELECT memory_usage_bytes AS bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+
+loop i 0 200
+
+statement ok
+CREATE TABLE ducklake.churn_{i} (a INTEGER)
+
+statement ok
+SELECT count(*) FROM ducklake.churn_{i} WHERE a > 3
+
+statement ok
+DROP TABLE ducklake.churn_{i}
+
+statement ok
+SELECT count(*) FROM ducklake.background_1 WHERE a > 3
+
+endloop
+
+# every dropped table would leave an entry of about 56 bytes behind
+query I
+SELECT (SELECT memory_usage_bytes FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+<= (SELECT bytes + 4096 FROM churn_baseline)
+----
+true

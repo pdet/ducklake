@@ -18,6 +18,7 @@
 #include "common/ducklake_name_map.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/client_context_state.hpp"
+#include "duckdb/common/deque.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -389,6 +390,9 @@ private:
 	                                                         DuckLakeSnapshot snapshot);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
+	//! Cache entries under a generation, deleting the entries of the least recently cached generations past a limit
+	void CacheGeneration(deque<pair<idx_t, unordered_set<string>>> &generations, idx_t generation_id,
+	                     vector<pair<string, shared_ptr<ObjectCacheEntry>>> entries);
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
@@ -432,6 +436,11 @@ private:
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	//! The cache keys of the table stats per next_file_id and of the record counts per snapshot, least recently
+	//! cached first
+	mutex cache_generations_lock;
+	deque<pair<idx_t, unordered_set<string>>> stats_generations;
+	deque<pair<idx_t, unordered_set<string>>> record_count_generations;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;

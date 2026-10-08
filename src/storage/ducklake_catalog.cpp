@@ -973,6 +973,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
+	vector<pair<string, shared_ptr<ObjectCacheEntry>>> entries;
+	entries.reserve(table_map.size());
 	for (auto &table_entry : table_map) {
 		auto current_id = table_entry.first;
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
@@ -987,8 +989,9 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		if (current_id == table_id) {
 			requested_entry = entry;
 		}
-		cache.Put(StatsCacheKey(snapshot.next_file_id, current_id), std::move(entry));
+		entries.emplace_back(StatsCacheKey(snapshot.next_file_id, current_id), std::move(entry));
 	}
+	CacheGeneration(stats_generations, snapshot.next_file_id, std::move(entries));
 	if (!requested_entry || !requested_entry->has_stats) {
 		return nullptr;
 	}
@@ -1004,7 +1007,9 @@ idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, Tab
 	if (!cached) {
 		auto record_counts = transaction.GetMetadataManager().GetTableRecordCounts(snapshot);
 		cached = make_shared_ptr<DuckLakeTableRecordCountCacheEntry>(std::move(record_counts));
-		cache.Put(std::move(key), cached);
+		vector<pair<string, shared_ptr<ObjectCacheEntry>>> entries;
+		entries.emplace_back(std::move(key), cached);
+		CacheGeneration(record_count_generations, snapshot.snapshot_id, std::move(entries));
 	}
 	auto entry = cached->record_counts.find(table_id);
 	return entry == cached->record_counts.end() ? 0 : entry->second;
@@ -1359,6 +1364,41 @@ string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
+}
+
+void DuckLakeCatalog::CacheGeneration(deque<pair<idx_t, unordered_set<string>>> &generations, idx_t generation_id,
+                                      vector<pair<string, shared_ptr<ObjectCacheEntry>>> entries) {
+	// every commit starts a new generation, so the entries of older snapshots would otherwise pile up in the cache
+	static constexpr idx_t MAX_CACHED_GENERATIONS = 16;
+	auto &cache = GetObjectCacheInstance();
+	// publishing and evicting under one lock keeps an eviction from deleting entries that were just published again
+	lock_guard<mutex> guard(cache_generations_lock);
+	unordered_set<string> keys;
+	for (auto &entry : entries) {
+		keys.insert(entry.first);
+	}
+	for (auto generation = generations.begin(); generation != generations.end(); generation++) {
+		if (generation->first == generation_id) {
+			// a schema change keeps next_file_id, so the generation can lose the keys of dropped tables
+			for (auto &key : generation->second) {
+				if (keys.find(key) == keys.end()) {
+					cache.Delete(key);
+				}
+			}
+			generations.erase(generation);
+			break;
+		}
+	}
+	for (auto &entry : entries) {
+		cache.Put(std::move(entry.first), std::move(entry.second));
+	}
+	generations.emplace_back(generation_id, std::move(keys));
+	while (generations.size() > MAX_CACHED_GENERATIONS) {
+		for (auto &key : generations.front().second) {
+			cache.Delete(key);
+		}
+		generations.pop_front();
+	}
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {

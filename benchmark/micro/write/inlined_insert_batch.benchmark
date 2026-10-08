@@ -1,0 +1,27 @@
+# name: benchmark/micro/write/inlined_insert_batch.benchmark
+# description: INSERT 5000 rows of 30 VARCHAR columns into a table that inlines up to 5000 rows, with commit
+# group: [write]
+
+name Inlined Insert Batch
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work inlined_batch_work
+
+include benchmark/micro/fixtures/inlined_batch.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The rows are written into the metadata catalog as SQL
+run
+INSERT INTO lake.wide_0 SELECT * FROM inline_source LIMIT 5000;
+
+# A missed reset doubles the rows, and a data file means the rows were not inlined
+result_query II
+SELECT (SELECT count(*) FROM lake.wide_0), (SELECT count(*) FROM ducklake_list_files('lake', 'wide_0'))
+----
+5000	0

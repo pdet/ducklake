@@ -1,0 +1,200 @@
+# name: test/sql/metadata/file_io_budget.test
+# description: Selective reads open and read the same files however many files the table has
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+# the file system log matches the data files by their forward-slash paths
+require notwindows
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_io_budget', DATA_INLINING_ROW_LIMIT 0)
+
+# a single writer thread rotates files deterministically, and no file cache serves a read
+statement ok
+SET threads = 1
+
+statement ok
+SET enable_external_file_cache = false
+
+statement ok
+CREATE TABLE ducklake.few (id BIGINT, v VARCHAR)
+
+statement ok
+CREATE TABLE ducklake.many (id BIGINT, v VARCHAR)
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048, table_name => 'few')
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048, table_name => 'many')
+
+statement ok
+SET ducklake_target_file_size = '4KB'
+
+statement ok
+INSERT INTO ducklake.few SELECT i, 'v' || i FROM range(4 * 2048) t(i)
+
+statement ok
+INSERT INTO ducklake.many SELECT i, 'v' || i FROM range(40 * 2048) t(i)
+
+statement ok
+RESET ducklake_target_file_size
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'few')),
+(SELECT count(*) FROM ducklake_list_files('ducklake', 'many'))
+----
+4	40
+
+statement ok
+CREATE MACRO files_opened(table_name) AS (SELECT count(DISTINCT path) FROM duckdb_logs_parsed('FileSystem')
+WHERE op = 'OPEN' AND path LIKE '%/' || table_name || '/%')
+
+statement ok
+CREATE MACRO file_reads(table_name) AS (SELECT count(*) FROM duckdb_logs_parsed('FileSystem')
+WHERE op = 'READ' AND path LIKE '%/' || table_name || '/%')
+
+# warm the catalog and the stats, so only the scans touch the file system
+statement ok
+SELECT count(*) FROM ducklake.few UNION ALL SELECT count(*) FROM ducklake.many
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT v FROM ducklake.few WHERE id = 5000
+----
+v5000
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE few_point_files = files_opened('few')
+
+statement ok
+SET VARIABLE few_point_reads = file_reads('few')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT v FROM ducklake.many WHERE id = 5000
+----
+v5000
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE many_point_files = files_opened('many')
+
+statement ok
+SET VARIABLE many_point_reads = file_reads('many')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT count(*) FROM ducklake.few WHERE id BETWEEN 4000 AND 4200
+----
+201
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE few_range_files = files_opened('few')
+
+statement ok
+SET VARIABLE few_range_reads = file_reads('few')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT count(*) FROM ducklake.many WHERE id BETWEEN 4000 AND 4200
+----
+201
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE many_range_files = files_opened('many')
+
+statement ok
+SET VARIABLE many_range_reads = file_reads('many')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT count(*) FROM ducklake.few
+----
+8192
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE few_count_files = files_opened('few')
+
+statement ok
+SET VARIABLE few_count_reads = file_reads('few')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('FileSystem', level => 'trace')
+
+query I
+SELECT count(*) FROM ducklake.many
+----
+81920
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE many_count_files = files_opened('many')
+
+statement ok
+SET VARIABLE many_count_reads = file_reads('many')
+
+# the point lookup touches one file, the range two and the count none, with the same reads for both tables
+query III
+SELECT getvariable('few_point_files') = 1 AND getvariable('many_point_files') = 1,
+getvariable('few_range_files') = 2 AND getvariable('many_range_files') = 2,
+getvariable('few_count_files') = 0 AND getvariable('many_count_files') = 0
+----
+true	true	true
+
+query II
+SELECT getvariable('few_point_reads') > 0 AND getvariable('few_point_reads') = getvariable('many_point_reads'),
+getvariable('few_range_reads') > 0 AND getvariable('few_range_reads') = getvariable('many_range_reads')
+----
+true	true

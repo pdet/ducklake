@@ -1,0 +1,34 @@
+# name: benchmark/micro/read/scan_deletion_vectors.benchmark
+# description: One query of 6 full scans of a 512-file table whose files each have a deletion vector for 20% of rows
+# group: [read]
+
+name Scan Deletion Vectors
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work scan_dv_work
+
+include benchmark/micro/fixtures/deletion_vectors.benchmark.in
+
+# Every branch reads every row and applies every deletion vector; no cleanup, the run is read-only
+run
+SELECT q, c, s FROM (
+SELECT 'all' AS q, count(*) AS c, sum(id) AS s FROM lake.dv
+UNION ALL SELECT 'k500', count(*), sum(id) FROM lake.dv WHERE k < 500
+UNION ALL SELECT 'k3', count(*), sum(k) FROM lake.dv WHERE k < 3
+UNION ALL SELECT 'distinct', count(DISTINCT k), 0 FROM lake.dv
+UNION ALL SELECT 'like', count(*), min(id) + max(id) FROM lake.dv WHERE v LIKE 'value_9%'
+UNION ALL SELECT 'k7', count(*), sum(id) FROM lake.dv WHERE k = 7
+) ORDER BY q;
+
+result III
+all	838860	439804231682
+distinct	1000	0
+k3	2518	2514
+k500	419617	219774886383
+k7	805	426749321
+like	88889	1000008

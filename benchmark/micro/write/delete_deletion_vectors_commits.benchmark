@@ -1,0 +1,32 @@
+# name: benchmark/micro/write/delete_deletion_vectors_commits.benchmark
+# description: Three committed DELETEs that each replace the deletion vectors of all 512 files of a fresh lake
+# group: [write]
+
+name Delete Deletion Vectors Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_dv_work
+
+include benchmark/micro/fixtures/deletion_vectors.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every DELETE hits every file, so each commit merges with and replaces 512 deletion vectors
+run
+DELETE FROM lake.dv WHERE id % 10 = 2;
+DELETE FROM lake.dv WHERE id % 10 = 3;
+DELETE FROM lake.dv WHERE id % 10 = 4;
+
+# A missed reset leaves nothing for the last DELETE
+result_query III
+SELECT Count, (SELECT count(*) FROM lake.dv),
+(SELECT count(*) FILTER (WHERE format = 'puffin') FROM __ducklake_metadata_lake.ducklake_delete_file
+WHERE end_snapshot IS NULL)
+FROM __answer
+----
+104858	524286	512

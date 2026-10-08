@@ -1,0 +1,28 @@
+# name: benchmark/micro/write/partitioned_insert_fanout.benchmark
+# description: INSERT 1M rows into 1000 identity partitions of an empty table, writing a file per partition, with commit
+# group: [write]
+
+name Partitioned Insert Fanout
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work partition_fanout_work
+
+include benchmark/micro/fixtures/partition_fanout.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The commit registers 1000 files with their partition values and stats
+run
+INSERT INTO lake.events SELECT i % 1000, i, 'v' || i FROM range(1000000) t(i);
+
+# A missed reset doubles the rows and the files
+result_query III
+SELECT (SELECT count(*) FROM lake.events), (SELECT count(*) FROM ducklake_list_files('lake', 'events')),
+(SELECT count(DISTINCT p) FROM lake.events)
+----
+1000000	1000	1000

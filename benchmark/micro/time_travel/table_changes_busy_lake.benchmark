@@ -1,0 +1,33 @@
+# name: benchmark/micro/time_travel/table_changes_busy_lake.benchmark
+# description: Five table_changes windows over one table's history in a warm lake whose other tables hold 9000 files
+# group: [time_travel]
+
+name Table Changes Busy Lake
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work busy_table_changes_work
+
+include benchmark/micro/fixtures/busy_lake.benchmark.in
+
+# Snapshots 35 to 54 insert into events and 55 to 64 delete from it; no cleanup, the catalog stays warm
+run
+SELECT w, change_type, count(*) AS cnt, sum(id) AS ids FROM (
+SELECT 'w64' AS w, change_type, id FROM lake.table_changes('events', 64, 64)
+UNION ALL SELECT 'w55', change_type, id FROM lake.table_changes('events', 55, 55)
+UNION ALL SELECT 'w60_64', change_type, id FROM lake.table_changes('events', 60, 64)
+UNION ALL SELECT 'w40_45', change_type, id FROM lake.table_changes('events', 40, 45)
+UNION ALL SELECT 'all', change_type, id FROM lake.table_changes('events', 35, 64)
+) GROUP BY ALL ORDER BY ALL;
+
+result IIII
+all	delete	2000	19909000
+all	insert	20000	199990000
+w40_45	insert	6000	47997000
+w55	delete	200	1990000
+w60_64	delete	1000	9957000
+w64	delete	200	1991800

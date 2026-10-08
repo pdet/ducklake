@@ -1,0 +1,28 @@
+# name: benchmark/micro/fixtures/transform_partitions.benchmark.in
+# description: Read-only lake with a table partitioned by year and month of 48 months and one by 64 hash buckets
+# group: [fixtures]
+
+cache_file transform_partitions_ready.marker
+
+# Bucket files overlap in their id ranges, so only the partition values can prune them
+load
+@create transform_partitions
+@attach transform_partitions AS lake (DATA_PATH '${BENCHMARK_DIR}/transform_partitions_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.ev (id BIGINT, ts TIMESTAMP, v DOUBLE);
+ALTER TABLE lake.ev SET PARTITIONED BY (year(ts), month(ts));
+INSERT INTO lake.ev SELECT i, TIMESTAMP '2021-01-01' + INTERVAL (i * 120) SECOND, i * 0.5 FROM range(1051200) t(i);
+CREATE TABLE lake.bk (id BIGINT, v DOUBLE);
+ALTER TABLE lake.bk SET PARTITIONED BY (bucket(64, id));
+INSERT INTO lake.bk SELECT i, i * 0.5 FROM range(1000000) t(i);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'ev')) <> 48
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'bk')) <> 64
+THEN error('expected 48 month files and 64 bucket files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal transform_partitions
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/transform_partitions_ready.marker' (FORMAT CSV);
+@attach transform_partitions AS lake (READ_ONLY)
+
+reload
+@attach transform_partitions AS lake (READ_ONLY)

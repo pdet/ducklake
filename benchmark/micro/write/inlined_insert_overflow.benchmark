@@ -1,0 +1,37 @@
+# name: benchmark/micro/write/inlined_insert_overflow.benchmark
+# description: INSERT 5001 rows of 30 VARCHAR columns into ten tables that inline up to 5000 rows, with commits
+# group: [write]
+
+name Inlined Insert Overflow
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work inlined_overflow_work
+
+include benchmark/micro/fixtures/inlined_batch.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The insert buffers rows for inlining until the limit is exceeded, then writes all of them to Parquet
+run
+INSERT INTO lake.wide_0 SELECT * FROM inline_source;
+INSERT INTO lake.wide_1 SELECT * FROM inline_source;
+INSERT INTO lake.wide_2 SELECT * FROM inline_source;
+INSERT INTO lake.wide_3 SELECT * FROM inline_source;
+INSERT INTO lake.wide_4 SELECT * FROM inline_source;
+INSERT INTO lake.wide_5 SELECT * FROM inline_source;
+INSERT INTO lake.wide_6 SELECT * FROM inline_source;
+INSERT INTO lake.wide_7 SELECT * FROM inline_source;
+INSERT INTO lake.wide_8 SELECT * FROM inline_source;
+INSERT INTO lake.wide_9 SELECT * FROM inline_source;
+
+# A missed reset doubles the rows, and inlined rows mean the overflow did not reach Parquet
+result_query III
+SELECT (SELECT count(*) FROM lake.wide_9), (SELECT count(*) FROM ducklake_list_files('lake', 'wide_9')),
+(SELECT sum(record_count) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+----
+5001	1	50010

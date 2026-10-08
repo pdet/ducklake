@@ -1,0 +1,47 @@
+# name: benchmark/micro/read/transform_pruning.benchmark
+# description: One query of 29 selective branches on tables partitioned by year and month or by hash bucket
+# group: [read]
+
+name Transform Pruning
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/transform_partitions.benchmark.in
+
+# Bucket point lookups and IN lists, timestamp points and ranges, and ranges written as constant expressions
+run benchmark/micro/queries/transform_pruning.sql
+
+result III
+q01	1	61728.5
+q02	1	237177.0
+q03	1	453898.0
+q04	1	293481.5
+q05	1	449242.5
+q06	1	484552.5
+q07	1	409583.0
+q08	1	244134.5
+q09	1	236890.0
+q10	3	1022503.5
+q11	3	617853.0
+q12	3	848063.5
+q13	3	835247.5
+q14	1	98695.5
+q15	1	468286.5
+q16	1	318139.0
+q17	1	148682.5
+q18	1	95074.5
+q19	1	43914.5
+q20	721	299635703.5
+q21	721	342604419.5
+q22	721	119198964.5
+q23	721	11470389.0
+q24	720	111844620.0
+q25	720	220449420.0
+q26	720	42897420.0
+q27	179	94074345.0
+q28	390	37927.5
+q29	61	13351680.0

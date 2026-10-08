@@ -1,0 +1,37 @@
+# name: benchmark/micro/write/update_lineitem.benchmark
+# description: Row-level UPDATE of 10% of TPC-H lineitem SF0.5 across all data files, excluding the commit
+# group: [write]
+
+name Update Lineitem
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+require tpch
+
+argument lake dml
+
+argument work update_work
+
+include benchmark/micro/fixtures/tpch05.benchmark.in
+
+# An UPDATE deletes the old rows and writes the new ones
+run
+BEGIN;
+UPDATE lake.lineitem SET l_quantity = l_quantity + 1, l_comment = 'updated' WHERE l_orderkey % 10 = 0;
+
+cleanup
+@rollback ${lake}_pristine TO ${work}
+
+# A committed update would add one to the quantities again in the next run
+result_query III
+SELECT Count = (SELECT count(*) FROM src.lineitem WHERE l_orderkey % 10 = 0),
+(SELECT count(*) FROM lake.lineitem) = (SELECT count(*) FROM src.lineitem),
+(SELECT sum(l_quantity) FROM lake.lineitem) = (SELECT sum(l_quantity) + count(*) FILTER (WHERE l_orderkey % 10 = 0)
+FROM src.lineitem)
+FROM __answer
+----
+true	true	true
