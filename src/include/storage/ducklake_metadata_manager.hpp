@@ -598,6 +598,7 @@ protected:
 private:
 	template <class T>
 	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
+	DuckLakeFileData ReadFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx, bool is_encrypted);
 	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
 	                              bool is_encrypted);
 	DuckLakeFileData ReadDeleteFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
@@ -607,6 +608,7 @@ private:
 
 protected:
 	string GetFileSelectList(const string &prefix);
+	string GetDataFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
 	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
