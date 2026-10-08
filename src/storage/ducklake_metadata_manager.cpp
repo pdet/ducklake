@@ -448,7 +448,7 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
 	auto &db = transaction.GetCatalog().GetDatabase();
-	// the schema additions and the inlined column rename are independent so a failure of one must not skip the other
+	// Try the schema and column migrations independently
 	try {
 		ExecuteMigration(V1_1_DEV1_MIGRATION_QUERY, true, "1.0", "1.1-dev1");
 	} catch (std::exception &ex) {
