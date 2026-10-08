@@ -516,10 +516,14 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() const {
 
 	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
 	                                               std::move(filter_copy));
-	result->files = GetFiles();
-	result->read_file_list = read_file_list;
-	result->delete_scans = delete_scans;
-	result->inlined_data_tables = inlined_data_tables;
+	lock_guard<mutex> l(file_lock);
+	if (read_file_list) {
+		// a list whose files have not been read yet is copied unread, so that copying it does not read them
+		result->files = files;
+		result->read_file_list = true;
+		result->delete_scans = delete_scans;
+		result->inlined_data_tables = inlined_data_tables;
+	}
 	return std::move(result);
 }
 

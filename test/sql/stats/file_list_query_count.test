@@ -1,0 +1,194 @@
+# name: test/sql/stats/file_list_query_count.test
+# description: Each scan of a table reads its file list with a single metadata query
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_list_query_count', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (k INTEGER, v VARCHAR, w INTEGER)
+
+loop i 0 4
+
+statement ok
+INSERT INTO ducklake.t SELECT range + {i} * 1000, 'v' || (range % 10), range % 7 FROM range(1000)
+
+endloop
+
+statement ok
+CREATE TEMP TABLE probe AS SELECT range * 7 AS k FROM range(10)
+
+statement ok
+CREATE MACRO file_list_queries() AS (
+	SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+	WHERE lower(regexp_replace(query, '\s+', '', 'g')) LIKE '%data.partial_max%'
+)
+
+# no filter
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(k) FROM ducklake.t
+----
+7998000
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT file_list_queries()
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a filter on a single column
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(k) FROM ducklake.t WHERE k BETWEEN 1500 AND 2500
+----
+2002000
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT file_list_queries()
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a disjunction across columns
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(k) FROM ducklake.t WHERE (k < 100 AND w = 1) OR (k > 3900 AND w = 2)
+----
+56057
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT file_list_queries()
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a filter pushed into the scan by a join
+statement ok
+SET disabled_optimizers='join_order,build_side_probe_side'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(t.k) FROM ducklake.t JOIN probe USING (k)
+----
+315
+
+statement ok
+CALL disable_logging()
+
+statement ok
+RESET disabled_optimizers
+
+query I
+SELECT file_list_queries()
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# Top-N
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT k FROM ducklake.t ORDER BY k DESC LIMIT 3
+----
+3999
+3998
+3997
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT file_list_queries()
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# late materialization scans the table twice - once each
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query III
+SELECT * FROM ducklake.t WHERE w = 3 ORDER BY k LIMIT 3
+----
+3	v3	3
+10	v0	3
+17	v7	3
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT file_list_queries()
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a prepared filtered scan sees the files the transaction writes after it was prepared
+statement ok
+BEGIN
+
+statement ok
+PREPARE filtered AS SELECT sum(k) FROM ducklake.t WHERE k BETWEEN 1500 AND 2500
+
+query I
+EXECUTE filtered
+----
+2002000
+
+statement ok
+INSERT INTO ducklake.t VALUES (2000, 'x', 0)
+
+query I
+EXECUTE filtered
+----
+2004000
+
+statement ok
+DELETE FROM ducklake.t WHERE k BETWEEN 1500 AND 1999
+
+query I
+EXECUTE filtered
+----
+1129250
+
+statement ok
+ROLLBACK
