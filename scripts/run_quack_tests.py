@@ -58,7 +58,7 @@ DEFAULT_BUILD_DIR = REPO_ROOT / "build" / "release"
 DEFAULT_PORT = 19999
 DEFAULT_TOKEN = "ducklake-test-token"
 DEFAULT_TIMEOUT = 120  # seconds per test
-SIDECAR_STARTUP_TIMEOUT = 5.0  # seconds to wait for :PORT to listen
+SIDECAR_STARTUP_TIMEOUT = 30.0  # seconds to wait for :PORT to listen
 
 
 @dataclass

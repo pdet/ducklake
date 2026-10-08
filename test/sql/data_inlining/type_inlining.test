@@ -6,6 +6,8 @@ require ducklake
 
 require json
 
+require icu
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -30,6 +32,9 @@ SELECT * FROM table_9734;
 1	{'a': 1, 'ts': '2026-01-01 12:00:00'}
 
 # issue 1155
+
+statement ok
+SET TimeZone='UTC';
 
 statement ok
 CREATE TABLE table_1155 (id VARCHAR, attrs STRUCT(name VARCHAR, ts TIMESTAMPTZ));
