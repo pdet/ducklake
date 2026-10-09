@@ -66,6 +66,8 @@ struct SnapshotChangeInformation {
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;
 	static SnapshotChangeInformation ParseChangesMade(const string &changes_made);
+	//! Every change kind ParseChangesMade accepts
+	static vector<string> KnownChangeKinds();
 };
 
 } // namespace duckdb

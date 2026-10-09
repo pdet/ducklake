@@ -1,0 +1,458 @@
+# name: test/sql/server_side_commit/postgres_server_side_sequenced.test
+# description: Client retries on a Postgres catalog are sequenced on the commit key
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_sequenced CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_sequenced', METADATA_SCHEMA 'server_side_sequenced')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+# a lost DDL race retries sequenced
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.a (i INTEGER)
+
+statement ok con2
+CREATE TABLE dl.b (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%pg_advisory_xact_lock(1145848659, %'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+0
+
+# the sequencer is the first statement of its Postgres transaction
+query II
+WITH pg_log AS (
+	SELECT row_number() OVER () AS seq, transaction_id, query FROM duckdb_logs_parsed('PostgresQueryLog')
+), sequencer AS (
+	SELECT seq, transaction_id FROM pg_log WHERE query LIKE 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%'
+)
+SELECT count(*), min(p.query) FROM pg_log p JOIN sequencer s USING (transaction_id) WHERE p.seq < s.seq
+----
+1	BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl'
+----
+2
+
+# a slow fallback stub hands every append back to the client
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_sequenced.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''fallback''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 1::BIGINT, ''stub''::TEXT
+FROM pg_sleep(0.02) $$')
+
+# a lost inlined append race reads its state once
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (0)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (1)
+
+statement ok con2
+INSERT INTO dl.t VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+WITH pg_log AS (
+	SELECT row_number() OVER () AS seq, transaction_id, query FROM duckdb_logs_parsed('PostgresQueryLog')
+), sequencer AS (
+	SELECT transaction_id FROM pg_log WHERE query LIKE 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%'
+)
+SELECT list(CASE WHEN p.query LIKE 'BEGIN TRANSACTION%' THEN 'begin'
+                 WHEN p.query LIKE 'SET TRANSACTION%' THEN 'sequencer'
+                 WHEN p.query LIKE 'COPY (SELECT "snapshot_id", "schema_version"%' THEN 'state'
+                 WHEN p.query LIKE 'INSERT INTO "server_side_sequenced".ducklake_snapshot VALUES%' THEN 'batch'
+                 ELSE p.query END ORDER BY p.seq)
+FROM pg_log p JOIN sequencer s USING (transaction_id)
+----
+[begin, sequencer, state, batch]
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+3	3	2	3
+
+query II
+SELECT record_count, next_row_id FROM postgres_query('pg', 'SELECT s.record_count, s.next_row_id
+FROM server_side_sequenced.ducklake_table_stats s JOIN server_side_sequenced.ducklake_table t USING (table_id)
+WHERE t.table_name = ''t'' AND t.end_snapshot IS NULL')
+----
+3	3
+
+# first inlined inserts use the inlined table of the winner, or create one
+statement ok
+CREATE TABLE dl.w1 (i INTEGER)
+
+statement ok
+CREATE TABLE dl.w2 (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.w1 VALUES (1)
+
+statement ok con2
+INSERT INTO dl.w1 VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.w2 VALUES (1)
+
+statement ok con2
+INSERT INTO dl.a VALUES (1)
+
+statement ok con1
+COMMIT
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.w1
+----
+2	2	1	3
+
+query I
+SELECT i FROM dl.w2
+----
+1
+
+query II
+SELECT table_name, count(*) FROM postgres_query('pg', 'SELECT t.table_name FROM server_side_sequenced.ducklake_inlined_data_tables i
+JOIN server_side_sequenced.ducklake_table t USING (table_id) WHERE t.table_name IN (''w1'', ''w2'') AND t.end_snapshot IS NULL')
+GROUP BY ALL ORDER BY ALL
+----
+w1	1
+w2	1
+
+# a missing table size is filled before the merge
+statement ok
+CREATE TABLE dl.s AS SELECT range::INTEGER AS i FROM range(100)
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE server_side_sequenced.ducklake_table_stats SET file_size_bytes = NULL
+WHERE table_id = (SELECT table_id FROM server_side_sequenced.ducklake_table WHERE table_name = ''s'' AND end_snapshot IS NULL)')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.s SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.w2 VALUES (2)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT size_matches FROM postgres_query('pg', 'SELECT s.file_size_bytes = (SELECT SUM(d.file_size_bytes)
+FROM server_side_sequenced.ducklake_data_file d WHERE d.table_id = s.table_id AND d.end_snapshot IS NULL) AS size_matches
+FROM server_side_sequenced.ducklake_table_stats s JOIN server_side_sequenced.ducklake_table t USING (table_id)
+WHERE t.table_name = ''s'' AND t.end_snapshot IS NULL')
+----
+true
+
+# a busy commit key runs the retry unsequenced once its budget is spent
+statement ok
+CREATE TABLE dl.p AS SELECT range::INTEGER AS i FROM range(100)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+SET ducklake_retry_wait_ms = 10
+
+statement ok
+SET ducklake_retry_backoff = 1
+
+statement ok
+SET ducklake_max_retry_count = 3
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_sequenced'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'info')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+statement ok con2
+INSERT INTO dl.t VALUES (4)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.p WHERE i < 10
+
+statement ok con2
+INSERT INTO dl.u VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+# the budget starts with the first retry, the stub spent part of it
+query III
+SELECT count(*), min(regexp_extract(message, 'within ([0-9]+) ms', 1)::INTEGER) <= 10,
+       max(regexp_extract(message, 'within ([0-9]+) ms', 1)::INTEGER) <= 30
+FROM duckdb_logs
+WHERE regexp_matches(message, '^DuckLake commit attempt 1 did not get the commit key within [0-9]+ ms and runs unsequenced$')
+----
+2	true	true
+
+statement ok
+CALL disable_logging()
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+5	5	4	10
+
+query II
+SELECT count(*), min(i) FROM dl.p
+----
+90	10
+
+query I
+SELECT i FROM dl.u
+----
+1
+
+# a statement_timeout below the budget bounds the wait
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-cstatement_timeout=1000' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_sequenced', METADATA_SCHEMA 'server_side_sequenced')
+
+statement ok
+SET ducklake_retry_wait_ms = 1000
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_sequenced'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'info')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (5)
+
+statement ok con2
+INSERT INTO dl.t VALUES (6)
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+----
+1
+
+statement ok
+CALL disable_logging()
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+7	7	6	21
+
+# the retry is stamped after its key wait
+query II
+SELECT max(snapshot_time) - min(snapshot_time) >= INTERVAL 600 MILLISECONDS, arg_max(snapshot_time, snapshot_id) = max(snapshot_time)
+FROM postgres_query('pg', 'SELECT snapshot_id, snapshot_time FROM server_side_sequenced.ducklake_snapshot
+ORDER BY snapshot_id DESC LIMIT 2')
+----
+true	true
+
+statement ok
+DETACH dl
+
+statement ok
+RESET ducklake_retry_wait_ms
+
+statement ok
+RESET ducklake_retry_backoff
+
+statement ok
+RESET ducklake_max_retry_count
+
+# a sequencer without PL/pgSQL turns sequencing off
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE IF EXISTS ducklake_sequenced_role')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE ROLE ducklake_sequenced_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE, CREATE ON SCHEMA server_side_sequenced TO ducklake_sequenced_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT ALL ON ALL TABLES IN SCHEMA server_side_sequenced TO ducklake_sequenced_role')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_sequenced_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_sequenced', METADATA_SCHEMA 'server_side_sequenced')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+# a failed run is undone by the GRANT above
+statement ok
+CALL postgres_execute('pg', 'REVOKE USAGE ON LANGUAGE plpgsql FROM PUBLIC')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'warning')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (7)
+
+statement ok con2
+INSERT INTO dl.t VALUES (8)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message LIKE 'DuckLake commit attempt 1 runs unsequenced:%permission denied for language plpgsql%'
+----
+1
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+9	9	8	36
+
+statement ok
+DETACH dl
+
+query I
+SELECT bool_and(snapshot_time >= previous_time) FROM (
+	SELECT snapshot_time, lag(snapshot_time) OVER (ORDER BY snapshot_id) AS previous_time
+	FROM postgres_query('pg', 'SELECT snapshot_id, snapshot_time FROM server_side_sequenced.ducklake_snapshot'))
+----
+true
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_sequenced CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE ducklake_sequenced_role')

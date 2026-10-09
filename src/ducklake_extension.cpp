@@ -33,6 +33,20 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          Value::UBIGINT(100), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption("ducklake_retry_backoff", "Backoff factor for exponentially increasing retry wait time",
 	                          LogicalType::DOUBLE, Value::DOUBLE(1.5), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption("ducklake_server_side_retries",
+	                          "Let the metadata server retry commits that lost a race, when it supports it",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption("ducklake_debug_relative_commit",
+	                          "DEBUG SETTING: commit appends on Postgres through the retry-invariant SQL template",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	auto set_server_commit_fault = [](ClientContext &, SetScope, Value &parameter) {
+		if (!parameter.IsNull() && !parameter.ToString().empty() && parameter.ToString() != "ack_lost") {
+			throw InvalidInputException("ducklake_debug_server_commit_fault must be '' or 'ack_lost'");
+		}
+	};
+	config.AddExtensionOption("ducklake_debug_server_commit_fault",
+	                          "DEBUG SETTING: 'ack_lost' loses the reply of a committed server-side commit",
+	                          LogicalType::VARCHAR, Value(""), set_server_commit_fault, SetScope::GLOBAL);
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);

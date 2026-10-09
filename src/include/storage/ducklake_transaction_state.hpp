@@ -22,6 +22,17 @@ struct DuckLakeColumnSchemaEntry {
 	bool is_root;
 };
 
+//! One commit attempt, after its batch was rendered
+struct DuckLakeCommitAttempt {
+	DuckLakeSnapshot transaction_snapshot;
+	//! The snapshot the attempt builds on
+	DuckLakeSnapshot read_snapshot;
+	DuckLakeSnapshot commit_snapshot;
+	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
+	const TransactionChangeInformation &changes;
+	const string &batch;
+};
+
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
@@ -51,6 +62,28 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
+	//! Sequenced retry state; false runs unsequenced
+	std::function<bool(idx_t, DuckLakeSnapshot, SnapshotAndStats &, SnapshotChangeInfo &)> acquire_sequenced_state =
+	    [](idx_t, DuckLakeSnapshot, SnapshotAndStats &, SnapshotChangeInfo &) {
+		    return false;
+	    };
+	//! Skips the backoff sleep before the next retry
+	std::function<bool()> retries_wait_on_server = []() {
+		return false;
+	};
+	//! Runs the attempt relatively; null runs the batch
+	std::function<unique_ptr<QueryResult>(const DuckLakeCommitAttempt &)> execute_relative_commit =
+	    [](const DuckLakeCommitAttempt &) {
+		    return nullptr;
+	    };
+	//! Runs the first retry on the server
+	std::function<DuckLakeServerAttempt()> server_attempt;
+	//! Prints the per-attempt ids; null prints literals
+	optional_ptr<const DuckLakeCommitIdRenderer> id_renderer;
+	//! Replaces the global stats SQL of a table
+	std::function<string(TableIndex, DuckLakeNewGlobalStats &, bool)> write_global_table_stats;
+	//! Resolves table data paths; empty reads metadata
+	std::function<string(TableIndex, const vector<DuckLakeTableInfo> &)> get_table_path;
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs cleanup statements atomically.
@@ -149,7 +182,7 @@ public:
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
-	                                   const DuckLakeCommitContext &context);
+	                                   const DuckLakeCommitContext &context, idx_t attempt);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
@@ -160,6 +193,9 @@ public:
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;
+	//! Renders the commit against per-attempt bases
+	DuckLakeRelativeCommit RenderRelativeCommit(const TransactionChangeInformation &transaction_changes, idx_t seed,
+	                                            const DuckLakeCommitContext &context);
 
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,
@@ -211,6 +247,16 @@ public:
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
 	void CleanupFiles();
+	//! True if the server committed; may move attempt
+	bool CommitOnServer(const DuckLakeCommitContext &context, const DuckLakeRetryConfig &retry_config, idx_t &attempt,
+	                    DuckLakeSnapshot &commit_snapshot);
+	[[noreturn]] void FailCommit(const ErrorData &error, bool finished_retrying,
+	                             const DuckLakeRetryConfig &retry_config);
+	static string CommitFailureMessage(bool finished_retrying, const DuckLakeRetryConfig &retry_config);
+	static string ConflictMessage(const string &action, idx_t index, const string &conflict_action);
+	//! Conflict phrase of a change kind blocking inserts
+	static const char *InsertConflictAction(const string &change_kind);
+	static string OutcomeUnknownMessage();
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 

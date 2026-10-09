@@ -26,8 +26,8 @@ public:
 	bool CommitsEachStatement() const override {
 		return true;
 	}
-	void ProbeServerCapabilities() override;
-	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
+	bool ProbeServerCapabilities() override;
+	bool SupportsServerSideCommit(const TransactionChangeInformation &changes) const override;
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
 	                            const TransactionChangeInformation &transaction_changes,
 	                            const DuckLakeRetryConfig &retry_config) override;

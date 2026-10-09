@@ -21,6 +21,7 @@
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
 #include "storage/ducklake_partition_data.hpp"
+#include "storage/ducklake_server_commit.hpp"
 #include "storage/ducklake_stats.hpp"
 
 #include <chrono>
@@ -321,12 +322,12 @@ public:
 		last_committed_snapshot = value;
 	}
 
-	//! Whether the metadata server can execute the commit retry loop server-side.
-	bool RetrialsServerSide() const {
-		return retrials_server_side;
+	//! How the server runs the commit retry loop
+	DuckLakeServerCommitMode GetServerCommitMode() const {
+		return server_commit_mode;
 	}
-	void SetRetrialsServerSide(bool value) {
-		retrials_server_side = value;
+	void SetServerCommitMode(DuckLakeServerCommitMode mode) {
+		server_commit_mode = mode;
 	}
 
 	Value GetLastCommittedSnapshotId() const {
@@ -419,8 +420,8 @@ private:
 	string instance_id;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
-	//! Whether or not the metadata server can execute the commit retry loop server-side.
-	bool retrials_server_side = false;
+	//! How the server runs the commit retry loop
+	atomic<DuckLakeServerCommitMode> server_commit_mode {DuckLakeServerCommitMode::NONE};
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)

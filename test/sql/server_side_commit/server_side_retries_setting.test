@@ -1,0 +1,130 @@
+# name: test/sql/server_side_commit/server_side_retries_setting.test
+# description: The ducklake_server_side_retries setting turns server-side commit retries off
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+query I
+SELECT current_setting('ducklake_server_side_retries')
+----
+true
+
+# the debug fault setting only takes known faults
+statement error
+SET ducklake_debug_server_commit_fault = 'unknown_fault'
+----
+ducklake_debug_server_commit_fault must be '' or 'ack_lost'
+
+statement ok
+SET ducklake_debug_server_commit_fault = 'ack_lost'
+
+statement ok
+RESET ducklake_debug_server_commit_fault
+
+query I
+SELECT current_setting('ducklake_debug_server_commit_fault')
+----
+(empty)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/server_side_retries_setting')
+
+statement ok
+USE ducklake
+
+query I
+SELECT server_side_retries = (catalog_type IN ('postgres', 'quack')) FROM ducklake_settings('ducklake')
+----
+true
+
+statement ok
+SET ducklake_server_side_retries = false
+
+query I
+SELECT current_setting('ducklake_server_side_retries')
+----
+false
+
+query I
+SELECT server_side_retries FROM ducklake_settings('ducklake')
+----
+false
+
+statement ok
+RESET ducklake_server_side_retries
+
+query I
+SELECT current_setting('ducklake_server_side_retries')
+----
+true
+
+query I
+SELECT server_side_retries = (catalog_type IN ('postgres', 'quack')) FROM ducklake_settings('ducklake')
+----
+true
+
+# setting off: lost races retry on the client
+statement ok
+SET ducklake_server_side_retries = false
+
+statement ok
+CREATE TABLE t (i INTEGER)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit%'
+----
+0
+
+query I
+SELECT i FROM t ORDER BY i
+----
+1
+2
+
+statement ok
+CALL disable_logging()
+
+# setting off at attach skips the probe
+statement ok
+USE memory
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/server_side_retries_setting')
+
+statement ok
+RESET ducklake_server_side_retries
+
+query I
+SELECT server_side_retries FROM ducklake_settings('ducklake')
+----
+false
+
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+1
+2

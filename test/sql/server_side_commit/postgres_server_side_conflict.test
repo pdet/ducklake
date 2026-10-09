@@ -1,0 +1,243 @@
+# name: test/sql/server_side_commit/postgres_server_side_conflict.test
+# description: ducklake_commit_v1 reports insert conflicts like the client loop
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_conflict CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_conflict', METADATA_SCHEMA 'server_side_conflict')
+
+statement ok
+CREATE TABLE dl.d (i INTEGER)
+
+statement ok
+CREATE TABLE dl.n (i INTEGER)
+
+statement ok
+CREATE TABLE dl.c (i INTEGER)
+
+statement ok
+INSERT INTO dl.d SELECT range FROM range(100)
+
+statement ok
+INSERT INTO dl.n VALUES (1), (2), (3)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a parquet insert against a concurrent delete
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.d SELECT range FROM range(100, 200)
+
+statement ok con2
+DELETE FROM dl.d WHERE i < 50
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_conflict/**/*.parquet')
+----
+3
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nTransaction conflict - attempting to insert into table with index "1" - but another transaction has deleted from it.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_conflict/**/*.parquet')
+----
+2
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('dl')
+----
+6
+
+query II
+SELECT count(*), max(i) FROM dl.d
+----
+50	99
+
+# an inlined insert against a concurrent inlined delete
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.n VALUES (4)
+
+statement ok con2
+DELETE FROM dl.n WHERE i = 1
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nTransaction conflict - attempting to insert into table with index "2" - but another transaction has deleted inlined data from it.*
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('dl')
+----
+7
+
+# an insert against a concurrent comment
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.c VALUES (1)
+
+statement ok con2
+COMMENT ON TABLE dl.c IS 'commented'
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nTransaction conflict - attempting to insert into table with index "3" - but another transaction has altered it.*
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+3
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('dl')
+----
+8
+
+query I
+SELECT count(*) FROM dl.c
+----
+0
+
+# a change kind inside a quoted name is no conflict
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.c VALUES (2)
+
+statement ok con2
+CREATE TABLE dl."x,deleted_from_table:3,y" (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id > 8 ORDER BY snapshot_id
+----
+9	{tables_created=['main."x,deleted_from_table:3,y"']}
+10	{inlined_insert=[3]}
+
+query I
+SELECT i FROM dl.c
+----
+2
+
+# flushes and compactions do not conflict with inserts
+statement ok
+CREATE TABLE dl.f (i INTEGER)
+
+statement ok
+INSERT INTO dl.f VALUES (1), (2)
+
+statement ok
+CREATE TABLE dl.m (i INTEGER)
+
+statement ok
+INSERT INTO dl.m SELECT range FROM range(20)
+
+statement ok
+INSERT INTO dl.m SELECT range FROM range(20, 40)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.f VALUES (3)
+
+statement ok con2
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.m SELECT range FROM range(40, 60)
+
+statement ok con2
+CALL ducklake_merge_adjacent_files('dl', 'm')
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+2
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.f
+----
+3	3	2	6
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.m
+----
+60	60	59	1770
+
+query II
+SELECT record_count, next_row_id FROM postgres_query('pg', 'SELECT s.* FROM server_side_conflict.ducklake_table_stats s
+JOIN server_side_conflict.ducklake_table t USING (table_id) WHERE t.table_name = ''m'' AND t.end_snapshot IS NULL')
+----
+60	60
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_conflict CASCADE')

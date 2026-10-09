@@ -1,0 +1,920 @@
+# name: test/sql/server_side_commit/postgres_server_side_parity.test
+# description: Relative commits leave the same metadata as absolute commits on a Postgres catalog
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads = 1
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+foreach lake rel abs lit fn off
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS parity_{lake} CASCADE')
+
+endloop
+
+foreach lake rel abs
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS {lake} (DATA_PATH '{DATA_PATH}/parity_{lake}', METADATA_SCHEMA 'parity_{lake}')
+
+statement ok
+CREATE TABLE {lake}.t_num (i INTEGER, b BIGINT, h HUGEINT, dec DECIMAL(18,3), bo BOOLEAN)
+
+statement ok
+CREATE TABLE {lake}.t_flt (f FLOAT, d DOUBLE)
+
+statement ok
+CREATE TABLE {lake}.t_str (s VARCHAR, bl BLOB, u UUID, iv INTERVAL)
+
+statement ok
+CREATE TABLE {lake}.t_time (dt DATE, ts TIMESTAMP, tz TIMESTAMPTZ)
+
+statement ok
+CREATE TABLE {lake}.t_nest (st STRUCT(a INTEGER, b VARCHAR), l INTEGER[])
+
+statement ok
+CREATE TABLE {lake}.t_part (i INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE {lake}.t_part SET PARTITIONED BY (p)
+
+statement ok
+CREATE TABLE {lake}.t_null (x INTEGER, y VARCHAR)
+
+statement ok
+CREATE TABLE {lake}.t_null_parquet (x INTEGER, y VARCHAR)
+
+statement ok
+CREATE TABLE {lake}.t_bounds (x INTEGER, y VARCHAR, z DOUBLE)
+
+statement ok
+CREATE TABLE {lake}.t_empty (k INTEGER, v VARCHAR)
+
+statement ok
+CREATE TABLE {lake}.t_time_fallback (tm TIME)
+
+endloop
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+foreach lake rel abs
+
+statement ok
+SET ducklake_debug_relative_commit = ('{lake}' = 'rel')
+
+statement ok
+SET ducklake_server_side_retries = ('{lake}' = 'rel')
+
+# all-NULL first inserts, inlined and parquet
+statement ok
+INSERT INTO {lake}.t_null VALUES (NULL, NULL), (NULL, NULL)
+
+statement ok
+INSERT INTO {lake}.t_null_parquet SELECT NULL, NULL FROM range(50)
+
+statement ok
+INSERT INTO {lake}.t_null SELECT i, 'v' || i FROM range(30) t(i)
+
+statement ok
+INSERT INTO {lake}.t_null_parquet SELECT i, 'v' || i FROM range(30) t(i)
+
+# numeric extremes, inlined then parquet then inlined
+statement ok
+INSERT INTO {lake}.t_num VALUES (0, 0, 0, -0.000, false), (NULL, 5, NULL, 1.5, NULL)
+
+statement ok
+INSERT INTO {lake}.t_num SELECT i - 20, i * 1000000000000, i::HUGEINT * 1000000000000000000000, i / 8, i % 2 = 0
+FROM range(40) t(i)
+
+statement ok
+INSERT INTO {lake}.t_num VALUES (-2147483648, -9223372036854775808, -170141183460469231731687303715884105728,
+-999999999999999.999, true), (2147483647, 9223372036854775807, 170141183460469231731687303715884105727,
+999999999999999.999, false)
+
+# floating point specials
+statement ok
+INSERT INTO {lake}.t_flt VALUES ('-0.0', '-0.0'), ('1e-45', '5e-324')
+
+statement ok
+INSERT INTO {lake}.t_flt VALUES ('inf', '-inf'), (NULL, 2.5)
+
+statement ok
+INSERT INTO {lake}.t_flt SELECT i / 3, i / 7 FROM range(25) t(i)
+
+statement ok
+INSERT INTO {lake}.t_flt VALUES ('nan', 'nan'), ('-inf', 'inf')
+
+statement ok
+INSERT INTO {lake}.t_flt SELECT 'nan', 'nan' FROM range(15)
+
+# strings, the placeholder value is no bound
+statement ok
+INSERT INTO {lake}.t_str VALUES ('m{SNAPSHOT_ID}m', '\x00\x01'::BLOB, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+INTERVAL 3 DAY), ('é', NULL, NULL, NULL)
+
+statement ok
+INSERT INTO {lake}.t_str SELECT 'b' || repeat('x', 200) || i, ('\x' || lpad(i::VARCHAR, 2, '0'))::BLOB,
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a' || lpad(i::VARCHAR, 2, '0'))::UUID, INTERVAL (i) HOUR
+FROM range(20) t(i)
+
+statement ok
+INSERT INTO {lake}.t_str VALUES ('日本', '\xff'::BLOB, 'ffffffff-9c0b-4ef8-bb6d-6bb9bd380a11', INTERVAL 1 YEAR),
+('a', '\x00'::BLOB, '00000000-0000-4000-8000-000000000000', INTERVAL 1 MINUTE)
+
+statement ok
+INSERT INTO {lake}.t_str SELECT 'c' || repeat('y', 200), NULL, NULL, INTERVAL 2 DAY FROM range(12)
+
+# temporal infinities, BC and long years
+statement ok
+INSERT INTO {lake}.t_time VALUES ('2024-01-01', '2024-01-01 10:00:00', '2024-01-01 12:00:00+05')
+
+statement ok
+INSERT INTO {lake}.t_time VALUES ('infinity', make_timestamp(-43, 3, 15, 12, 0, 0), '2024-06-01 00:00:00-08'),
+(make_date(-43, 3, 15), 'infinity', 'infinity')
+
+statement ok
+INSERT INTO {lake}.t_time SELECT DATE '2000-01-01' + i::INTEGER, TIMESTAMP '2000-01-01' + INTERVAL (i) DAY,
+TIMESTAMPTZ '2000-01-01 00:00:00+01' + INTERVAL (i) HOUR FROM range(20) t(i)
+
+statement ok
+INSERT INTO {lake}.t_time VALUES ('12345-06-07', '-infinity', '-infinity'), ('-infinity', '12345-01-01 01:02:03.5',
+'0044-03-15 12:00:00+00')
+
+statement ok
+INSERT INTO {lake}.t_time SELECT '12345-06-07', '0044-03-15 (BC)', '2010-01-01 00:00:00+14' FROM range(11)
+
+# nested leaves
+statement ok
+INSERT INTO {lake}.t_nest VALUES ({'a': 1, 'b': 'x'}, [1, 2]), (NULL, NULL)
+
+statement ok
+INSERT INTO {lake}.t_nest SELECT {'a': i, 'b': 'y' || i}, [i, i + 1] FROM range(20) t(i)
+
+statement ok
+INSERT INTO {lake}.t_nest VALUES ({'a': -5, 'b': NULL}, [NULL, 100])
+
+# partitioned
+statement ok
+INSERT INTO {lake}.t_part SELECT i, i % 3 FROM range(30) t(i)
+
+statement ok
+INSERT INTO {lake}.t_part VALUES (100, 1)
+
+# all-NULL parquet and inlined keep existing bounds
+statement ok
+INSERT INTO {lake}.t_bounds SELECT i, 'b' || i, i / 4 FROM range(20) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO {lake}.t_bounds SELECT NULL, NULL, NULL FROM range(50)
+
+statement ok
+INSERT INTO {lake}.t_bounds VALUES (NULL, NULL, NULL), (NULL, NULL, NULL)
+
+statement ok
+COMMIT
+
+# mixed parquet and inlined in one transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO {lake}.t_bounds SELECT i * 2, 'c' || i, NULL FROM range(15) t(i)
+
+statement ok
+INSERT INTO {lake}.t_bounds VALUES (-7, 'a', 'nan')
+
+statement ok
+COMMIT
+
+# three tables in one transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO {lake}.t_num VALUES (7, 7, 7, 7.007, true)
+
+statement ok
+INSERT INTO {lake}.t_flt SELECT -i, i FROM range(12) t(i)
+
+statement ok
+INSERT INTO {lake}.t_empty VALUES (1, 'one')
+
+statement ok
+COMMIT
+
+# an emptied table takes its next insert
+statement ok
+DELETE FROM {lake}.t_empty
+
+statement ok
+INSERT INTO {lake}.t_empty VALUES (2, 'two')
+
+statement ok
+INSERT INTO {lake}.t_empty SELECT i, 'many' FROM range(20) t(i)
+
+# a missing table size is filled by the client
+statement ok
+CALL postgres_execute('pg', 'UPDATE parity_{lake}.ducklake_table_stats SET file_size_bytes = NULL WHERE table_id = 1')
+
+statement ok
+INSERT INTO {lake}.t_num SELECT i, i, i, i, true FROM range(20) t(i)
+
+statement ok
+INSERT INTO {lake}.t_nest VALUES ({'a': 0, 'b': 'z'}, [])
+
+# a lost race retries relatively
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.t_bounds VALUES (1000, 'zzz', 9.5)
+
+statement ok con2
+INSERT INTO {lake}.t_bounds VALUES (-1000, 'aaa', -9.5)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.t_part SELECT i, 2 FROM range(15) t(i)
+
+statement ok con2
+INSERT INTO {lake}.t_part VALUES (-1, 0)
+
+statement ok con1
+COMMIT
+
+# a type without Postgres ordering falls back
+statement ok
+INSERT INTO {lake}.t_time_fallback VALUES ('10:00:00')
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET ducklake_debug_relative_commit = false
+
+statement ok
+RESET ducklake_server_side_retries
+
+# appends use the template, lost races the function
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'PostgresQueryLog' AND message LIKE '%DO $dlrel$%'
+AND message LIKE '%parity_rel%'
+----
+38
+
+query II
+SELECT count(*) FILTER (query LIKE '%parity_rel%'), count(*) FILTER (query LIKE '%parity_abs%')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+2	0
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'PostgresQueryLog' AND message LIKE '%DO $dlrel$%'
+AND message LIKE '%parity_abs%'
+----
+0
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake relative commit fell back:%' ORDER BY message
+----
+DuckLake relative commit fell back: DuckLake relative commit cannot order TIME stats
+DuckLake relative commit fell back: missing size of table 1
+
+statement ok
+CALL pg_clear_cache()
+
+query I
+SELECT count(*) FROM pg.parity_rel.ducklake_snapshot
+----
+53
+
+query I
+SELECT count(*) FROM (
+	(SELECT * EXCLUDE (snapshot_time) FROM pg.parity_rel.ducklake_snapshot
+	 EXCEPT ALL SELECT * EXCLUDE (snapshot_time) FROM pg.parity_abs.ducklake_snapshot)
+	UNION ALL
+	(SELECT * EXCLUDE (snapshot_time) FROM pg.parity_abs.ducklake_snapshot
+	 EXCEPT ALL SELECT * EXCLUDE (snapshot_time) FROM pg.parity_rel.ducklake_snapshot))
+----
+0
+
+# file names are random
+query I
+SELECT count(*) FROM (
+	(SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_rel.ducklake_data_file
+	 EXCEPT ALL SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_abs.ducklake_data_file)
+	UNION ALL
+	(SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_abs.ducklake_data_file
+	 EXCEPT ALL SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_rel.ducklake_data_file))
+----
+0
+
+query I
+SELECT bool_and(path_is_relative) AND count(*) = 21 FROM pg.parity_rel.ducklake_data_file
+----
+true
+
+foreach metadata_table ducklake_snapshot_changes ducklake_table_stats ducklake_table_column_stats ducklake_file_column_stats ducklake_file_partition_value ducklake_inlined_data_tables
+
+query I
+SELECT count(*) FROM (
+	(FROM pg.parity_rel.{metadata_table} EXCEPT ALL FROM pg.parity_abs.{metadata_table})
+	UNION ALL
+	(FROM pg.parity_abs.{metadata_table} EXCEPT ALL FROM pg.parity_rel.{metadata_table}))
+----
+0
+
+endloop
+
+query I
+SELECT string_agg(table_name, ' ' ORDER BY table_name) FROM pg.parity_rel.ducklake_inlined_data_tables
+----
+ducklake_inlined_data_10_10 ducklake_inlined_data_11_11 ducklake_inlined_data_12_12 ducklake_inlined_data_1_1 ducklake_inlined_data_2_2 ducklake_inlined_data_3_3 ducklake_inlined_data_4_4 ducklake_inlined_data_5_5 ducklake_inlined_data_6_6 ducklake_inlined_data_6_7 ducklake_inlined_data_8_8 ducklake_inlined_data_9_9
+
+foreach inlined_table 10_10 11_11 12_12 1_1 2_2 3_3 4_4 5_5 6_6 6_7 8_8 9_9
+
+query I
+SELECT count(*) FROM (
+	(FROM pg.parity_rel.ducklake_inlined_data_{inlined_table} EXCEPT ALL FROM pg.parity_abs.ducklake_inlined_data_{inlined_table})
+	UNION ALL
+	(FROM pg.parity_abs.ducklake_inlined_data_{inlined_table} EXCEPT ALL FROM pg.parity_rel.ducklake_inlined_data_{inlined_table}))
+----
+0
+
+endloop
+
+foreach data_table t_num t_flt t_str t_time t_nest t_part t_null t_null_parquet t_bounds t_empty t_time_fallback
+
+query I
+SELECT count(*) FROM (
+	(SELECT rowid, * FROM rel.{data_table} EXCEPT ALL SELECT rowid, * FROM abs.{data_table})
+	UNION ALL
+	(SELECT rowid, * FROM abs.{data_table} EXCEPT ALL SELECT rowid, * FROM rel.{data_table}))
+----
+0
+
+query I
+SELECT count(*) = count(DISTINCT rowid) FROM rel.{data_table}
+----
+true
+
+endloop
+
+# t_empty deleted its first row id
+query II
+SELECT count(*), max(rowid) FROM rel.t_empty
+----
+21	21
+
+# all-NULL appends kept bounds, the race widened them
+query IIIIII
+SELECT column_id, contains_null, contains_nan, min_value, max_value, min_is_exact
+FROM pg.parity_rel.ducklake_table_column_stats WHERE table_id = 10 ORDER BY column_id
+----
+1	true	NULL	-1000	1000	true
+2	true	NULL	a	zzz	true
+3	true	true	-9.5	nan	true
+
+query III
+SELECT record_count, next_row_id, file_size_bytes > 0 FROM pg.parity_rel.ducklake_table_stats WHERE table_id = 10
+----
+90	90	true
+
+# fn lake appends lose races and use ducklake_commit_v1
+# kept apart from rel/abs, which isolate the template
+foreach lake fn off
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS {lake} (DATA_PATH '{DATA_PATH}/parity_{lake}', METADATA_SCHEMA 'parity_{lake}')
+
+statement ok
+CREATE TABLE {lake}.r (k INTEGER)
+
+statement ok
+CREATE TABLE {lake}.f_num (i INTEGER, b BIGINT, h HUGEINT, dec DECIMAL(18,3), bo BOOLEAN)
+
+statement ok
+CREATE TABLE {lake}.f_flt (f FLOAT, d DOUBLE)
+
+statement ok
+CREATE TABLE {lake}.f_str (s VARCHAR, bl BLOB, u UUID, iv INTERVAL)
+
+statement ok
+CREATE TABLE {lake}.f_time (dt DATE, ts TIMESTAMP, tz TIMESTAMPTZ)
+
+statement ok
+CREATE TABLE {lake}.f_nest (st STRUCT(a INTEGER, b VARCHAR), l INTEGER[])
+
+statement ok
+CREATE TABLE {lake}.f_part (i INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE {lake}.f_part SET PARTITIONED BY (p)
+
+statement ok
+CREATE TABLE {lake}.f_bounds (x INTEGER, y VARCHAR, z DOUBLE)
+
+statement ok
+CREATE TABLE {lake}.f_lit (s VARCHAR)
+
+statement ok
+CREATE TABLE {lake}.f_tm (tm TIME)
+
+statement ok
+INSERT INTO {lake}.f_bounds SELECT i, 'b' || i, i / 4 FROM range(20) t(i)
+
+endloop
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+foreach lake fn off
+
+statement ok
+SET ducklake_server_side_retries = ('{lake}' = 'fn')
+
+# first inserts into an empty table
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_num VALUES (0, 0, 0, -0.000, false), (NULL, 5, NULL, 1.5, NULL)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (0)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_num SELECT i - 20, i * 1000000000000, i::HUGEINT * 1000000000000000000000, i / 8, i % 2 = 0
+FROM range(40) t(i)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_num VALUES (-2147483648, -9223372036854775808, -170141183460469231731687303715884105728,
+-999999999999999.999, true), (2147483647, 9223372036854775807, 170141183460469231731687303715884105727,
+999999999999999.999, false)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (2)
+
+statement ok con1
+COMMIT
+
+# floating point specials
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_flt VALUES ('-0.0', '-0.0'), ('1e-45', '5e-324'), ('inf', '-inf'), (NULL, 2.5), ('nan', 'nan')
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (3)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_flt SELECT i / 3, i / 7 FROM range(25) t(i)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (4)
+
+statement ok con1
+COMMIT
+
+# strings, the placeholder value is no bound
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_str VALUES ('m{SNAPSHOT_ID}m', '\x00\x01'::BLOB, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+INTERVAL 3 DAY), ('é', NULL, NULL, NULL), ('a', '\xff'::BLOB, '00000000-0000-4000-8000-000000000000', INTERVAL 1 MINUTE)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (5)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_str SELECT 'b' || repeat('x', 200) || i, ('\x' || lpad(i::VARCHAR, 2, '0'))::BLOB,
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a' || lpad(i::VARCHAR, 2, '0'))::UUID, INTERVAL (i) HOUR
+FROM range(20) t(i)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (6)
+
+statement ok con1
+COMMIT
+
+# temporal infinities, BC and long years
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_time VALUES ('infinity', make_timestamp(-43, 3, 15, 12, 0, 0), '2024-06-01 00:00:00-08'),
+(make_date(-43, 3, 15), 'infinity', 'infinity'), ('12345-06-07', '-infinity', '-infinity')
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (7)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_time SELECT DATE '2000-01-01' + i::INTEGER, TIMESTAMP '2000-01-01' + INTERVAL (i) DAY,
+TIMESTAMPTZ '2000-01-01 00:00:00+01' + INTERVAL (i) HOUR FROM range(20) t(i)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (8)
+
+statement ok con1
+COMMIT
+
+# nested leaves
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_nest SELECT {'a': i, 'b': 'y' || i}, [i, i + 1] FROM range(20) t(i)
+
+statement ok con1
+INSERT INTO {lake}.f_nest VALUES ({'a': -5, 'b': NULL}, [NULL, 100]), (NULL, NULL)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (9)
+
+statement ok con1
+COMMIT
+
+# partitioned
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_part SELECT i, i % 3 FROM range(30) t(i)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (10)
+
+statement ok con1
+COMMIT
+
+# all-NULL parquet and inlined keep existing bounds
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_bounds SELECT NULL, NULL, NULL FROM range(50)
+
+statement ok con1
+INSERT INTO {lake}.f_bounds VALUES (NULL, NULL, NULL), (NULL, NULL, NULL)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (11)
+
+statement ok con1
+COMMIT
+
+# mixed parquet and inlined
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_bounds SELECT i * 2, 'c' || i, NULL FROM range(15) t(i)
+
+statement ok con1
+INSERT INTO {lake}.f_bounds VALUES (-7, 'a', 'nan')
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (12)
+
+statement ok con1
+COMMIT
+
+# three tables
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_num VALUES (7, 7, 7, 7.007, true)
+
+statement ok con1
+INSERT INTO {lake}.f_flt SELECT -i, i FROM range(12) t(i)
+
+statement ok con1
+INSERT INTO {lake}.f_str VALUES ('日本', '\x00'::BLOB, NULL, INTERVAL 1 YEAR)
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (13)
+
+statement ok con1
+COMMIT
+
+# placeholder text as bounds
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_lit VALUES ('{SNAPSHOT_ID}z'), ('{METADATA_CATALOG}y')
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (14)
+
+statement ok con1
+COMMIT
+
+# a type without Postgres ordering hands back
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO {lake}.f_tm VALUES ('10:00:00')
+
+statement ok con2
+INSERT INTO {lake}.r VALUES (15)
+
+statement ok con1
+COMMIT
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+statement ok
+RESET ducklake_server_side_retries
+
+query II
+SELECT count(*) FILTER (query LIKE '%parity_fn%'), count(*) FILTER (query LIKE '%parity_off%')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+15	0
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake server-side commit handed back%'
+----
+DuckLake server-side commit handed back to the client: DuckLake relative commit cannot order TIME stats
+
+statement ok
+CALL pg_clear_cache()
+
+query I
+SELECT count(*) FROM pg.parity_fn.ducklake_snapshot
+----
+45
+
+query I
+SELECT count(*) FROM (
+	(SELECT * EXCLUDE (snapshot_time) FROM pg.parity_fn.ducklake_snapshot
+	 EXCEPT ALL SELECT * EXCLUDE (snapshot_time) FROM pg.parity_off.ducklake_snapshot)
+	UNION ALL
+	(SELECT * EXCLUDE (snapshot_time) FROM pg.parity_off.ducklake_snapshot
+	 EXCEPT ALL SELECT * EXCLUDE (snapshot_time) FROM pg.parity_fn.ducklake_snapshot))
+----
+0
+
+query I
+SELECT count(*) FROM (
+	(SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_fn.ducklake_data_file
+	 EXCEPT ALL SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_off.ducklake_data_file)
+	UNION ALL
+	(SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_off.ducklake_data_file
+	 EXCEPT ALL SELECT * REPLACE (regexp_replace(path, 'ducklake-[0-9a-f-]+', 'ducklake-') AS path)
+	 FROM pg.parity_fn.ducklake_data_file))
+----
+0
+
+foreach metadata_table ducklake_snapshot_changes ducklake_table_stats ducklake_file_column_stats ducklake_file_partition_value ducklake_inlined_data_tables
+
+query I
+SELECT count(*) FROM (
+	(FROM pg.parity_fn.{metadata_table} EXCEPT ALL FROM pg.parity_off.{metadata_table})
+	UNION ALL
+	(FROM pg.parity_off.{metadata_table} EXCEPT ALL FROM pg.parity_fn.{metadata_table}))
+----
+0
+
+endloop
+
+# only the absolute path rewrites f_lit placeholder bounds
+query I
+SELECT count(*) FROM (
+	(FROM pg.parity_fn.ducklake_table_column_stats WHERE table_id <> 10
+	 EXCEPT ALL FROM pg.parity_off.ducklake_table_column_stats WHERE table_id <> 10)
+	UNION ALL
+	(FROM pg.parity_off.ducklake_table_column_stats WHERE table_id <> 10
+	 EXCEPT ALL FROM pg.parity_fn.ducklake_table_column_stats WHERE table_id <> 10))
+----
+0
+
+query III
+SELECT 'fn', min_value, max_value FROM pg.parity_fn.ducklake_table_column_stats WHERE table_id = 10
+UNION ALL
+SELECT 'off', min_value, max_value FROM pg.parity_off.ducklake_table_column_stats WHERE table_id = 10
+ORDER BY ALL
+----
+fn	{METADATA_CATALOG}y	{SNAPSHOT_ID}z
+off	"parity_off"y	42z
+
+query I
+SELECT string_agg(table_name, ' ' ORDER BY table_name) FROM pg.parity_fn.ducklake_inlined_data_tables
+----
+ducklake_inlined_data_10_10 ducklake_inlined_data_11_11 ducklake_inlined_data_1_1 ducklake_inlined_data_2_2 ducklake_inlined_data_3_3 ducklake_inlined_data_4_4 ducklake_inlined_data_5_5 ducklake_inlined_data_6_6 ducklake_inlined_data_7_7 ducklake_inlined_data_7_8 ducklake_inlined_data_9_9
+
+foreach inlined_table 10_10 11_11 1_1 2_2 3_3 4_4 5_5 6_6 7_7 7_8 9_9
+
+query I
+SELECT count(*) FROM (
+	(FROM pg.parity_fn.ducklake_inlined_data_{inlined_table} EXCEPT ALL FROM pg.parity_off.ducklake_inlined_data_{inlined_table})
+	UNION ALL
+	(FROM pg.parity_off.ducklake_inlined_data_{inlined_table} EXCEPT ALL FROM pg.parity_fn.ducklake_inlined_data_{inlined_table}))
+----
+0
+
+endloop
+
+foreach data_table r f_num f_flt f_str f_time f_nest f_part f_bounds f_lit f_tm
+
+query I
+SELECT count(*) FROM (
+	(SELECT rowid, * FROM fn.{data_table} EXCEPT ALL SELECT rowid, * FROM off.{data_table})
+	UNION ALL
+	(SELECT rowid, * FROM off.{data_table} EXCEPT ALL SELECT rowid, * FROM fn.{data_table}))
+----
+0
+
+query I
+SELECT count(*) = count(DISTINCT rowid) FROM fn.{data_table}
+----
+true
+
+endloop
+
+# bounds with a placeholder text stay literal
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lit (DATA_PATH '{DATA_PATH}/parity_lit', METADATA_SCHEMA 'parity_lit')
+
+statement ok
+CREATE TABLE lit.t (s VARCHAR)
+
+statement ok
+SET ducklake_debug_relative_commit = true
+
+statement ok
+INSERT INTO lit.t VALUES ('{SNAPSHOT_ID}a'), ('{METADATA_CATALOG}c')
+
+statement ok
+INSERT INTO lit.t SELECT '{SCHEMA_VERSION}' || i FROM range(20) t(i)
+
+statement ok
+SET ducklake_debug_relative_commit = false
+
+statement ok
+CALL pg_clear_cache()
+
+query II
+SELECT min_value, max_value FROM pg.parity_lit.ducklake_table_column_stats
+----
+{METADATA_CATALOG}c	{SNAPSHOT_ID}a
+
+query II
+SELECT min_value, max_value FROM pg.parity_lit.ducklake_file_column_stats
+----
+{SCHEMA_VERSION}0	{SCHEMA_VERSION}9
+
+query I
+SELECT count(*) FROM lit.t WHERE s IN ('{SNAPSHOT_ID}a', '{METADATA_CATALOG}c')
+----
+2
+
+# absolute commits still rewrite placeholder text in bounds
+statement ok
+INSERT INTO lit.t VALUES ('{SNAPSHOT_ID}b')
+
+statement ok
+CALL pg_clear_cache()
+
+query II
+SELECT min_value, max_value FROM pg.parity_lit.ducklake_table_column_stats
+----
+"parity_lit"c	4b
+
+query I
+SELECT s FROM lit.t WHERE s LIKE '%b'
+----
+{SNAPSHOT_ID}b
+
+# debug commits fail on new bounds Postgres cannot order
+statement ok
+CREATE TABLE lit.dt (d DATE)
+
+statement ok
+INSERT INTO lit.dt VALUES (DATE '2020-01-01')
+
+statement ok
+SET ducklake_debug_relative_commit = true
+
+statement error
+INSERT INTO lit.dt VALUES (DATE '5874898-01-01')
+----
+<REGEX>:.*DuckLake relative commit fell back unexpectedly: incomparable new min bound of table 2.*
+
+# an unusable fallback function commits absolutely
+statement ok
+CALL postgres_execute('pg', 'DROP FUNCTION parity_lit.ducklake_commit_fallback_v1(text)')
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+statement ok
+INSERT INTO lit.t VALUES ('d')
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET ducklake_debug_relative_commit = false
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message = 'DuckLake relative commit fell back: PL/pgSQL or its fallback function is not usable'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'PostgresQueryLog' AND message LIKE '%DO $dlrel$%'
+AND message LIKE '%parity_lit%'
+----
+0
+
+query I
+SELECT count(*) FROM lit.t WHERE s = 'd'
+----
+1
+
+foreach lake rel abs lit fn off
+
+statement ok
+DETACH {lake}
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA parity_{lake} CASCADE')
+
+endloop

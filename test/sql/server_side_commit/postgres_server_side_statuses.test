@@ -1,0 +1,425 @@
+# name: test/sql/server_side_commit/postgres_server_side_statuses.test
+# description: The client handles every ducklake_commit_v1 status; stubs replace the function
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_statuses CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_statuses', METADATA_SCHEMA 'server_side_statuses')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.o (i INTEGER)
+
+statement ok
+CREATE TABLE dl.p (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (0)
+
+# exhausted: the commit fails and its files are removed
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''exhausted''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 10::BIGINT, ''stub''::TEXT $$')
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.p SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.o VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_statuses/**/*.parquet')
+----
+1
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nExceeded the maximum retry count of 10 set by the ducklake_max_retry_count setting.*the server-side commit retries were exhausted: stub.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_statuses/**/*.parquet')
+----
+0
+
+# conflict: the detail names the table and the change
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''conflict''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 1::BIGINT,
+p_insert_tables[1] || '':dropped_table'' $$')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.p SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.o VALUES (2)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nTransaction conflict - attempting to insert into table with index "3" - but another transaction has dropped it.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_statuses/**/*.parquet')
+----
+0
+
+# an unknown status keeps the files
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''bogus''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 1::BIGINT, NULL::TEXT $$')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.p SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.o VALUES (3)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was in flight, so it may or may not have been applied; the written data files were kept: ducklake_commit_v1 returned status bogus.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_statuses/**/*.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM dl.p
+----
+0
+
+# fallback, error and exhausted before the retry count: a sequenced client attempt commits
+foreach status fallback error exhausted
+
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''{status}''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 2::BIGINT, ''stub {status}''::TEXT $$')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (1)
+
+statement ok con1
+INSERT INTO dl.p SELECT range FROM range(10, 30)
+
+statement ok con2
+INSERT INTO dl.o VALUES (4)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message = 'DuckLake server-side commit handed back to the client: {status}: stub {status}'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%pg_advisory_xact_lock(1145848659, %'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+endloop
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+4	4	3	3
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.p
+----
+60	60	59	1170
+
+query II
+SELECT record_count, next_row_id FROM postgres_query('pg', 'SELECT s.* FROM server_side_statuses.ducklake_table_stats s
+JOIN server_side_statuses.ducklake_table t USING (table_id) WHERE t.table_name = ''p'' AND t.end_snapshot IS NULL')
+----
+60	60
+
+# disabled: the lake stops using the function
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT ''disabled''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 0::BIGINT, ''serializable''::TEXT $$')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (2)
+
+statement ok con2
+INSERT INTO dl.o VALUES (5)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%'
+----
+0
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+# a missing function hands the commit back
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_statuses', METADATA_SCHEMA 'server_side_statuses')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+statement ok
+CALL postgres_execute('pg', 'DROP FUNCTION server_side_statuses.ducklake_commit_v1(bigint, text, bigint, bigint[],
+bigint[], text[], bigint[], text, bigint, bigint, double precision)')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+statement ok con2
+INSERT INTO dl.o VALUES (6)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message LIKE 'DuckLake server-side commit handed back to the client: %ducklake_commit_v1(%does not exist%'
+----
+1
+
+# only the generic query logs carry the body
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE '%dlbody%' AND type NOT IN ('QueryLog', 'PostgresQueryLog')
+----
+0
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+6	6	5	8
+
+# a new attach installs the function again
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_statuses', METADATA_SCHEMA 'server_side_statuses')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_statuses'' AND p.proname = ''ducklake_commit_v1''') WHERE prosrc LIKE '%1145848659%'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (4)
+
+statement ok con2
+INSERT INTO dl.o VALUES (7)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE 'DuckLake server-side commit handed back%'
+----
+0
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+7	7	6	12
+
+query I
+SELECT count(*) FROM dl.o
+----
+9
+
+# EXECUTE is checked before the function runs, so a REVOKE hands back
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE IF EXISTS ducklake_statuses_role')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE ROLE ducklake_statuses_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE, CREATE ON SCHEMA server_side_statuses TO ducklake_statuses_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT ALL ON ALL TABLES IN SCHEMA server_side_statuses TO ducklake_statuses_role')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_statuses_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_statuses', METADATA_SCHEMA 'server_side_statuses')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+statement ok
+CALL postgres_execute('pg', 'REVOKE EXECUTE ON FUNCTION server_side_statuses.ducklake_commit_v1(bigint, text, bigint,
+bigint[], bigint[], text[], bigint[], text, bigint, bigint, double precision) FROM PUBLIC')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level => 'warning')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (5)
+
+statement ok con2
+INSERT INTO dl.o VALUES (8)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE
+'DuckLake server-side commit handed back to the client: %permission denied for function ducklake_commit_v1%'
+----
+1
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+8	8	7	17
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_statuses CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE ducklake_statuses_role')

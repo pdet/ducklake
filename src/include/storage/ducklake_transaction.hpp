@@ -22,6 +22,8 @@
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
@@ -46,6 +48,7 @@ struct DuckLakeSchemaCacheEntry;
 class DuckLakeSchemaPinState;
 class DuckLakeFieldId;
 class DuckLakeTransactionState;
+struct DuckLakeCommitContext;
 
 //! Marks connections DuckLake opens internally
 class DuckLakeInternalConnectionState : public ClientContextState {
@@ -155,6 +158,11 @@ struct DuckLakeRetryConfig {
 	idx_t max_retry_count = 10;
 	idx_t retry_wait_ms = 100;
 	double retry_backoff = 1.5;
+	bool server_side_retries = true;
+	//! Runs append-only commits through the relative template
+	bool debug_relative_commit = false;
+	//! Injected server-side commit fault
+	string debug_server_commit_fault;
 
 	static DuckLakeRetryConfig FromContext(ClientContext &context);
 };
@@ -187,6 +195,7 @@ public:
 	unique_ptr<QueryResult> Query(string query);
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
+	void LogMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed);
 	Connection &GetConnection();
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
@@ -197,6 +206,14 @@ public:
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	//! Sets the snapshot a commit attempt read
+	void SetSnapshot(const DuckLakeSnapshot &latest_snapshot);
+	//! Rolls back a failed commit attempt
+	void RollbackCommitAttempt();
+	//! Starts the next commit attempt afresh
+	void BeginCommitAttempt();
+	//! Rolls back, then begins the next attempt
+	void ResetCommitAttempt();
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -316,7 +333,15 @@ protected:
 
 public:
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
-	                   const DuckLakeRetryConfig &retry_config);
+	                   const DuckLakeRetryConfig &retry_config,
+	                   const std::function<void(DuckLakeCommitContext &)> &prepare_context = nullptr);
+	static bool IsDataOnlyCommit(const TransactionChangeInformation &changes);
+	bool RequiresClientSideCommit() const;
+	//! Whether the commit only appends rows
+	bool IsAppendOnlyCommit(const TransactionChangeInformation &changes) const;
+	//! Renders an append-only commit against per-attempt bases
+	DuckLakeRelativeCommit RenderRelativeCommit(DuckLakeSnapshot transaction_snapshot,
+	                                            const TransactionChangeInformation &changes, idx_t seed);
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
@@ -333,6 +358,10 @@ public:
 
 private:
 	void FlushChanges();
+	//! inlined_inserts must outlive the context
+	void BuildCommitContext(DuckLakeCommitContext &context, DuckLakeSnapshot transaction_snapshot,
+	                        vector<unique_ptr<SQLStatement>> &inlined_inserts);
+	optional_ptr<DuckLakeTableEntry> GetCommitTableEntry(DuckLakeSnapshot transaction_snapshot, TableIndex table_id);
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();

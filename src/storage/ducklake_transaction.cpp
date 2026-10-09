@@ -1250,7 +1250,132 @@ DuckLakeRetryConfig DuckLakeRetryConfig::FromContext(ClientContext &context) {
 	context.TryGetCurrentSetting("ducklake_max_retry_count", config.max_retry_count);
 	context.TryGetCurrentSetting("ducklake_retry_wait_ms", config.retry_wait_ms);
 	context.TryGetCurrentSetting("ducklake_retry_backoff", config.retry_backoff);
+	context.TryGetCurrentSetting("ducklake_server_side_retries", config.server_side_retries);
+	context.TryGetCurrentSetting("ducklake_debug_relative_commit", config.debug_relative_commit);
+	context.TryGetCurrentSetting("ducklake_debug_server_commit_fault", config.debug_server_commit_fault);
 	return config;
+}
+
+bool DuckLakeTransaction::IsDataOnlyCommit(const TransactionChangeInformation &c) {
+	return c.created_schemas.empty() && c.dropped_schemas.empty() && c.created_tables.empty() &&
+	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
+	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
+	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
+	       c.dropped_table_macros.empty();
+}
+
+bool DuckLakeTransaction::RequiresClientSideCommit() const {
+	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
+	return GetRequiresNewInlinedTable() || !GetFlushedInlinedTables().empty() ||
+	       !GetFlushedInlinedFileDeletions().empty() || GetLocalChanges().HasDatedNewDeletes();
+}
+
+bool DuckLakeTransaction::IsAppendOnlyCommit(const TransactionChangeInformation &c) const {
+	if (!IsDataOnlyCommit(c) || RequiresClientSideCommit() || state->SchemaChangesMade()) {
+		return false;
+	}
+	if (c.tables_inserted_into.empty() && c.tables_inserted_inlined.empty()) {
+		return false;
+	}
+	if (!c.tables_deleted_from.empty() || !c.tables_delete_attempted.empty() || !c.tables_deleted_inlined.empty() ||
+	    !c.tables_flushed_inlined.empty() || !c.tables_compacted.empty() || !c.tables_merge_adjacent.empty() ||
+	    !c.tables_rewrite_delete.empty()) {
+		return false;
+	}
+	if (!state->dropped_files.empty() || !state->dropped_file_stats.empty() || !state->renamed_tables.empty() ||
+	    !new_name_maps.name_maps.empty()) {
+		return false;
+	}
+	for (auto &entry : state->local_changes.Changes()) {
+		auto &table_changes = entry.second;
+		if (IsTransactionLocal(entry.first.index) || !table_changes.new_delete_files.empty() ||
+		    !table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes ||
+		    !table_changes.compactions.empty()) {
+			return false;
+		}
+		for (auto &file : table_changes.new_data_files) {
+			if (!file.created_by_ducklake || !file.delete_files.empty() || file.begin_snapshot.IsValid() ||
+			    file.max_partial_file_snapshot.IsValid() || file.flush_row_id_start.IsValid() ||
+			    file.mapping_id.IsValid()) {
+				return false;
+			}
+		}
+		auto &inlined_data = table_changes.new_inlined_data;
+		if (inlined_data && (!inlined_data->data || inlined_data->HasPreservedRowIds())) {
+			return false;
+		}
+	}
+	return true;
+}
+
+DuckLakeRelativeCommit DuckLakeTransaction::RenderRelativeCommit(DuckLakeSnapshot transaction_snapshot,
+                                                                 const TransactionChangeInformation &changes,
+                                                                 idx_t seed) {
+	// read first, rendering holds the changes lock
+	map<TableIndex, set<FieldIndex>> new_columns;
+	vector<TableIndex> row_id_tables;
+	for (auto &entry : state->local_changes.Changes()) {
+		auto &table_changes = entry.second;
+		if (table_changes.new_data_files.empty() && !table_changes.new_inlined_data) {
+			continue;
+		}
+		auto &columns = new_columns[entry.first];
+		for (auto &file : table_changes.new_data_files) {
+			for (auto &column_stats : file.column_stats) {
+				columns.insert(column_stats.first);
+			}
+		}
+		if (table_changes.new_inlined_data) {
+			for (auto &column_stats : table_changes.new_inlined_data->column_stats) {
+				columns.insert(column_stats.first);
+			}
+		}
+		row_id_tables.push_back(entry.first);
+	}
+	vector<unique_ptr<SQLStatement>> inlined_inserts;
+	DuckLakeCommitContext context;
+	BuildCommitContext(context, transaction_snapshot, inlined_inserts);
+	DuckLakeRelativeIdRenderer ids(seed);
+	context.id_renderer = &ids;
+	context.try_append_data_files = [](DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &,
+	                                   const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
+		return false;
+	};
+	context.get_table_path = [this](TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables) {
+		return metadata_manager->GetTablePath(table_id, new_tables);
+	};
+	auto get_table_column_schema = context.get_table_column_schema;
+	context.get_table_stats = [seed, get_table_column_schema](TableIndex table_id) {
+		// an all-unknown seed folds sources like sequential merges
+		auto stats = make_shared_ptr<DuckLakeTableStats>();
+		stats->record_count = seed;
+		stats->next_row_id = seed;
+		stats->table_size_bytes = seed;
+		for (auto &column : get_table_column_schema(table_id)) {
+			DuckLakeColumnStats column_stats(column.column_type);
+			column_stats.has_null_count = true;
+			column_stats.has_contains_nan = true;
+			column_stats.any_valid = false;
+			stats->column_stats.emplace(column.field_index, std::move(column_stats));
+		}
+		return stats;
+	};
+	auto write_stats_exactness = context.supports_v1_1_metadata;
+	context.write_global_table_stats = [this, seed, &new_columns, write_stats_exactness](
+	                                       TableIndex table_id, DuckLakeNewGlobalStats &new_globals, bool) {
+		return metadata_manager->RelativeGlobalTableStatsSql(table_id, new_globals, seed, new_columns[table_id],
+		                                                     write_stats_exactness);
+	};
+	context.write_inlined_data = [this, &inlined_inserts,
+	                              &ids](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
+	                                    const vector<DuckLakeTableInfo> &new_tables,
+	                                    const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
+		                                             inlined_inserts, &ids);
+	};
+	auto result = state->RenderRelativeCommit(changes, seed, context);
+	result.row_id_tables = std::move(row_id_tables);
+	return result;
 }
 
 void DuckLakeTransaction::FlushChanges() {
@@ -1259,18 +1384,19 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
-	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
+	if (!metadata_manager->CommitServerSide(transaction_changes, retry_config)) {
+		RunCommitLoop(GetSnapshot(), transaction_changes, retry_config);
+		return;
+	}
+	// backends load the snapshot if they need it
+	DuckLakeSnapshot transaction_snapshot;
+	{
 		lock_guard<mutex> guard(snapshot_lock);
-		auto transaction_snapshot = snapshot ? *snapshot : DuckLakeSnapshot();
-		metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
-	} else {
-		auto transaction_snapshot = GetSnapshot();
-		if (metadata_manager->ExecuteRetrialsServerSide()) {
-			metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
-		} else {
-			RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
+		if (snapshot) {
+			transaction_snapshot = *snapshot;
 		}
 	}
+	metadata_manager->FlushChangesServerSide(*this, transaction_snapshot, transaction_changes, retry_config);
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
@@ -1309,106 +1435,115 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
-                                        const DuckLakeRetryConfig &retry_config) {
+                                        const DuckLakeRetryConfig &retry_config,
+                                        const std::function<void(DuckLakeCommitContext &)> &prepare_context) {
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
-	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
+	BuildCommitContext(context, transaction_snapshot, inlined_inserts);
+	metadata_manager->PrepareCommitLoop(context, retry_config);
+	if (prepare_context) {
+		prepare_context(context);
+	}
+	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
+}
+
+optional_ptr<DuckLakeTableEntry> DuckLakeTransaction::GetCommitTableEntry(DuckLakeSnapshot transaction_snapshot,
+                                                                          TableIndex table_id) {
+	auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+	if (!entry) {
+		return nullptr;
+	}
+	return entry->Cast<DuckLakeTableEntry>();
+}
+
+void DuckLakeTransaction::BuildCommitContext(DuckLakeCommitContext &context, DuckLakeSnapshot transaction_snapshot,
+                                             vector<unique_ptr<SQLStatement>> &inlined_inserts_p) {
+	auto inlined_inserts = &inlined_inserts_p;
+	context.conflict_query_executor = [this, transaction_snapshot](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
 		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "
 		                     "snapshot changes for conflict resolution:");
 		return result;
 	};
-	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
+	context.inlined_file_deletion_table_exists = [this](TableIndex table_id) {
 		return metadata_manager->InlinedDeletionTableExists(
 		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
-	context.get_snapshot = [&]() {
+	context.get_snapshot = [this]() {
 		return GetSnapshot();
 	};
-	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
+	context.set_delete_commit_snapshot = [this](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
-	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
+	context.execute_commit_batch = [this, inlined_inserts](DuckLakeSnapshot snapshot, string &query) {
 		auto result = metadata_manager->Execute(snapshot, query);
-		for (auto &insert : inlined_inserts) {
+		for (auto &insert : *inlined_inserts) {
 			if (result->HasError()) {
 				break;
 			}
 			// Table creation must finish before binding the inlined INSERT.
 			result = connection->Query(std::move(insert));
 		}
-		inlined_inserts.clear();
+		inlined_inserts->clear();
 		return result;
 	};
-	context.is_retryable_metadata_error = [&](const string &message) {
+	context.is_retryable_metadata_error = [this](const string &message) {
 		return metadata_manager->IsRetryableCommitError(message);
 	};
-	context.flush_cache_if_pending = [&]() {
+	context.flush_cache_if_pending = [this]() {
 		if (metadata_manager->TakePendingCacheClear()) {
 			metadata_manager->ClearCache();
 		}
 	};
-	context.commit_connection = [&]() {
+	context.commit_connection = [this]() {
 		connection->Commit();
 	};
-	context.try_rollback = [&]() {
-		if (connection->context->transaction.HasActiveTransaction()) {
-			connection->Rollback();
-		}
-		// Rollback can remove tables that were cached while binding inlined INSERTs.
-		metadata_manager->ClearCache();
+	context.try_rollback = [this]() {
+		RollbackCommitAttempt();
 	};
-	context.prepare_retry = [&]() {
-		inlined_inserts.clear();
-		metadata_manager->ClearInlinedTableCaches();
-		connection->BeginTransaction();
-		snapshot.reset();
+	context.prepare_retry = [this, inlined_inserts]() {
+		inlined_inserts->clear();
+		BeginCommitAttempt();
 	};
-	context.query_metadata = [&](string q) {
+	context.query_metadata = [this](string q) {
 		return metadata_manager->Query(q);
 	};
-	context.execute_in_transaction = [&](string q) {
+	context.execute_in_transaction = [this](string q) {
 		return metadata_manager->ExecuteInTransaction(q);
 	};
-	context.query_metadata_with_snapshot = [&](DuckLakeSnapshot s, string q) {
+	context.query_metadata_with_snapshot = [this](DuckLakeSnapshot s, string q) {
 		return metadata_manager->Query(s, q);
 	};
-	context.try_append_data_files = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeFileInfo> &files,
-	                                    const vector<DuckLakeTableInfo> &new_tables,
-	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
+	context.try_append_data_files = [this](DuckLakeSnapshot &snapshot, const vector<DuckLakeFileInfo> &files,
+	                                       const vector<DuckLakeTableInfo> &new_tables,
+	                                       vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
-	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
+	context.write_inlined_tables = [this](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
 		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
 	};
-	context.write_inlined_file_deletes = [&](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+	context.write_inlined_file_deletes = [this](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
 		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(new_deletes);
 	};
-	context.write_inlined_data = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
-	                                 const vector<DuckLakeTableInfo> &new_tables,
-	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
-		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
-		                                             inlined_inserts);
-	};
-	context.get_table_stats = [&](TableIndex table_id) {
+	context.write_inlined_data =
+	    [this, inlined_inserts](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
+	                            const vector<DuckLakeTableInfo> &new_tables,
+	                            const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
+		    return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
+		                                                 *inlined_inserts);
+	    };
+	context.get_table_stats = [this](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
-	auto get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
-		if (!entry) {
-			return nullptr;
-		}
-		return entry->Cast<DuckLakeTableEntry>();
-	};
-	context.get_table_column_schema = [&](TableIndex table_id) {
+	context.get_table_column_schema = [this, transaction_snapshot](TableIndex table_id) {
 		// The full flattened schema at the commit snapshot: top-level roots (is_root=true) plus every nested
 		// struct/list/map/array leaf (is_root=false). Roots carry the inlined-data merge (TryMergeInlinedStats
 		// references columns by name and bails on any non-scalar root); leaves carry their own per-file stats keyed
 		// by leaf FieldIndex, which the rewrite recompute must merge. Each node uses its authoritative stored
 		// FieldIndex (ALTER ADD FIELD makes nested leaf ids non-contiguous, so they cannot be re-derived).
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto table = get_table_entry(table_id);
+		auto table = GetCommitTableEntry(transaction_snapshot, table_id);
 		if (!table) {
 			return schema;
 		}
@@ -1423,12 +1558,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return schema;
 	};
-	context.cast_inlined_column = [&](const string &column, const LogicalType &type) {
+	context.cast_inlined_column = [this](const string &column, const LogicalType &type) {
 		return metadata_manager->CastColumnToTarget(column, type);
 	};
-	context.get_inlined_table_names = [&](TableIndex table_id) {
+	context.get_inlined_table_names = [this, transaction_snapshot](TableIndex table_id) {
 		vector<string> names;
-		auto table = get_table_entry(table_id);
+		auto table = GetCommitTableEntry(transaction_snapshot, table_id);
 		if (!table) {
 			return names;
 		}
@@ -1437,41 +1572,40 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return names;
 	};
-	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
-		auto table = get_table_entry(table_id);
+	context.get_net_data_file_row_count = [this, transaction_snapshot](TableIndex table_id) -> idx_t {
+		auto table = GetCommitTableEntry(transaction_snapshot, table_id);
 		return table ? table->GetNetDataFileRowCount(*this) : 0;
 	};
-	context.get_net_inlined_row_count = [&](TableIndex table_id) -> idx_t {
-		auto table = get_table_entry(table_id);
+	context.get_net_inlined_row_count = [this, transaction_snapshot](TableIndex table_id) -> idx_t {
+		auto table = GetCommitTableEntry(transaction_snapshot, table_id);
 		return table ? table->GetNetInlinedRowCount(*this) : 0;
 	};
-	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
+	context.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
 	};
-	context.invalidate_schema_cache = [&](idx_t schema_version) {
+	context.invalidate_schema_cache = [this](idx_t schema_version) {
 		ducklake_catalog.InvalidateSchemaCache(schema_version);
 	};
-	context.set_catalog_version = [&](idx_t schema_version) {
+	context.set_catalog_version = [this](idx_t schema_version) {
 		catalog_version = schema_version;
 	};
-	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
+	context.set_committed_snapshot_id = [this](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 	};
-	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
+	context.set_table_options = [this](const vector<DuckLakeConfigOption> &options) {
 		for (auto &option : options) {
 			ducklake_catalog.SetConfigOption(option);
 		}
 	};
-	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
+	context.invalidate_table_stats_cache = [this](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
-	context.report_post_commit_error = [&](const string &message) {
+	context.report_post_commit_error = [this](const string &message) {
 		ReportPostCommitError(message);
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
-	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
@@ -1534,16 +1668,18 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
-	auto end = std::chrono::steady_clock::now();
-	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	LogMetadataQuery(query, std::chrono::steady_clock::now() - start);
+	return std::move(result);
+}
 
+void DuckLakeTransaction::LogMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed) {
+	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 	DUCKDB_LOG(db, DuckLakeMetadataLogType, ducklake_catalog.GetName().GetIdentifierName(), query, elapsed_ms);
 
 	auto &cb = ducklake_catalog.GetQueryCallback();
 	if (cb) {
-		cb(query, end - start);
+		cb(query, elapsed);
 	}
-	return std::move(result);
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
@@ -1579,6 +1715,30 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 		snapshot = metadata_manager->GetSnapshot();
 	}
 	return *snapshot;
+}
+
+void DuckLakeTransaction::SetSnapshot(const DuckLakeSnapshot &latest_snapshot) {
+	lock_guard<mutex> guard(snapshot_lock);
+	snapshot = make_uniq<DuckLakeSnapshot>(latest_snapshot);
+}
+
+void DuckLakeTransaction::RollbackCommitAttempt() {
+	if (connection->context->transaction.HasActiveTransaction()) {
+		connection->Rollback();
+	}
+	// Rollback can remove tables that were cached while binding inlined INSERTs.
+	metadata_manager->ClearCache();
+}
+
+void DuckLakeTransaction::BeginCommitAttempt() {
+	metadata_manager->ClearInlinedTableCaches();
+	connection->BeginTransaction();
+	snapshot.reset();
+}
+
+void DuckLakeTransaction::ResetCommitAttempt() {
+	RollbackCommitAttempt();
+	BeginCommitAttempt();
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {

@@ -24,6 +24,7 @@ public:
 	void Initialize();
 
 private:
+	void LoadOrCreateDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema);
 	void InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema);
 	void LoadExistingDuckLake(DuckLakeTransaction &transaction, bool skip_dev_migration = false);
 	void AttachMetadata(DuckLakeTransaction &transaction);
@@ -33,6 +34,7 @@ private:
 	string GetAttachOptions();
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
+	bool ShouldProbeServerCapabilities();
 
 private:
 	ClientContext &context;

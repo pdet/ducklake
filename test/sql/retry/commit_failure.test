@@ -22,6 +22,10 @@ SET ducklake_retry_wait_ms=100
 statement ok
 SET ducklake_retry_backoff=2.0
 
+# this test exhausts the client retry budget
+statement ok
+SET ducklake_server_side_retries = false
+
 statement ok
 CREATE TABLE ducklake.tbl(id INTEGER)
 

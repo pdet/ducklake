@@ -1,0 +1,125 @@
+# name: test/sql/server_side_commit/postgres_server_side_unknown.test
+# description: A lost reply of a committed ducklake_commit_v1 call keeps files and never retries
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_unknown CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_unknown', METADATA_SCHEMA 'server_side_unknown')
+
+statement ok
+CREATE TABLE dl.p (i INTEGER)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.o (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (0)
+
+foreach variant parquet inlined
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.p SELECT range FROM range(100) WHERE '{variant}' = 'parquet'
+
+statement ok con1
+INSERT INTO dl.t VALUES (1)
+
+statement ok con2
+INSERT INTO dl.o VALUES (1)
+
+statement ok
+SET ducklake_debug_server_commit_fault = 'ack_lost'
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was in flight, so it may or may not have been applied; the written data files were kept: debug fault: the reply of the committed call was lost.*
+
+statement ok
+RESET ducklake_debug_server_commit_fault
+
+statement ok
+CALL disable_logging()
+
+# exactly one call and no retry
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PostgresQueryLog') WHERE query LIKE '%INSERT INTO "server_side_unknown".ducklake_snapshot %'
+----
+2
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_unknown/**/*.parquet')
+----
+1
+
+endloop
+
+# both commits were applied
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id > 4 ORDER BY snapshot_id
+----
+5	{inlined_insert=[3]}
+6	{tables_inserted_into=[1], inlined_insert=[2]}
+7	{inlined_insert=[3]}
+8	{inlined_insert=[2]}
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.p
+----
+100	100	99	4950
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
+----
+3	3	2	2
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT sum(i) FROM dl.t
+----
+4
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_unknown CASCADE')

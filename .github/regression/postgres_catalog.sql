@@ -19,7 +19,9 @@ SELECT string_agg(item, ', ' ORDER BY item) FROM (
 	WHERE c.relnamespace = schema_name::regnamespace AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
 	AND (a.attidentity <> '' OR a.attgenerated <> '')
 	UNION ALL
+	-- a writable attach recreates the DuckLake commit functions
 	SELECT format('function %I', proname) FROM pg_proc WHERE pronamespace = schema_name::regnamespace
+	AND proname NOT IN ('ducklake_commit_v1', 'ducklake_commit_fallback_v1')
 	UNION ALL
 	SELECT format('type %I', t.typname) FROM pg_type t
 	WHERE t.typnamespace = schema_name::regnamespace AND t.typrelid = 0

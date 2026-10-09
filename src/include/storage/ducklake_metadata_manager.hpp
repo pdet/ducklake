@@ -21,6 +21,7 @@
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "storage/ducklake_metadata_info.hpp"
+#include "storage/ducklake_server_commit.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "common/ducklake_options.hpp"
 #include "common/index.hpp"
@@ -36,6 +37,7 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
+struct DuckLakeCommitContext;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class SQLStatement;
@@ -43,6 +45,20 @@ class FileSystem;
 
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
+struct DuckLakeNewGlobalStats;
+
+//! SQL literals of one global column stats row
+struct ColumnStatsSQL {
+	string contains_null;
+	string contains_nan;
+	string min_val;
+	string max_val;
+	string extra_stats;
+	string min_is_exact;
+	string max_is_exact;
+
+	static ColumnStatsSQL FromColumnStats(const DuckLakeGlobalColumnStatsInfo &col_stats);
+};
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
@@ -206,13 +222,16 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
-	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
-	virtual void ProbeServerCapabilities() {
+	//! Probes server capabilities; false if the transaction failed
+	virtual bool ProbeServerCapabilities() {
+		return true;
 	}
-	//! Whether or not the commit retry loop should be executed on the metadata server rather than the client.
-	bool ExecuteRetrialsServerSide() const;
-	//! Whether the client can skip the snapshot fetch and let the server read it.
-	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
+	//! Whether this commit goes through FlushChangesServerSide
+	bool CommitServerSide(const TransactionChangeInformation &changes, const DuckLakeRetryConfig &retry_config) const;
+	//! Whether the server can retry this commit
+	virtual bool SupportsServerSideCommit(const TransactionChangeInformation &changes) const;
+	//! Called before every client-side commit loop
+	virtual void PrepareCommitLoop(DuckLakeCommitContext &context, const DuckLakeRetryConfig &retry_config);
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
@@ -289,14 +308,20 @@ public:
 protected:
 	void SubstituteCatalogPlaceholders(string &query) const;
 	void SubstituteCatalogPlaceholders(string &query, const string &metadata_catalog) const;
+	vector<pair<string, string>> CatalogPlaceholderReplacements(const string &metadata_catalog) const;
 	void SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 
 public:
 	static void SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query);
+	//! Replaces placeholders outside quoted literals and identifiers
+	static string ReplacePlaceholdersOutsideLiterals(const string &query,
+	                                                 const vector<pair<string, string>> &replacements);
+	static bool ContainsPlaceholderOutsideLiterals(const string &query, const string &placeholder);
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
+	static string CatalogVersionQuery();
 	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
@@ -393,7 +418,8 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                                        optional_ptr<const DuckLakeCommitIdRenderer> ids = nullptr);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -402,13 +428,20 @@ public:
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
 	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
-	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts);
+	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts,
+	                                   optional_ptr<const DuckLakeCommitIdRenderer> ids = nullptr);
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.
-	static string FormatInlinedDataInsert(const string &inlined_table_name, idx_t row_id_start,
+	static string FormatInlinedDataInsert(const string &inlined_table_name, TableIndex table_id, idx_t row_id_start,
 	                                      bool has_preserved_row_ids, const vector<int64_t> *row_ids,
-	                                      const vector<string> &cells_per_row);
+	                                      const vector<string> &cells_per_row,
+	                                      optional_ptr<const DuckLakeCommitIdRenderer> ids = nullptr);
+	//! Falls back when the inlined table is stale
+	virtual string InlinedTablePreconditionSql(TableIndex table_id, const string &inlined_table_name);
+	//! Merges a relative stats delta into stored stats
+	virtual string RelativeGlobalTableStatsSql(TableIndex table_id, const DuckLakeNewGlobalStats &delta, idx_t seed,
+	                                           const set<FieldIndex> &new_columns, bool write_stats_exactness);
 	virtual string WriteNewInlinedFileDeletes(DuckLakeSnapshot &commit_snapshot,
 	                                          const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Static deterministic name of the per-table inlined deletion table.
@@ -464,9 +497,14 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                              bool include_exactness);
-	static string GetSnapshotAndStatsAndChangesQuery(bool include_exactness);
-	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
+	                              bool include_exactness, const vector<string> &snapshot_columns = vector<string>(),
+	                              const std::function<void(const QueryResultRow &)> &read_snapshot_row = nullptr);
+	//! Extra snapshot columns are NULL in stats rows
+	static string GetSnapshotAndStatsAndChangesQuery(bool include_exactness,
+	                                                 const vector<string> &snapshot_columns = vector<string>());
+	static SnapshotChangeInfo
+	ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot,
+	                                const std::function<void(const QueryResultRow &)> &read_snapshot_row = nullptr);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound);
 
@@ -530,9 +568,15 @@ public:
 
 protected:
 	enum class FileListType : uint8_t { SCAN, EXTENDED };
-	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
+	//! COMMIT_ORDERING orders the bounds a commit merges
+	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX, COMMIT_ORDERING };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! Throws if another connection migrated the catalog
+	void CheckCatalogVersion(const string &catalog_version) const;
+	//! Caches latest inlined tables; complete covers every table
+	void SetInlinedTableNames(unordered_map<idx_t, string> table_names, bool complete);
+	const unordered_map<idx_t, string> &GetInlinedTableNames() const;
 
 	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                             const string &metadata_table_prefix);
@@ -574,6 +618,8 @@ public:
 	static string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                              const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                              const string &base_data_path, const string &separator);
+	//! A table data path, cached per transaction
+	string GetTablePath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables);
 
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
@@ -666,6 +712,8 @@ private:
 	                                               const string &snapshot_column);
 
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
+	//! Whether the cache above holds every inlined table
+	bool insert_inlined_table_names_complete = false;
 	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:

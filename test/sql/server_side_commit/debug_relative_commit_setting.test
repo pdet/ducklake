@@ -1,0 +1,56 @@
+# name: test/sql/server_side_commit/debug_relative_commit_setting.test
+# description: Appends commit the same with relative commits on every catalog
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET ducklake_debug_relative_commit = true
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/debug_relative_commit_setting')
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'a{SNAPSHOT_ID}'), (NULL, NULL)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'v' || i FROM range(2, 30) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t SELECT NULL, NULL FROM range(20)
+
+statement ok
+INSERT INTO ducklake.t VALUES (NULL, NULL)
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 2
+
+query IIIII
+SELECT count(*), count(i), min(i), max(i), max(s) FROM ducklake.t
+----
+50	28	1	29	v9
+
+query I
+SELECT count(*) = count(DISTINCT rowid) FROM ducklake.t
+----
+true
+
+query II
+SELECT count(*), max(snapshot_id) FROM ducklake_snapshots('ducklake')
+----
+6	5

@@ -78,6 +78,21 @@ void DuckLakeInitializer::Initialize() {
 		}
 	}
 
+	LoadOrCreateDuckLake(transaction, has_explicit_schema);
+	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
+	if (ShouldProbeServerCapabilities() && !transaction.GetMetadataManager().ProbeServerCapabilities()) {
+		// a failed probe keeps commits on the client
+		RestartMetadataTransaction(transaction);
+		LoadOrCreateDuckLake(transaction, has_explicit_schema);
+	}
+	transaction.GetMetadataManager().ClearCache();
+	if (options.at_clause) {
+		// if the user specified a snapshot try to load it to trigger an error if it does not exist
+		transaction.GetSnapshot();
+	}
+}
+
+void DuckLakeInitializer::LoadOrCreateDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
@@ -85,32 +100,31 @@ void DuckLakeInitializer::Initialize() {
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
 		LoadExistingDuckLake(transaction);
-	} else {
-		if (!options.create_if_not_exists) {
-			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
-			                            "new DuckLake is explicitly disabled",
-			                            options.metadata_path);
-		}
-		try {
-			InitializeNewDuckLake(transaction, has_explicit_schema);
-		} catch (std::exception &ex) {
-			// another attach may have created the same DuckLake at the same time
-			ErrorData error(ex);
-			RestartMetadataTransaction(transaction);
-			if (!DuckLakeIsInitialized(transaction)) {
-				error.Throw();
-			}
-			LoadExistingDuckLake(transaction);
-		}
+		return;
 	}
-	auto &current_metadata_manager = transaction.GetMetadataManager();
-	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
-	current_metadata_manager.ProbeServerCapabilities();
-	current_metadata_manager.ClearCache();
-	if (options.at_clause) {
-		// if the user specified a snapshot try to load it to trigger an error if it does not exist
-		transaction.GetSnapshot();
+	if (!options.create_if_not_exists) {
+		throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
+		                            "new DuckLake is explicitly disabled",
+		                            options.metadata_path);
 	}
+	try {
+		InitializeNewDuckLake(transaction, has_explicit_schema);
+	} catch (std::exception &ex) {
+		// another attach may have created the same DuckLake at the same time
+		ErrorData error(ex);
+		RestartMetadataTransaction(transaction);
+		if (!DuckLakeIsInitialized(transaction)) {
+			error.Throw();
+		}
+		LoadExistingDuckLake(transaction);
+	}
+}
+
+bool DuckLakeInitializer::ShouldProbeServerCapabilities() {
+	if (options.access_mode == AccessMode::READ_ONLY || options.at_clause) {
+		return false;
+	}
+	return DuckLakeRetryConfig::FromContext(context).server_side_retries;
 }
 
 void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transaction) {

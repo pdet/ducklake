@@ -617,9 +617,9 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 		for (auto &tuple : tuples) {
 			cells_per_row.push_back(tuple.size() >= 2 ? tuple.substr(1, tuple.size() - 2) : tuple);
 		}
-		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved,
-		                                                          has_preserved ? &row_ids_it->second : nullptr,
-		                                                          cells_per_row);
+		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(
+		    inlined_table_name, entry.table_id, entry.row_id_start, has_preserved,
+		    has_preserved ? &row_ids_it->second : nullptr, cells_per_row);
 	}
 	return batch;
 }

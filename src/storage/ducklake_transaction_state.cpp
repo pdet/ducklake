@@ -52,6 +52,48 @@ void DuckLakeTransactionState::CleanupFiles() {
 	local_changes.CleanupFiles(db);
 }
 
+void DuckLakeTransactionState::FailCommit(const ErrorData &error, bool finished_retrying,
+                                          const DuckLakeRetryConfig &retry_config) {
+	CleanupFiles();
+	error.Throw(CommitFailureMessage(finished_retrying, retry_config));
+}
+
+string DuckLakeTransactionState::CommitFailureMessage(bool finished_retrying, const DuckLakeRetryConfig &retry_config) {
+	// Add additional information on the number of retries and suggest to increase it
+	string error_message = "Failed to commit DuckLake transaction.\n";
+	if (finished_retrying) {
+		error_message +=
+		    StringUtil::Format("Exceeded the maximum retry count of %d set by the ducklake_max_retry_count setting.\n"
+		                       ". Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
+		                       retry_config.max_retry_count, retry_config.max_retry_count * 10);
+	}
+	return error_message;
+}
+
+string DuckLakeTransactionState::ConflictMessage(const string &action, idx_t index, const string &conflict_action) {
+	return StringUtil::Format("Transaction conflict - attempting to %s with index \"%d\""
+	                          " - but another transaction has %s",
+	                          action, index, conflict_action);
+}
+
+const char *DuckLakeTransactionState::InsertConflictAction(const string &change_kind) {
+	static constexpr const char *ACTIONS[][2] = {{"dropped_table", "dropped it"},
+	                                             {"altered_table", "altered it"},
+	                                             {"deleted_from_table", "deleted from it"},
+	                                             {"inlined_delete", "deleted inlined data from it"}};
+	for (auto &action : ACTIONS) {
+		if (change_kind == action[0]) {
+			return action[1];
+		}
+	}
+	return nullptr;
+}
+
+string DuckLakeTransactionState::OutcomeUnknownMessage() {
+	return "Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was "
+	       "in flight, so it may or may not have been applied; the written data files were kept: ";
+}
+
 bool DuckLakeTransactionState::SchemaChangesMade() const {
 	return !new_tables.empty() || !dropped_tables.empty() || new_schemas || !dropped_schemas.empty() ||
 	       !dropped_views.empty() || !renamed_views.empty() || !new_scalar_macros.empty() ||
@@ -70,9 +112,7 @@ namespace {
 template <class T, class MAP>
 void ConflictCheck(T index, const MAP &conflict_map, const char *action, const char *conflict_action) {
 	if (conflict_map.find(index) != conflict_map.end()) {
-		throw TransactionException("Transaction conflict - attempting to %s with index \"%d\""
-		                           " - but another transaction has %s",
-		                           action, index.index, conflict_action);
+		throw TransactionException(DuckLakeTransactionState::ConflictMessage(action, index.index, conflict_action));
 	}
 }
 
@@ -219,19 +259,17 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	ConflictCheck(changes.created_table_macros, other_changes.dropped_schemas, other_changes.created_table_macros);
 	ConflictCheck(changes.created_scalar_macros, other_changes.dropped_schemas, other_changes.created_scalar_macros);
 	ConflictCheck(changes.created_tables, other_changes.dropped_schemas, other_changes.created_tables);
-	for (auto &table_id : changes.tables_inserted_into) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
-		              "deleted inlined data from it");
-	}
-	for (auto &table_id : changes.tables_inserted_inlined) {
-		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
-		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
-		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
-		              "deleted inlined data from it");
+	for (auto inserted_tables : {&changes.tables_inserted_into, &changes.tables_inserted_inlined}) {
+		for (auto &table_id : *inserted_tables) {
+			ConflictCheck(table_id, other_changes.dropped_tables, "insert into table",
+			              InsertConflictAction("dropped_table"));
+			ConflictCheck(table_id, other_changes.altered_tables, "insert into table",
+			              InsertConflictAction("altered_table"));
+			ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table",
+			              InsertConflictAction("deleted_from_table"));
+			ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
+			              InsertConflictAction("inlined_delete"));
+		}
 	}
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
@@ -349,6 +387,37 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
+}
+
+DuckLakeRelativeCommit
+DuckLakeTransactionState::RenderRelativeCommit(const TransactionChangeInformation &transaction_changes, idx_t seed,
+                                               const DuckLakeCommitContext &context) {
+	if (!dropped_file_stats.empty() || !dropped_files.empty()) {
+		throw NotImplementedException("DuckLake relative commit cannot drop files");
+	}
+	DuckLakeSnapshot commit_snapshot(seed, seed, seed, seed);
+	commit_snapshot.snapshot_id++;
+	DuckLakeCommitState commit_state(commit_snapshot);
+	auto changes = transaction_changes;
+	map<TableIndex, DroppedDataFileStats> no_dropped_file_stats;
+	auto body = CommitChanges(commit_state, changes, nullptr, context, no_dropped_file_stats);
+	body += WriteSnapshotChanges(commit_state, changes, context.commit_info);
+	if (commit_snapshot.schema_version != seed || commit_snapshot.next_catalog_id != seed) {
+		throw InternalException("DuckLake relative commit allocated a schema version or catalog id");
+	}
+	if (DuckLakeMetadataManager::ContainsPlaceholderOutsideLiterals(body, "{NEXT_FILE_ID}")) {
+		throw InternalException("DuckLake relative commit references the next file id");
+	}
+	DuckLakeRelativeCommit result;
+	result.body = DuckLakeMetadataManager::ReplacePlaceholdersOutsideLiterals(
+	    body,
+	    {{"{SNAPSHOT_ID}", DuckLakeRelativeCommitBase::Expression(DuckLakeRelativeCommitBase::SnapshotId())},
+	     {"{SCHEMA_VERSION}", DuckLakeRelativeCommitBase::Expression(DuckLakeRelativeCommitBase::SchemaVersion())},
+	     {"{NEXT_CATALOG_ID}", DuckLakeRelativeCommitBase::Expression(DuckLakeRelativeCommitBase::NextCatalogId())}});
+	result.file_id_count = commit_snapshot.next_file_id - seed;
+	result.insert_tables.assign(changes.tables_inserted_into.begin(), changes.tables_inserted_into.end());
+	result.inlined_insert_tables.assign(changes.tables_inserted_inlined.begin(), changes.tables_inserted_inlined.end());
+	return result;
 }
 
 void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
@@ -1197,7 +1266,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			}
 		}
 		// update the global stats for this table based on the newly written data
-		batch_query += WriteGlobalTableStatsSql(table_id, new_globals, clear_column_stats, context);
+		if (context.write_global_table_stats) {
+			batch_query += context.write_global_table_stats(table_id, new_globals, clear_column_stats);
+		} else {
+			batch_query += WriteGlobalTableStatsSql(table_id, new_globals, clear_column_stats, context);
+		}
 	}
 	return result;
 }
@@ -1700,8 +1773,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	auto get_table_path = [&](TableIndex table_id) -> const string & {
 		auto entry = table_paths.find(table_id.index);
 		if (entry == table_paths.end()) {
-			auto path = DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result, context.query_metadata,
-			                                                     data_path, separator);
+			auto path = context.get_table_path
+			                ? context.get_table_path(table_id, new_tables_result)
+			                : DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result,
+			                                                           context.query_metadata, data_path, separator);
 			entry = table_paths.emplace(table_id.index, std::move(path)).first;
 		}
 		return entry->second;
@@ -1780,7 +1855,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			return string();
 		}
 		return DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(
-		    files, table_relative_paths(files, &DuckLakeFileInfo::file_name), context.supports_v1_1_metadata);
+		    files, table_relative_paths(files, &DuckLakeFileInfo::file_name), context.supports_v1_1_metadata,
+		    context.id_renderer);
 	};
 
 	// write new data / data files
@@ -2103,11 +2179,14 @@ WHERE idt.schema_version < (
 
 SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                                              const TransactionChangeInformation &changes,
-                                                             const DuckLakeCommitContext &context) {
+                                                             const DuckLakeCommitContext &context, idx_t attempt) {
 	SnapshotAndStats snapshot_and_stats;
-	// get all changes made to the system after the current snapshot was started
-	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(
-	    snapshot_and_stats, context.conflict_query_executor, context.supports_v1_1_metadata);
+	SnapshotChangeInfo changes_made;
+	if (!context.acquire_sequenced_state(attempt, transaction_snapshot, snapshot_and_stats, changes_made)) {
+		// get all changes made to the system after the current snapshot was started
+		changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(
+		    snapshot_and_stats, context.conflict_query_executor, context.supports_v1_1_metadata);
+	}
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -2125,6 +2204,36 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	return snapshot_and_stats;
 }
 
+bool DuckLakeTransactionState::CommitOnServer(const DuckLakeCommitContext &context,
+                                              const DuckLakeRetryConfig &retry_config, idx_t &attempt,
+                                              DuckLakeSnapshot &commit_snapshot) {
+	auto server = context.server_attempt();
+	if (server.status == DuckLakeServerAttemptStatus::COMMITTED) {
+		try {
+			context.flush_cache_if_pending();
+			context.commit_connection();
+			commit_snapshot = server.snapshot;
+			return true;
+		} catch (std::exception &ex) {
+			server.status = DuckLakeServerAttemptStatus::OUTCOME_UNKNOWN;
+			server.error = ErrorData(ex);
+		}
+	}
+	if (server.status == DuckLakeServerAttemptStatus::CLIENT) {
+		attempt = MaxValue<idx_t>(attempt, MinValue<idx_t>(server.last_attempt, retry_config.max_retry_count));
+		return false;
+	}
+	try {
+		context.try_rollback();
+	} catch (std::exception &) { // NOLINT
+	}
+	if (server.status == DuckLakeServerAttemptStatus::OUTCOME_UNKNOWN) {
+		// the files may be referenced by a commit
+		throw TransactionException(OutcomeUnknownMessage() + server.error.RawMessage());
+	}
+	FailCommit(server.error, server.finished_retrying, retry_config);
+}
+
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
@@ -2132,7 +2241,14 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
+	bool server_attempt_pending = static_cast<bool>(context.server_attempt);
 	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
+		if (i > 0 && server_attempt_pending) {
+			server_attempt_pending = false;
+			if (CommitOnServer(context, retry_config, i, commit_snapshot)) {
+				break;
+			}
+		}
 		bool can_retry;
 		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
@@ -2142,11 +2258,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
-				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
+				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context, i);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
 			}
+			auto read_snapshot = commit_snapshot;
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
@@ -2159,7 +2276,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
-			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
+			DuckLakeCommitAttempt attempt {transaction_snapshot, read_snapshot, commit_snapshot, stats,
+			                               transaction_changes,  batch_queries};
+			auto res = context.execute_relative_commit(attempt);
+			if (!res) {
+				res = context.execute_commit_batch(commit_snapshot, batch_queries);
+			}
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
 				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
@@ -2184,25 +2306,18 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			bool finished_retrying = i >= retry_config.max_retry_count;
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
-				CleanupFiles();
-				// Add additional information on the number of retries and suggest to increase it
-				string error_message = "Failed to commit DuckLake transaction.\n";
-				if (finished_retrying) {
-					error_message += StringUtil::Format(
-					    "Exceeded the maximum retry count of %d set by the ducklake_max_retry_count setting.\n"
-					    ". Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
-					    retry_config.max_retry_count, retry_config.max_retry_count * 10);
-				}
-				error.Throw(error_message);
+				FailCommit(error, finished_retrying, retry_config);
 			}
 
 #ifndef DUCKDB_NO_THREADS
-			RandomEngine random;
-			// random multiplier between 0.5 - 1.0
-			double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
-			uint64_t sleep_amount = (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
-			                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
-			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
+			if (!context.retries_wait_on_server()) {
+				RandomEngine random;
+				// random multiplier between 0.5 - 1.0
+				double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
+				uint64_t sleep_amount = (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
+				                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
+				std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
+			}
 #endif
 
 			// retry the transaction (with a new snapshot id)

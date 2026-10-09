@@ -135,6 +135,9 @@ SELECT COUNT(*) FROM retry_behavior_test;
 
 # Test 10: Test retry behavior with true concurrent transaction conflicts
 statement ok
+SET ducklake_server_side_retries = false
+
+statement ok
 CREATE TABLE ducklake.tbl(id INTEGER);
 
 concurrentloop i 0 5

@@ -1,0 +1,372 @@
+# name: test/sql/server_side_commit/postgres_server_side_rebase.test
+# description: A lost append race on a Postgres catalog commits once through ducklake_commit_v1
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_rebase CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_rebase', METADATA_SCHEMA 'server_side_rebase')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, s VARCHAR)
+
+statement ok
+CREATE TABLE dl.o (i INTEGER)
+
+statement ok
+CREATE TABLE dl.p (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (10, 'm')
+
+statement ok
+INSERT INTO dl.p SELECT range FROM range(100)
+
+# inlined append racing the same and another table
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (5, NULL), (20, 'z')
+
+statement ok con2
+INSERT INTO dl.t VALUES (15, 'a')
+
+statement ok con2
+INSERT INTO dl.o VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+# the call is the only statement of its transaction
+query II
+WITH pg_log AS (SELECT transaction_id, query FROM duckdb_logs_parsed('PostgresQueryLog'))
+SELECT count(*), bool_and(query LIKE 'COPY (SELECT "status", %ducklake_commit_v1(%') FROM pg_log
+WHERE transaction_id IN (SELECT transaction_id FROM pg_log WHERE query LIKE '%ducklake_commit_v1(%')
+----
+1	true
+
+query II
+SELECT rowid, i FROM dl.t ORDER BY rowid
+----
+0	10
+1	15
+2	5
+3	20
+
+query IIIIII
+SELECT column_id, contains_null, min_value, max_value, min_is_exact, max_is_exact
+FROM postgres_query('pg', 'SELECT c.* FROM server_side_rebase.ducklake_table_column_stats c
+JOIN server_side_rebase.ducklake_table t USING (table_id) WHERE t.table_name = ''t'' AND t.end_snapshot IS NULL')
+ORDER BY column_id
+----
+1	false	5	20	true	true
+2	true	a	z	true	true
+
+query II
+SELECT record_count, next_row_id FROM postgres_query('pg', 'SELECT s.* FROM server_side_rebase.ducklake_table_stats s
+JOIN server_side_rebase.ducklake_table t USING (table_id) WHERE t.table_name = ''t'' AND t.end_snapshot IS NULL')
+----
+4	4
+
+# parquet append
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.p SELECT range + 1000 FROM range(100)
+
+statement ok con2
+INSERT INTO dl.p VALUES (-1)
+
+statement ok con2
+INSERT INTO dl.o VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query IIIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), min(i), max(i) FROM dl.p
+----
+201	201	200	-1	1099
+
+query II
+SELECT min(rowid), max(rowid) FROM dl.p WHERE i >= 1000
+----
+101	200
+
+query II
+SELECT row_id_start, record_count FROM postgres_query('pg', 'SELECT d.* FROM server_side_rebase.ducklake_data_file d
+JOIN server_side_rebase.ducklake_table t USING (table_id) WHERE t.table_name = ''p'' AND t.end_snapshot IS NULL')
+ORDER BY row_id_start
+----
+0	100
+101	100
+
+query IIII
+SELECT record_count, next_row_id, size_matches, data_file_ids_unique FROM postgres_query('pg', 'SELECT s.*,
+s.file_size_bytes = (SELECT SUM(d.file_size_bytes) FROM server_side_rebase.ducklake_data_file d WHERE d.table_id = s.table_id) AS size_matches,
+(SELECT count(DISTINCT data_file_id) = count(*) FROM server_side_rebase.ducklake_data_file) AS data_file_ids_unique
+FROM server_side_rebase.ducklake_table_stats s
+JOIN server_side_rebase.ducklake_table t USING (table_id) WHERE t.table_name = ''p'' AND t.end_snapshot IS NULL')
+----
+201	201	true	true
+
+query IIIII
+SELECT column_id, contains_null, min_value, max_value, min_is_exact
+FROM postgres_query('pg', 'SELECT c.* FROM server_side_rebase.ducklake_table_column_stats c
+JOIN server_side_rebase.ducklake_table t USING (table_id) WHERE t.table_name = ''p'' AND t.end_snapshot IS NULL')
+----
+1	false	-1	1099	true
+
+# first inserts into empty tables
+statement ok
+CREATE TABLE dl.e (i INTEGER, s VARCHAR)
+
+statement ok
+CREATE TABLE dl.e2 (i INTEGER)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.e SELECT range, 'v' || range FROM range(50)
+
+statement ok con2
+INSERT INTO dl.o VALUES (3)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.e2 VALUES (7), (NULL)
+
+statement ok con2
+INSERT INTO dl.o VALUES (4)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+2
+
+query IIIIIII
+SELECT t.table_name, s.record_count, s.next_row_id, c.column_id, c.contains_null, c.min_value, c.max_value
+FROM postgres_query('pg', 'SELECT * FROM server_side_rebase.ducklake_table WHERE end_snapshot IS NULL') t
+JOIN postgres_query('pg', 'SELECT * FROM server_side_rebase.ducklake_table_stats') s USING (table_id)
+JOIN postgres_query('pg', 'SELECT * FROM server_side_rebase.ducklake_table_column_stats') c USING (table_id)
+WHERE t.table_name IN ('e', 'e2') ORDER BY ALL
+----
+e	50	50	1	false	0	49
+e	50	50	2	false	v0	v9
+e2	2	2	1	true	7	7
+
+query III
+SELECT count(*), count(DISTINCT rowid), max(rowid) FROM dl.e
+----
+50	50	49
+
+query II
+SELECT rowid, i FROM dl.e2 ORDER BY rowid
+----
+0	7
+1	NULL
+
+# lost server claims retry up to the retry count, even without wait time
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE server_side_rebase.lost_claims')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION server_side_rebase.lose_claim() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+	IF current_setting(''search_path'') = ''pg_catalog, pg_temp''
+	   AND nextval(''server_side_rebase.lost_claims'') <= 2 THEN
+		PERFORM pg_sleep(0.05);
+		RAISE EXCEPTION USING ERRCODE = ''unique_violation'', TABLE = ''ducklake_snapshot'', MESSAGE = ''lost claim'';
+	END IF;
+	RETURN NEW;
+END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TRIGGER lose_claim BEFORE INSERT ON server_side_rebase.ducklake_snapshot
+FOR EACH ROW EXECUTE FUNCTION server_side_rebase.lose_claim()')
+
+statement ok
+SET ducklake_retry_wait_ms = 0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (25, 'r')
+
+statement ok con2
+INSERT INTO dl.e2 VALUES (8)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%ducklake_commit_v1(%'),
+       count(*) FILTER (WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	0
+
+query I
+SELECT last_value FROM postgres_query('pg', 'SELECT last_value FROM server_side_rebase.lost_claims')
+----
+3
+
+query II
+SELECT count(*), max(rowid) FROM dl.t
+----
+5	4
+
+statement ok
+CALL postgres_execute('pg', 'ALTER SEQUENCE server_side_rebase.lost_claims RESTART')
+
+statement ok
+SET ducklake_max_retry_count = 2
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (26, 's')
+
+statement ok con2
+INSERT INTO dl.e2 VALUES (9)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Exceeded the maximum retry count of 2 set by the ducklake_max_retry_count setting.*the server-side commit retries were exhausted: lost claim.*
+
+statement ok
+RESET ducklake_max_retry_count
+
+statement ok
+RESET ducklake_retry_wait_ms
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER lose_claim ON server_side_rebase.ducklake_snapshot')
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 26
+----
+0
+
+# max_retry_count = 0 never calls the function
+statement ok
+SET ducklake_max_retry_count = 0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (30, 'q')
+
+statement ok con2
+INSERT INTO dl.o VALUES (5)
+
+statement error con1
+COMMIT
+----
+Exceeded the maximum retry count of 0
+
+statement ok
+CALL disable_logging()
+
+statement ok
+RESET ducklake_max_retry_count
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+0
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 30
+----
+0
+
+query I
+SELECT count(*) FROM dl.o
+----
+5
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_rebase CASCADE')

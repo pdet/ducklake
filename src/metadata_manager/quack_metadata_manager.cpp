@@ -82,49 +82,28 @@ void QuackMetadataManager::ClearCache() {
 	transaction.ExecuteRaw(clear);
 }
 
-void QuackMetadataManager::ProbeServerCapabilities() {
+bool QuackMetadataManager::ProbeServerCapabilities() {
 	// Check whether the quack server has the ducklake_commit function loaded (i.e. the ducklake
 	// extension is available server-side).
 	string probe = "SELECT 1 FROM duckdb_functions() WHERE function_name = 'ducklake_commit' LIMIT 1";
 	auto result = Query(probe);
 	if (!result || result->HasError()) {
-		return;
-	}
-	if (result->RowCount() > 0) {
-		transaction.GetCatalog().SetRetrialsServerSide(true);
-	}
-}
-
-static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
-	return c.created_schemas.empty() && c.dropped_schemas.empty() && c.created_tables.empty() &&
-	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
-	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
-	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty();
-}
-
-//! Whether the commit has to take the client-side path
-static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
-	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
-}
-
-bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {
-	if (RequiresClientSideCommit(transaction)) {
 		return false;
 	}
-	return ExecuteRetrialsServerSide() && IsDataOnlyCommit(changes);
+	if (result->RowCount() > 0) {
+		transaction.GetCatalog().SetServerCommitMode(DuckLakeServerCommitMode::STAGED);
+	}
+	return true;
+}
+
+bool QuackMetadataManager::SupportsServerSideCommit(const TransactionChangeInformation &changes) const {
+	return DuckLakeTransaction::IsDataOnlyCommit(changes) && !transaction.RequiresClientSideCommit();
 }
 
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,
                                                   DuckLakeSnapshot transaction_snapshot,
-                                                  const TransactionChangeInformation &transaction_changes,
+                                                  const TransactionChangeInformation &,
                                                   const DuckLakeRetryConfig &retry_config) {
-	if (!IsDataOnlyCommit(transaction_changes) || RequiresClientSideCommit(flush_transaction)) {
-		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
-		return;
-	}
 	transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
 	DuckLakeStagedCommit staged;
 	string batch = staged.Build(flush_transaction, transaction_snapshot, retry_config);

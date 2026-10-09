@@ -17,6 +17,9 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	names.emplace_back("data_path");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("server_side_retries");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+
 	auto result = make_uniq<MetadataBindData>();
 	vector<Value> row_values;
 
@@ -39,6 +42,10 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 #endif
 
 	row_values.push_back(Value(ducklake_catalog.DataPath()));
+
+	auto server_side_retries = DuckLakeRetryConfig::FromContext(context).server_side_retries;
+	auto server_commit_mode = ducklake_catalog.GetServerCommitMode();
+	row_values.push_back(Value::BOOLEAN(server_side_retries && server_commit_mode != DuckLakeServerCommitMode::NONE));
 
 	result->rows.push_back(std::move(row_values));
 	return std::move(result);

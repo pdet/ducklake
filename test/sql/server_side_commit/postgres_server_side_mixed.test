@@ -1,0 +1,125 @@
+# name: test/sql/server_side_commit/postgres_server_side_mixed.test
+# description: Sequenced and unsequenced Postgres committers keep the lake consistent
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_mixed CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_mixed', METADATA_SCHEMA 'server_side_mixed')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+statement ok
+SET ducklake_retry_wait_ms = 20
+
+statement ok
+SET ducklake_retry_backoff = 1.2
+
+statement ok
+SET ducklake_max_retry_count = 30
+
+statement ok
+CREATE TABLE dl.t (session INTEGER, i INTEGER)
+
+statement ok
+CREATE TABLE dl.p (session INTEGER, i INTEGER)
+
+# sessions 0-1 are sequenced, 2-3 are not, 4 creates tables
+concurrentforeach session 0 1 2 3 4
+
+onlyif session>=2&&session<=3
+statement ok
+SET SESSION ducklake_server_side_retries = false
+
+# sequencing reduces exhaustion but does not prevent it
+loop i 0 8
+
+onlyif session<=3
+statement maybe
+INSERT INTO dl.t VALUES ({session}, {i})
+----
+Exceeded the maximum retry count
+
+onlyif session<=3
+statement maybe
+INSERT INTO dl.p SELECT {session}, {i} * 100 + range FROM range(20)
+----
+Exceeded the maximum retry count
+
+onlyif session=4
+statement maybe
+CREATE TABLE dl.ddl_{i} (i INTEGER)
+----
+Exceeded the maximum retry count
+
+endloop
+
+endloop
+
+# snapshot ids stay dense
+query I
+SELECT max(snapshot_id) - min(snapshot_id) + 1 = count(*)
+FROM postgres_query('pg', 'SELECT snapshot_id FROM server_side_mixed.ducklake_snapshot')
+----
+true
+
+query I
+SELECT count(*) <= 8 FROM duckdb_tables() WHERE database_name = 'dl' AND table_name LIKE 'ddl_%'
+----
+true
+
+# row ids are unique and dense, and match the table stats
+query II
+SELECT count(*) = count(DISTINCT rowid), coalesce(max(rowid) + 1, 0) = count(*) FROM dl.t
+----
+true	true
+
+query III
+SELECT count(*) = count(DISTINCT rowid), coalesce(max(rowid) + 1, 0) = count(*), count(*) % 20 = 0 FROM dl.p
+----
+true	true	true
+
+query II
+SELECT bool_and(s.record_count = s.next_row_id), bool_and(s.record_count = CASE s.table_name
+	WHEN 't' THEN (SELECT count(*) FROM dl.t) ELSE (SELECT count(*) FROM dl.p) END)
+FROM postgres_query('pg', 'SELECT t.table_name, s.record_count, s.next_row_id
+FROM server_side_mixed.ducklake_table_stats s JOIN server_side_mixed.ducklake_table t USING (table_id)
+WHERE t.table_name IN (''t'', ''p'') AND t.end_snapshot IS NULL') s
+----
+true	true
+
+# every insert landed at most once, and whole
+query I
+SELECT count(*) = count(DISTINCT (session, i)) FROM dl.t
+----
+true
+
+query I
+SELECT bool_and(row_count = 20 AND value_count = 20) FROM (
+	SELECT count(*) AS row_count, count(DISTINCT i) AS value_count FROM dl.p GROUP BY session, i // 100)
+----
+true
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_mixed CASCADE')

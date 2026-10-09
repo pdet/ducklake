@@ -1,0 +1,377 @@
+# name: test/sql/server_side_commit/postgres_server_side_install.test
+# description: A writable Postgres attach installs the server-side commit functions
+# group: [server_side_commit]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_install CASCADE')
+
+# setting off at attach installs nothing
+statement ok
+SET ducklake_server_side_retries = false
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install')
+
+statement ok
+RESET ducklake_server_side_retries
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_install'' AND p.proname LIKE ''ducklake_commit%''')
+----
+0
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+DETACH dl
+
+# a writable attach installs both functions
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install')
+
+query II
+SELECT proname, uses_commit_key FROM postgres_query('pg', 'SELECT p.proname::TEXT AS proname,
+pg_get_functiondef(p.oid) LIKE ''%pg_advisory_xact_lock(1145848659, v_schema_oid)%'' AS uses_commit_key
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_install'' AND p.proname LIKE ''ducklake_commit%''') ORDER BY proname
+----
+ducklake_commit_fallback_v1	false
+ducklake_commit_v1	true
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+DETACH dl
+
+# a second attach keeps the installed functions
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install')
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_install'' AND p.proname LIKE ''ducklake_commit%''')
+----
+2
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP FUNCTION server_side_install.ducklake_commit_v1(bigint, text, bigint, bigint[],
+bigint[], text[], bigint[], text, bigint, bigint, double precision)')
+
+# read-only and AT attaches neither probe nor install
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install', READ_ONLY)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install', SNAPSHOT_VERSION 2)
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_install'' AND p.proname LIKE ''ducklake_commit%''')
+----
+1
+
+# a writable attach creates the missing function only
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install')
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_install'' AND p.proname LIKE ''ducklake_commit%''')
+----
+2
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+statement ok
+DETACH dl
+
+# a non read committed default keeps client commits
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-cdefault_transaction_isolation=serializable' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install', METADATA_SCHEMA 'server_side_install')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_install CASCADE')
+
+# delimiters inside the schema name get retagged
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS "quote$f$dlc$" CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_install_quote', METADATA_SCHEMA 'quote$f$dlc$')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''quote$f$dlc$'' AND p.proname LIKE ''ducklake_commit%''
+AND (p.proname = ''ducklake_commit_fallback_v1'' OR strpos(p.prosrc, n.nspname) > 0)')
+----
+2
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA "quote$f$dlc$" CASCADE')
+
+# a role without EXECUTE keeps client commits
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT SELECT ON pg_catalog.pg_language TO PUBLIC')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS server_side_role CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE IF EXISTS ducklake_server_side_role')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE ROLE ducklake_server_side_role')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_role', METADATA_SCHEMA 'server_side_role')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE, CREATE ON SCHEMA server_side_role TO ducklake_server_side_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT ALL ON ALL TABLES IN SCHEMA server_side_role TO ducklake_server_side_role')
+
+statement ok
+CALL postgres_execute('pg', 'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA server_side_role FROM PUBLIC')
+
+statement ok
+CALL enable_logging(level = 'warning')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_server_side_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_role', METADATA_SCHEMA 'server_side_role')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake server-side commit%'
+----
+DuckLake server-side commit retries are disabled: the commit functions are not executable
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+DETACH dl
+
+# unusable PL/pgSQL skips the install
+statement ok
+CALL postgres_execute('pg', 'DROP FUNCTION server_side_role.ducklake_commit_v1(bigint, text, bigint, bigint[],
+bigint[], text[], bigint[], text, bigint, bigint, double precision)')
+
+statement ok
+CALL postgres_execute('pg', 'REVOKE USAGE ON LANGUAGE plpgsql FROM PUBLIC')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_server_side_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_role', METADATA_SCHEMA 'server_side_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake server-side commit%'
+----
+DuckLake server-side commit retries are disabled: PL/pgSQL is not available or not usable
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+DETACH dl
+
+# a failing probe restarts the attach without it
+statement ok
+CALL postgres_execute('pg', 'REVOKE SELECT ON pg_catalog.pg_language FROM PUBLIC')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_server_side_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_role', METADATA_SCHEMA 'server_side_role')
+
+statement ok
+CALL postgres_execute('pg', 'GRANT SELECT ON pg_catalog.pg_language TO PUBLIC')
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message LIKE 'DuckLake server-side commit retries are disabled:%permission denied for table pg_language%'
+----
+1
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+DETACH dl
+
+# a busy install key bounds the attach wait
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848649,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_role'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-cstatement_timeout=2000' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_role', METADATA_SCHEMA 'server_side_role')
+
+statement ok con2
+COMMIT
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake server-side commit%'
+----
+DuckLake server-side commit retries are disabled: the commit functions are missing and could not be created
+
+statement ok
+CALL disable_logging()
+
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = ''server_side_role'' AND p.proname LIKE ''ducklake_commit%''')
+----
+1
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA server_side_role CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP ROLE ducklake_server_side_role')

@@ -36,6 +36,14 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/server_side_commit/postgres_server_side_install.test",
+        "test/sql/server_side_commit/postgres_server_side_sequenced.test",
+        "test/sql/server_side_commit/postgres_server_side_mixed.test",
+        "test/sql/server_side_commit/postgres_server_side_parity.test",
+        "test/sql/server_side_commit/postgres_server_side_rebase.test",
+        "test/sql/server_side_commit/postgres_server_side_conflict.test",
+        "test/sql/server_side_commit/postgres_server_side_statuses.test",
+        "test/sql/server_side_commit/postgres_server_side_unknown.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
@@ -238,13 +246,6 @@
       "reason": "FIXME: NotImplementedException: GetDBPath not implemented yet",
       "paths": [
         "test/sql/attach/attach_replace.test"
-      ]
-    },
-    {
-      "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
-      "paths": [
-        "test/sql/retry/commit_failure.test",
-        "test/sql/settings/max_retry_count.test"
       ]
     },
     {

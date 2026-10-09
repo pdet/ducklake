@@ -118,6 +118,14 @@ vector<ParsedChange> ParseChangesList(const string &changes_made) {
 
 } // namespace
 
+vector<string> SnapshotChangeInformation::KnownChangeKinds() {
+	vector<string> result;
+	for (auto &entry : CHANGE_TYPE_NAMES) {
+		result.emplace_back(entry.string);
+	}
+	return result;
+}
+
 SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const string &changes_made) {
 	auto change_list = ParseChangesList(changes_made);
 
