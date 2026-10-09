@@ -33,6 +33,8 @@ public:
 	static constexpr int32_t COMMIT_LOCK_KEY = 1145848659;
 	//! Serializes installs
 	static constexpr int32_t INSTALL_LOCK_KEY = 1145848649;
+	//! Locked after COMMIT_LOCK_KEY; optimistic batches share it
+	static constexpr int32_t BATCH_LOCK_KEY = 1145848642;
 
 	//! Capability probe query; never raises
 	static string ProbeSql(const string &schema_literal);
@@ -44,6 +46,8 @@ public:
 	static double RetrySleepMs(const DuckLakeRetryConfig &retry_config, idx_t attempt);
 	//! First statements of a sequenced commit attempt
 	static string SequencerSql(const string &schema_literal, int64_t lock_budget_ms);
+	//! Bounded shared batch key take, with placeholders
+	static string SharedKeySql(int64_t lock_budget_ms, const std::function<string(const string &)> &substitute);
 	//! Snapshot row columns of the sequenced state read
 	static vector<string> SequencedStateColumns();
 	//! Stamps the snapshot claim after the key wait

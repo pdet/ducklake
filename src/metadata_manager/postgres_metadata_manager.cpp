@@ -354,6 +354,11 @@ void PostgresMetadataManager::SubstitutePostgresPlaceholders(string &query) cons
 	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 }
 
+string PostgresMetadataManager::WithPostgresPlaceholders(string query) const {
+	SubstitutePostgresPlaceholders(query);
+	return query;
+}
+
 string PostgresMetadataManager::ServerCallSql(const string &query) const {
 	auto catalog_literal = SQLString::ToString(transaction.GetCatalog().MetadataDatabaseName());
 	return StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query));
@@ -426,13 +431,17 @@ string PostgresMetadataManager::ProbeServerCommit(PostgresServerCommitCapabiliti
 
 string PostgresMetadataManager::InstallServerCommit() {
 	auto schema_literal = SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName());
-	auto install = PostgresServerCommit::InstallSql(schema_literal, [&](const string &sql) {
-		auto result = sql;
-		SubstitutePostgresPlaceholders(result);
-		return result;
-	});
+	auto install = PostgresServerCommit::InstallSql(schema_literal,
+	                                                [&](const string &sql) { return WithPostgresPlaceholders(sql); });
 	auto result = ExecuteOnServer(install);
 	return result->HasError() ? result->GetError() : string();
+}
+
+//! Turns the server-side commit off with a warning
+static void DisableServerCommit(DuckLakeCatalog &catalog, const string &reason) {
+	catalog.SetServerCommitMode(DuckLakeServerCommitMode::NONE);
+	DUCKDB_LOG_WARNING(catalog.GetDatabase(),
+	                   StringUtil::Format("DuckLake server-side commit retries are disabled: %s", reason));
 }
 
 bool PostgresMetadataManager::ProbeServerCapabilities() {
@@ -448,8 +457,7 @@ bool PostgresMetadataManager::ProbeServerCapabilities() {
 	}
 	auto reason = error.empty() ? ServerCommitDisabledReason(capabilities) : error;
 	if (!reason.empty()) {
-		DUCKDB_LOG_WARNING(catalog.GetDatabase(),
-		                   StringUtil::Format("DuckLake server-side commit retries are disabled: %s", reason));
+		DisableServerCommit(catalog, reason);
 		return error.empty();
 	}
 	catalog.SetServerCommitMode(DuckLakeServerCommitMode::PG_FUNCTION);
@@ -461,16 +469,39 @@ static int64_t SteadyClockMs() {
 	    .count();
 }
 
-//! The key wait budget starts with the first retry
+//! The key wait budget starts with the first wait
 static void StartLockBudget(PostgresSequencedRetry &retry, int64_t now_ms) {
 	if (retry.deadline_ms < 0) {
 		retry.deadline_ms = now_ms + retry.lock_budget_ms;
 	}
 }
 
+static int64_t RemainingLockBudgetMs(PostgresSequencedRetry &retry) {
+	auto now_ms = SteadyClockMs();
+	StartLockBudget(retry, now_ms);
+	return MaxValue<int64_t>(retry.deadline_ms - now_ms, 0);
+}
+
 //! Errors that turn the server-side commit off
 static bool DisablesServerCommit(const string &message) {
 	return StringUtil::Contains(message, "does not exist") || StringUtil::Contains(message, "permission denied");
+}
+
+//! First line of the server error after the echoed sql
+static string EchoedServerError(const string &message, const string &sent_sql) {
+	// the scanner drops trailing semicolons
+	auto sent_end = sent_sql.find_last_not_of("; \t\n\r\v\f");
+	auto sent = sent_end == string::npos ? string::npos : message.find(sent_sql.c_str(), 0, sent_end + 1);
+	if (sent == string::npos) {
+		return string();
+	}
+	// libpq writes "<localized severity>:  <message>"
+	auto start = message.find(":  ", sent + sent_end + 1);
+	if (start == string::npos) {
+		return string();
+	}
+	start += 3;
+	return message.substr(start, message.find('\n', start) - start);
 }
 
 void PostgresMetadataManager::PrepareCommitLoop(DuckLakeCommitContext &context,
@@ -490,6 +521,7 @@ void PostgresMetadataManager::PrepareCommitLoop(DuckLakeCommitContext &context,
 	if (!retry_config.server_side_retries) {
 		return;
 	}
+	retry->shared_key = true;
 	retry->lock_budget_ms = PostgresServerCommit::SequencedLockBudgetMs(retry_config);
 	context.acquire_sequenced_state = [this, retry](idx_t attempt, DuckLakeSnapshot transaction_snapshot,
 	                                                SnapshotAndStats &state, SnapshotChangeInfo &changes) {
@@ -503,12 +535,43 @@ void PostgresMetadataManager::PrepareCommitLoop(DuckLakeCommitContext &context,
 		    static_cast<idx_t>(PostgresServerCommit::RetrySleepMs(retry_config, attempt) * random_multiplier));
 	};
 	auto execute_commit_batch = context.execute_commit_batch;
-	context.execute_commit_batch = [retry, execute_commit_batch](DuckLakeSnapshot snapshot, string &query) {
+	context.execute_commit_batch = [this, retry, execute_commit_batch](DuckLakeSnapshot snapshot, string &query) {
 		if (retry->sequenced_state) {
 			PostgresServerCommit::SetSequencedSnapshotTime(query);
+			return execute_commit_batch(snapshot, query);
 		}
-		return execute_commit_batch(snapshot, query);
+		auto shared_key = SharedKeySql(*retry);
+		if (shared_key.empty()) {
+			return execute_commit_batch(snapshot, query);
+		}
+		query.insert(0, shared_key);
+		auto result = execute_commit_batch(snapshot, query);
+		auto server_error =
+		    result->HasError() ? EchoedServerError(result->GetErrorObject().RawMessage(), query) : string();
+		if (StringUtil::Contains(server_error, "plpgsql")) {
+			// the leading DO failed, so nothing ran
+			DisableServerCommit(transaction.GetCatalog(), server_error);
+			retry->shared_key_denied = true;
+		}
+		return result;
 	};
+	auto is_retryable_metadata_error = context.is_retryable_metadata_error;
+	context.is_retryable_metadata_error = [retry, is_retryable_metadata_error](const string &message) {
+		if (retry->shared_key_denied) {
+			retry->shared_key_denied = false;
+			return true;
+		}
+		return is_retryable_metadata_error(message);
+	};
+}
+
+string PostgresMetadataManager::SharedKeySql(PostgresSequencedRetry &retry) const {
+	if (!retry.shared_key || retry.sequenced_state ||
+	    transaction.GetCatalog().GetServerCommitMode() != DuckLakeServerCommitMode::PG_FUNCTION) {
+		return string();
+	}
+	return PostgresServerCommit::SharedKeySql(RemainingLockBudgetMs(retry),
+	                                          [&](const string &sql) { return WithPostgresPlaceholders(sql); });
 }
 
 bool PostgresMetadataManager::RetryWaitsOnServer(PostgresSequencedRetry &retry) const {
@@ -529,9 +592,7 @@ bool PostgresMetadataManager::AcquireSequencedState(PostgresSequencedRetry &retr
 	if (retry.unsequenced || catalog.GetServerCommitMode() != DuckLakeServerCommitMode::PG_FUNCTION) {
 		return false;
 	}
-	auto now_ms = SteadyClockMs();
-	StartLockBudget(retry, now_ms);
-	auto lock_budget_ms = MaxValue<int64_t>(retry.deadline_ms - now_ms, 0);
+	auto lock_budget_ms = RemainingLockBudgetMs(retry);
 	auto schema_literal = SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName());
 	auto sequencer =
 	    transaction.ExecuteRaw(ServerCallSql(PostgresServerCommit::SequencerSql(schema_literal, lock_budget_ms)));
@@ -588,7 +649,7 @@ bool PostgresMetadataManager::AcquireSequencedState(PostgresSequencedRetry &retr
 	retry.key_wait_timed_out = sequenced != "true";
 	if (retry.key_wait_timed_out) {
 		DUCKDB_LOG_INFO(catalog.GetDatabase(),
-		                StringUtil::Format("DuckLake commit attempt %d did not get the commit key within %s ms and "
+		                StringUtil::Format("DuckLake commit attempt %d did not get the commit keys within %s ms and "
 		                                   "runs unsequenced",
 		                                   attempt, lock_wait_ms));
 	}
@@ -831,7 +892,7 @@ bool PostgresMetadataManager::RelativeCommitUsable(PostgresRelativeDebugState &d
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteRelativeCommit(
-    PostgresRelativeDebugState &debug_state, const PostgresSequencedRetry &retry, const DuckLakeCommitAttempt &attempt,
+    PostgresRelativeDebugState &debug_state, PostgresSequencedRetry &retry, const DuckLakeCommitAttempt &attempt,
     const std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> &get_table_stats) {
 	if ((debug_state.checked && !debug_state.usable) || !transaction.IsAppendOnlyCommit(attempt.changes)) {
 		return nullptr;
@@ -882,7 +943,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteRelativeCommit(
 	SubstituteTransactionPlaceholders(commit_snapshot, absolute_body);
 	SubstitutePostgresPlaceholders(absolute_body);
 	auto result =
-	    ExecuteOnServer(PostgresServerCommit::RelativeExecutionSql(claim, bases, relative_body, absolute_body));
+	    ExecuteOnServer(WithPostgresPlaceholders(SharedKeySql(retry)) +
+	                    PostgresServerCommit::RelativeExecutionSql(claim, bases, relative_body, absolute_body));
 	// the fallback reason is only read when logged
 	if (result->HasError() || !Logger::Get(db).ShouldLog(DefaultLogType::NAME, LogLevel::LOG_WARNING)) {
 		return result;
@@ -932,17 +994,8 @@ void PostgresMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 
 //! EXECUTE is checked before the function body runs
 static bool CommitCallNotPermitted(const string &message, const string &call_sql) {
-	auto call = call_sql.empty() ? string::npos : message.find(call_sql);
-	if (call == string::npos) {
-		return false;
-	}
-	auto error = message.find("ERROR:", call + call_sql.size());
-	if (error == string::npos) {
-		return false;
-	}
-	auto start = message.find_first_not_of(' ', error + 6);
-	string denied = "permission denied for function ducklake_commit_v1";
-	return start != string::npos && message.compare(start, denied.size(), denied) == 0;
+	return StringUtil::StartsWith(EchoedServerError(message, call_sql),
+	                              "permission denied for function ducklake_commit_v1");
 }
 
 DuckLakeServerAttempt PostgresMetadataManager::ServerCommitHandBack(const ErrorData &error, idx_t last_attempt) {

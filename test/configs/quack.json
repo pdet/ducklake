@@ -44,6 +44,7 @@
         "test/sql/server_side_commit/postgres_server_side_conflict.test",
         "test/sql/server_side_commit/postgres_server_side_statuses.test",
         "test/sql/server_side_commit/postgres_server_side_unknown.test",
+        "test/sql/server_side_commit/postgres_server_side_ddl_fairness.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",

@@ -248,9 +248,15 @@ static string TagFunctionBody(const string &sql_template, const string &tag,
 	return result;
 }
 
+//! Takes the lake's advisory key with lock_function
+static string AdvisoryKeySql(const char *lock_function, int32_t key, const string &schema_literal) {
+	return StringUtil::Format("PERFORM pg_catalog.%s(%d, (SELECT n.oid FROM pg_catalog.pg_namespace n "
+	                          "WHERE n.nspname = %s)::INTEGER);\n",
+	                          lock_function, key, schema_literal);
+}
+
 //! DO block body with a bounded lock wait
-static string BoundedLockBody(int32_t key, const string &schema_literal, int64_t lock_ms,
-                              int64_t statement_timeout_permille, const string &locked_sql,
+static string BoundedLockBody(const string &lock_sql, int64_t lock_ms, int64_t statement_timeout_permille,
                               const string &handled_errors, const string &handler_sql) {
 	return StringUtil::Format(
 	    "\nDECLARE\n"
@@ -272,15 +278,13 @@ static string BoundedLockBody(int32_t key, const string &schema_literal, int64_t
 	    "\tv_lock_ms := GREATEST(pg_catalog.ceil(v_lock_ms), 1);\n"
 	    "\tBEGIN\n"
 	    "\t\tPERFORM pg_catalog.set_config('lock_timeout', v_lock_ms::BIGINT::TEXT, true);\n"
-	    "\t\tPERFORM pg_catalog.pg_advisory_xact_lock(%d, (SELECT n.oid FROM pg_catalog.pg_namespace n "
-	    "WHERE n.nspname = %s)::INTEGER);\n"
 	    "%s"
 	    "\tEXCEPTION WHEN %s THEN\n"
 	    "%s"
 	    "\tEND;\n"
 	    "\tPERFORM pg_catalog.set_config('lock_timeout', v_saved_lock_timeout, true);\n"
 	    "END\n",
-	    lock_ms, statement_timeout_permille, key, schema_literal, locked_sql, handled_errors, handler_sql);
+	    lock_ms, statement_timeout_permille, lock_sql, handled_errors, handler_sql);
 }
 
 string PostgresServerCommit::InstallSql(const string &schema_literal,
@@ -296,8 +300,8 @@ string PostgresServerCommit::InstallSql(const string &schema_literal,
 	                       RegProcedure(schema_literal, COMMIT_SIGNATURE), statement_tag, commit_sql, statement_tag);
 	// WHEN OTHERS cannot catch statement_timeout cancels
 	auto body = BoundedLockBody(
-	    INSTALL_LOCK_KEY, schema_literal, 5000, 500, create_sql, "OTHERS",
-	    "\t\tRAISE WARNING 'DuckLake could not install its server-side commit functions: %', SQLERRM;\n");
+	    "\t\t" + AdvisoryKeySql("pg_advisory_xact_lock", INSTALL_LOCK_KEY, schema_literal) + create_sql, 5000, 500,
+	    "OTHERS", "\t\tRAISE WARNING 'DuckLake could not install its server-side commit functions: %', SQLERRM;\n");
 	auto block_tag = DollarQuoteTag("dli", body);
 	return "DO " + block_tag + body + block_tag + ";";
 }
@@ -333,13 +337,31 @@ double PostgresServerCommit::RetrySleepMs(const DuckLakeRetryConfig &retry_confi
 }
 
 string PostgresServerCommit::SequencerSql(const string &schema_literal, int64_t lock_budget_ms) {
+	// both waits share the lock budget
 	auto body = BoundedLockBody(
-	    COMMIT_LOCK_KEY, schema_literal, lock_budget_ms, 800,
-	    "\t\tPERFORM pg_catalog.set_config('ducklake_commit.sequenced', 'true', true);\n", "lock_not_available",
+	    "\t\t" + AdvisoryKeySql("pg_advisory_xact_lock", COMMIT_LOCK_KEY, schema_literal) +
+	        "\t\tPERFORM pg_catalog.set_config('lock_timeout', GREATEST(pg_catalog.ceil(v_lock_ms - extract(epoch "
+	        "FROM pg_catalog.clock_timestamp() - pg_catalog.statement_timestamp()) * 1000), 1)::BIGINT::TEXT, "
+	        "true);\n\t\t" +
+	        AdvisoryKeySql("pg_advisory_xact_lock", BATCH_LOCK_KEY, schema_literal) +
+	        "\t\tPERFORM pg_catalog.set_config('ducklake_commit.sequenced', 'true', true);\n",
+	    lock_budget_ms, 800, "lock_not_available",
 	    "\t\tPERFORM pg_catalog.set_config('ducklake_commit.sequenced', 'false', true),\n"
 	    "\t\t        pg_catalog.set_config('ducklake_commit.lock_wait_ms', v_lock_ms::BIGINT::TEXT, true);\n");
 	auto block_tag = DollarQuoteTag("dlseq", body);
 	return "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;\nDO " + block_tag + body + block_tag + ";";
+}
+
+string PostgresServerCommit::SharedKeySql(int64_t lock_budget_ms,
+                                          const std::function<string(const string &)> &substitute) {
+	// waiting with written rows could deadlock
+	auto body = BoundedLockBody(
+	    "\t\tIF pg_catalog.txid_current_if_assigned() IS NULL THEN\n\t\t\t" +
+	        AdvisoryKeySql("pg_advisory_xact_lock_shared", BATCH_LOCK_KEY, "{METADATA_SCHEMA_NAME_LITERAL}") +
+	        "\t\tEND IF;\n",
+	    lock_budget_ms, 800, "OTHERS", "\t\tNULL;\n");
+	auto block_tag = DollarQuoteTag("dlshr", substitute(body));
+	return "DO " + block_tag + body + block_tag + ";\n";
 }
 
 vector<string> PostgresServerCommit::SequencedStateColumns() {

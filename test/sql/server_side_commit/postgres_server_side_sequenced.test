@@ -272,12 +272,12 @@ COMMIT
 statement ok con3
 COMMIT
 
-# the budget starts with the first retry, the stub spent part of it
+# the budget starts with the first attempt, the stub spent part of it
 query III
 SELECT count(*), min(regexp_extract(message, 'within ([0-9]+) ms', 1)::INTEGER) <= 10,
        max(regexp_extract(message, 'within ([0-9]+) ms', 1)::INTEGER) <= 30
 FROM duckdb_logs
-WHERE regexp_matches(message, '^DuckLake commit attempt 1 did not get the commit key within [0-9]+ ms and runs unsequenced$')
+WHERE regexp_matches(message, '^DuckLake commit attempt 1 did not get the commit keys within [0-9]+ ms and runs unsequenced$')
 ----
 2	true	true
 
@@ -340,7 +340,7 @@ COMMIT
 
 query I
 SELECT count(*) FROM duckdb_logs
-WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+WHERE message = 'DuckLake commit attempt 1 did not get the commit keys within 800 ms and runs unsequenced'
 ----
 1
 
@@ -400,7 +400,7 @@ COMMIT
 
 query I
 SELECT count(*) FROM duckdb_logs
-WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+WHERE message = 'DuckLake commit attempt 1 did not get the commit keys within 800 ms and runs unsequenced'
 ----
 1
 
@@ -495,7 +495,7 @@ CALL disable_logging()
 
 query I
 SELECT count(*) FROM duckdb_logs
-WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+WHERE message = 'DuckLake commit attempt 1 did not get the commit keys within 800 ms and runs unsequenced'
 ----
 1
 
@@ -521,7 +521,7 @@ RESET ducklake_retry_backoff
 statement ok
 RESET ducklake_max_retry_count
 
-# a sequencer without PL/pgSQL turns sequencing off
+# a first attempt without PL/pgSQL turns sequencing off
 statement ok
 CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
 
@@ -571,11 +571,13 @@ COMMIT
 statement ok
 CALL postgres_execute('pg', 'GRANT USAGE ON LANGUAGE plpgsql TO PUBLIC')
 
-query I
-SELECT count(*) FROM duckdb_logs
-WHERE message LIKE 'DuckLake commit attempt 1 runs unsequenced:%permission denied for language plpgsql%'
+query II
+SELECT count(*) FILTER (WHERE message = 'DuckLake server-side commit retries are disabled: '
+                              || 'permission denied for language plpgsql'),
+       count(*) FILTER (WHERE message LIKE 'DuckLake commit attempt%')
+FROM duckdb_logs
 ----
-1
+1	0
 
 statement ok
 CALL disable_logging()
@@ -589,6 +591,71 @@ query IIII
 SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.t
 ----
 9	9	8	36
+
+statement ok
+DETACH dl
+
+# a sequencer without the key functions runs unsequenced
+statement ok
+CALL postgres_execute('pg', 'GRANT EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(integer, integer),
+pg_catalog.pg_advisory_xact_lock_shared(integer, integer) TO PUBLIC')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-crole=ducklake_sequenced_role' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_sequenced', METADATA_SCHEMA 'server_side_sequenced')
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+true
+
+# a failed run is undone by the GRANT above
+statement ok
+CALL postgres_execute('pg', 'REVOKE EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(integer, integer),
+pg_catalog.pg_advisory_xact_lock_shared(integer, integer) FROM PUBLIC')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'warning')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.r1 (i INTEGER)
+
+statement ok con2
+CREATE TABLE dl.r2 (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL postgres_execute('pg', 'GRANT EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(integer, integer),
+pg_catalog.pg_advisory_xact_lock_shared(integer, integer) TO PUBLIC')
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE message LIKE
+       'DuckLake commit attempt 1 runs unsequenced:%permission denied for function pg_advisory_xact_lock%'),
+       count(*) FILTER (WHERE message LIKE 'DuckLake server-side commit retries are disabled%')
+FROM duckdb_logs
+----
+1	0
+
+query I
+SELECT server_side_retries FROM ducklake_settings('dl')
+----
+false
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name IN ('r1', 'r2')
+----
+2
 
 statement ok
 DETACH dl

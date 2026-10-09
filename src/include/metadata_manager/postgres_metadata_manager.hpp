@@ -24,6 +24,10 @@ struct PostgresSequencedRetry {
 	bool sequenced_state = false;
 	//! Set after a failed sequencer, for all attempts
 	bool unsequenced = false;
+	//! Unsequenced batches take the batch key shared
+	bool shared_key = false;
+	//! The batch failed on PL/pgSQL; retry it
+	bool shared_key_denied = false;
 };
 
 //! Server-side commit state of one commit loop
@@ -86,17 +90,20 @@ protected:
 
 private:
 	void SubstitutePostgresPlaceholders(string &query) const;
+	string WithPostgresPlaceholders(string query) const;
 	string ServerCallSql(const string &query) const;
 	string ServerQuerySql(const string &query) const;
 	string ServerCommitCallSql(const string &query) const;
 	unique_ptr<QueryResult> ExecuteOnServer(const string &query);
-	//! Locks the commit key, then reads the state
+	//! Locks the commit keys, then reads the state
 	bool AcquireSequencedState(PostgresSequencedRetry &retry, idx_t attempt, DuckLakeSnapshot transaction_snapshot,
 	                           SnapshotAndStats &state, SnapshotChangeInfo &changes);
 	bool RetryWaitsOnServer(PostgresSequencedRetry &retry) const;
+	//! Shared key prefix of an unsequenced batch
+	string SharedKeySql(PostgresSequencedRetry &retry) const;
 	//! Debug: commits an append through the template
 	unique_ptr<QueryResult>
-	ExecuteRelativeCommit(PostgresRelativeDebugState &debug_state, const PostgresSequencedRetry &retry,
+	ExecuteRelativeCommit(PostgresRelativeDebugState &debug_state, PostgresSequencedRetry &retry,
 	                      const DuckLakeCommitAttempt &attempt,
 	                      const std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> &get_table_stats);
 	//! Whether the debug template can run now
