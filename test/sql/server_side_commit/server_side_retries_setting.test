@@ -19,10 +19,13 @@ true
 statement error
 SET ducklake_debug_server_commit_fault = 'unknown_fault'
 ----
-ducklake_debug_server_commit_fault must be '' or 'ack_lost'
+ducklake_debug_server_commit_fault must be '', 'ack_lost' or 'local_commit_failed'
 
 statement ok
 SET ducklake_debug_server_commit_fault = 'ack_lost'
+
+statement ok
+SET ducklake_debug_server_commit_fault = 'local_commit_failed'
 
 statement ok
 RESET ducklake_debug_server_commit_fault

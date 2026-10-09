@@ -67,9 +67,9 @@ struct DuckLakeCommitContext {
 	    [](idx_t, DuckLakeSnapshot, SnapshotAndStats &, SnapshotChangeInfo &) {
 		    return false;
 	    };
-	//! Skips the backoff sleep before the next retry
-	std::function<bool()> retries_wait_on_server = []() {
-		return false;
+	//! Retry sleep ms; invalid uses the client formula
+	std::function<optional_idx(idx_t, double)> retry_sleep_ms = [](idx_t, double) {
+		return optional_idx();
 	};
 	//! Runs the attempt relatively; null runs the batch
 	std::function<unique_ptr<QueryResult>(const DuckLakeCommitAttempt &)> execute_relative_commit =

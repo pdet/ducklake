@@ -8,6 +8,8 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
 
+#include <cmath>
+
 namespace duckdb {
 
 static constexpr const char *FALLBACK_SIGNATURE = "ducklake_commit_fallback_v1(text)";
@@ -37,9 +39,12 @@ AS $dlc$
 DECLARE
 	v_schema_oid INTEGER := (SELECT n.oid FROM pg_namespace n WHERE n.nspname = {METADATA_SCHEMA_NAME_LITERAL})::INTEGER;
 	v_saved_lock_ms DOUBLE PRECISION := extract(epoch FROM current_setting('lock_timeout')::INTERVAL) * 1000;
+	v_transaction_timeout TEXT := current_setting('transaction_timeout', true);
+	c_max_ms CONSTANT DOUBLE PRECISION := 3600000;
 	v_max BIGINT := LEAST(GREATEST(p_max_retry_count, 0), 10000);
-	v_wait DOUBLE PRECISION := GREATEST(p_retry_wait_ms, 0);
-	v_backoff DOUBLE PRECISION := GREATEST(p_retry_backoff, 1);
+	v_wait DOUBLE PRECISION := LEAST(GREATEST(p_retry_wait_ms, 0), c_max_ms);
+	v_backoff DOUBLE PRECISION := CASE WHEN p_retry_backoff > 1 AND p_retry_backoff <> 'NaN' THEN p_retry_backoff
+	                                   ELSE 1 END;
 	v_attempt BIGINT := 1;
 	v_locked BOOLEAN := true;
 	v_budget_ms DOUBLE PRECISION := 0;
@@ -64,33 +69,40 @@ BEGIN
 		RETURN;
 	END IF;
 	-- saturating lock budget = the client backoff sleeps attempts 1..max would take
-	v_step_ms := LEAST(v_wait * v_backoff, 3600000);
+	v_step_ms := v_wait;
 	FOR i IN 1 .. v_max LOOP
-		v_budget_ms := LEAST(v_budget_ms + v_step_ms, 3600000);
-		v_step_ms := LEAST(v_step_ms * v_backoff, 3600000);
+		-- saturates before multiplying
+		v_step_ms := CASE WHEN v_step_ms <= 0 THEN 0 WHEN v_step_ms >= c_max_ms / v_backoff THEN c_max_ms
+		                  ELSE v_step_ms * v_backoff END;
+		v_budget_ms := LEAST(v_budget_ms + v_step_ms, c_max_ms);
+		EXIT WHEN v_budget_ms >= c_max_ms;
 	END LOOP;
 	-- the budget bounds waits, not attempts
 	v_deadline := clock_timestamp() + make_interval(secs => GREATEST(v_budget_ms, 1) / 1000.0);
 	IF current_setting('statement_timeout') <> '0' THEN
 		v_stop := statement_timestamp() + current_setting('statement_timeout')::INTERVAL * 0.8;
-		v_deadline := LEAST(v_deadline, v_stop);
 	END IF;
-	v_step_ms := LEAST(v_wait * v_backoff, 3600000);
+	IF v_transaction_timeout IS NOT NULL AND v_transaction_timeout <> '0' THEN
+		v_stop := LEAST(v_stop, transaction_timestamp() + v_transaction_timeout::INTERVAL * 0.8);
+	END IF;
+	v_deadline := LEAST(v_deadline, v_stop);
+	v_step_ms := v_wait;
 	LOOP
 		BEGIN
 			IF v_locked THEN
-				v_lock_ms := GREATEST(1, ceil(extract(epoch FROM v_deadline - clock_timestamp()) * 1000));
-				IF v_saved_lock_ms > 0 THEN
-					v_lock_ms := LEAST(v_lock_ms, v_saved_lock_ms);
-				END IF;
+				v_lock_ms := LEAST(GREATEST(1, ceil(extract(epoch FROM v_deadline - clock_timestamp()) * 1000)),
+				                   NULLIF(v_saved_lock_ms, 0));
 				BEGIN
 					PERFORM set_config('lock_timeout', v_lock_ms::BIGINT::TEXT, true);
 					PERFORM pg_advisory_xact_lock(1145848659, v_schema_oid);
-					PERFORM set_config('lock_timeout', (v_saved_lock_ms::BIGINT)::TEXT, true);
 				EXCEPTION WHEN lock_not_available THEN
 					v_locked := false;
 				END;
 			END IF;
+			-- each lock wait gets the time left to v_stop
+			PERFORM set_config('lock_timeout', CASE WHEN v_stop IS NULL THEN v_saved_lock_ms
+			        ELSE LEAST(GREATEST(1, ceil(extract(epoch FROM v_stop - clock_timestamp()) * 1000)),
+			                   NULLIF(v_saved_lock_ms, 0)) END::BIGINT::TEXT, true);
 			SELECT s.snapshot_id, s.snapshot_time, s.schema_version, s.next_catalog_id, s.next_file_id INTO v_latest
 			FROM {METADATA_CATALOG}.ducklake_snapshot s ORDER BY s.snapshot_id DESC LIMIT 1;
 			v_snapshot_id := v_latest.snapshot_id + 1;
@@ -142,7 +154,12 @@ BEGIN
 				                   COALESCE((SELECT ts.next_row_id FROM {METADATA_CATALOG}.ducklake_table_stats ts
 				                             WHERE ts.table_id = v_table), 0)::TEXT, true);
 			END LOOP;
+			-- refreshed for the body's lock waits
+			PERFORM set_config('lock_timeout', CASE WHEN v_stop IS NULL THEN v_saved_lock_ms
+			        ELSE LEAST(GREATEST(1, ceil(extract(epoch FROM v_stop - clock_timestamp()) * 1000)),
+			                   NULLIF(v_saved_lock_ms, 0)) END::BIGINT::TEXT, true);
 			EXECUTE p_body;
+			PERFORM set_config('lock_timeout', (v_saved_lock_ms::BIGINT)::TEXT, true);
 			RETURN QUERY SELECT 'committed'::TEXT, v_snapshot_id, v_latest.schema_version,
 			                    v_latest.next_file_id + p_file_id_count, v_attempt, NULL::TEXT;
 			RETURN;
@@ -173,9 +190,10 @@ BEGIN
 				RETURN;
 		END;
 		-- the attempt's subtransaction aborted, so the advisory lock is already released
+		v_step_ms := CASE WHEN v_step_ms <= 0 THEN 0 WHEN v_step_ms >= c_max_ms / v_backoff THEN c_max_ms
+		                  ELSE v_step_ms * v_backoff END;
 		PERFORM pg_sleep(LEAST(v_step_ms * (0.5 + random() / 2),
 		                       GREATEST(extract(epoch FROM v_deadline - clock_timestamp()) * 1000, 0)) / 1000.0);
-		v_step_ms := LEAST(v_step_ms * v_backoff, 3600000);
 		v_attempt := v_attempt + 1;
 	END LOOP;
 END
@@ -287,17 +305,31 @@ string PostgresServerCommit::InstallSql(const string &schema_literal,
 static constexpr double MAX_LOCK_BUDGET_MS = 3600000;
 static constexpr idx_t MAX_BUDGET_ATTEMPTS = 10000;
 
+//! step_ms * factor, saturating before multiplying like ducklake_commit_v1
+static double SaturatedStepMs(double step_ms, double factor) {
+	if (step_ms <= 0) {
+		return 0;
+	}
+	return step_ms >= MAX_LOCK_BUDGET_MS / factor ? MAX_LOCK_BUDGET_MS : step_ms * factor;
+}
+
 int64_t PostgresServerCommit::SequencedLockBudgetMs(const DuckLakeRetryConfig &retry_config) {
 	// saturating, the same budget as ducklake_commit_v1
-	auto backoff = MaxValue<double>(retry_config.retry_backoff, 1);
+	auto backoff = retry_config.retry_backoff > 1 ? retry_config.retry_backoff : 1.0;
 	auto max_attempt = MinValue<idx_t>(retry_config.max_retry_count, MAX_BUDGET_ATTEMPTS);
 	auto step_ms = MinValue<double>(static_cast<double>(retry_config.retry_wait_ms), MAX_LOCK_BUDGET_MS);
 	double budget_ms = 0;
 	for (idx_t i = 1; i <= max_attempt && budget_ms < MAX_LOCK_BUDGET_MS; i++) {
-		step_ms = MinValue<double>(step_ms * backoff, MAX_LOCK_BUDGET_MS);
+		step_ms = SaturatedStepMs(step_ms, backoff);
 		budget_ms = MinValue<double>(budget_ms + step_ms, MAX_LOCK_BUDGET_MS);
 	}
 	return static_cast<int64_t>(budget_ms);
+}
+
+double PostgresServerCommit::RetrySleepMs(const DuckLakeRetryConfig &retry_config, idx_t attempt) {
+	auto backoff = retry_config.retry_backoff >= 0 ? retry_config.retry_backoff : 1.0;
+	auto wait_ms = MinValue<double>(static_cast<double>(retry_config.retry_wait_ms), MAX_LOCK_BUDGET_MS);
+	return SaturatedStepMs(wait_ms, std::pow(backoff, static_cast<double>(attempt)));
 }
 
 string PostgresServerCommit::SequencerSql(const string &schema_literal, int64_t lock_budget_ms) {

@@ -1,5 +1,5 @@
 # name: test/sql/server_side_commit/postgres_server_side_unknown.test
-# description: A lost reply of a committed ducklake_commit_v1 call keeps files and never retries
+# description: A ducklake_commit_v1 call with an unknown outcome keeps files and never retries
 # group: [server_side_commit]
 
 require ducklake
@@ -118,8 +118,355 @@ SELECT sum(i) FROM dl.t
 ----
 4
 
+# a local commit failure after a server commit
+statement ok
+CREATE TABLE dl.l (i INTEGER)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.l SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.o VALUES (2)
+
+statement ok
+SET ducklake_debug_server_commit_fault = 'local_commit_failed'
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was in flight, so it may or may not have been applied; the written data files were kept: debug fault: the local commit failed.*
+
+statement ok
+RESET ducklake_debug_server_commit_fault
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL%'
+----
+0
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_unknown/main/l/*.parquet')
+----
+1
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.l
+----
+100	100	99	4950
+
+# a call that dies while it runs
 statement ok
 DETACH dl
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb options=-cstatement_timeout=1000' AS dl
+(DATA_PATH '{DATA_PATH}/server_side_unknown', METADATA_SCHEMA 'server_side_unknown')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE server_side_unknown.calls')
+
+# a stub that survives its failure returns a status
+foreach failure terminated cancelled
+
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_unknown.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE plpgsql AS $$ BEGIN
+PERFORM nextval(''server_side_unknown.calls'');
+IF ''{failure}'' = ''terminated'' THEN
+	PERFORM pg_terminate_backend(pg_backend_pid());
+ELSE
+	PERFORM pg_sleep(5);
+END IF;
+RETURN QUERY SELECT ''exhausted''::TEXT, NULL::BIGINT, NULL::BIGINT, NULL::BIGINT, 1::BIGINT, ''survived''::TEXT;
+END $$')
+
+statement ok
+CALL postgres_execute('pg', 'SELECT setval(''server_side_unknown.calls'', 1, false)')
+
+statement ok
+CREATE TABLE dl.f_{failure} (i INTEGER)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(['PostgresQueryLog', 'DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.f_{failure} SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.o VALUES (3)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was in flight, so it may or may not have been applied; the written data files were kept: .*(terminating connection|server closed|statement timeout).*
+
+statement ok
+CALL disable_logging()
+
+# exactly one call and no retry
+query II
+SELECT last_value, is_called FROM postgres_query('pg', 'SELECT last_value, is_called FROM server_side_unknown.calls')
+----
+1	true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PostgresQueryLog') WHERE query LIKE '%INSERT INTO "server_side_unknown".ducklake_snapshot %'
+----
+2
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_unknown/main/f_{failure}/*.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM dl.f_{failure}
+----
+0
+
+# the lake keeps working
+statement ok con1
+INSERT INTO dl.f_{failure} VALUES (1)
+
+query I
+SELECT count(*) FROM dl.f_{failure}
+----
+1
+
+endloop
+
+statement ok
+CALL postgres_execute('pg', 'DROP FUNCTION server_side_unknown.ducklake_commit_v1(bigint, text, bigint, bigint[],
+bigint[], text[], bigint[], text, bigint, bigint, double precision)')
+
+statement ok
+DETACH dl
+
+# a held key is waited for within the timeouts
+statement ok
+SET VARIABLE pg17 = (SELECT v >= 170000
+FROM postgres_query('pg', 'SELECT current_setting(''server_version_num'')::INTEGER AS v'))
+
+# transaction_timeout exists from PostgreSQL 17 on, before that its variant is a no-op
+foreach timeout statement_timeout transaction_timeout absurd_backoff
+
+statement ok
+SET VARIABLE dsn = 'ducklake:postgres:dbname=ducklakedb' || CASE WHEN '{timeout}' <> 'transaction_timeout'
+THEN ' options=-cstatement_timeout=5000' WHEN getvariable('pg17') THEN ' options=-ctransaction_timeout=5000' ELSE '' END
+
+statement ok
+ATTACH getvariable('dsn') AS dl (DATA_PATH '{DATA_PATH}/server_side_unknown', METADATA_SCHEMA 'server_side_unknown')
+
+statement ok
+CREATE TABLE dl.k_{timeout} (i INTEGER)
+
+statement ok
+SET ducklake_retry_wait_ms = CASE WHEN '{timeout}' = 'absurd_backoff' THEN 1000000
+WHEN '{timeout}' = 'transaction_timeout' AND NOT getvariable('pg17') THEN 1 ELSE 1000 END
+
+statement ok
+SET ducklake_retry_backoff = CASE WHEN '{timeout}' = 'absurd_backoff' THEN 1e308 ELSE 1 END
+
+statement ok
+SET ducklake_max_retry_count = 8
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_unknown'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.k_{timeout} VALUES (1)
+
+statement ok con2
+INSERT INTO dl.k_{timeout} VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE '%handed back%' OR message LIKE '%SET TRANSACTION ISOLATION LEVEL%'
+----
+0
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.k_{timeout}
+----
+2	2	1	3
+
+# the wait ends at 0.8 of the timeout, below the 8 s budget
+query I
+SELECT CASE WHEN '{timeout}' = 'transaction_timeout' AND NOT getvariable('pg17') THEN gap < INTERVAL 1000 MILLISECONDS
+ELSE gap >= INTERVAL 3500 MILLISECONDS AND gap < INTERVAL 5000 MILLISECONDS END
+FROM (SELECT max(snapshot_time) - min(snapshot_time) AS gap FROM postgres_query('pg',
+'SELECT snapshot_time FROM server_side_unknown.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 2'))
+----
+true
+
+statement ok
+DETACH dl
+
+endloop
+
+statement ok
+RESET ducklake_retry_wait_ms
+
+statement ok
+RESET ducklake_retry_backoff
+
+statement ok
+RESET ducklake_max_retry_count
+
+# absurd retry settings never fail the function itself
+query III
+SELECT status, last_attempt, detail FROM postgres_query('pg', 'SELECT f.* FROM (VALUES
+(9223372036854775807, 9223372036854775807, 1.7976931348623157e308::DOUBLE PRECISION), (10, 100, 1e308),
+(10, 100, ''NaN''), (10, 0, ''Infinity''), (-5, -5, ''-Infinity''), (NULL, NULL, NULL)) AS a(m, w, b)
+CROSS JOIN LATERAL server_side_unknown.ducklake_commit_v1(0, ''no version'', 0, ARRAY[]::BIGINT[], ARRAY[]::BIGINT[],
+ARRAY[]::TEXT[], ARRAY[]::BIGINT[], ''SELECT 1'', a.m, a.w, a.b) AS f', use_transaction = false)
+----
+fallback	1	catalog version changed
+fallback	1	catalog version changed
+fallback	1	catalog version changed
+fallback	1	catalog version changed
+fallback	1	catalog version changed
+fallback	1	catalog version changed
+
+# the transaction_timeout cap, through a copy that reads a custom setting
+statement ok
+CALL postgres_execute('pg', 'DO $$ DECLARE v_def TEXT := pg_get_functiondef(to_regprocedure(
+''server_side_unknown.ducklake_commit_v1(bigint, text, bigint, bigint[], bigint[], text[], bigint[], text, bigint,
+bigint, double precision)''));
+BEGIN
+v_def := replace(replace(v_def, ''ducklake_commit_v1('', ''ducklake_commit_tt(''),
+                 $a$''transaction_timeout''$a$, $a$''ducklake_test.transaction_timeout''$a$);
+IF strpos(v_def, ''ducklake_test.transaction_timeout'') = 0 THEN
+	RAISE EXCEPTION ''transaction_timeout is not read'';
+END IF;
+EXECUTE v_def;
+END $$')
+
+statement ok
+ATTACH 'dbname=ducklakedb options=-cducklake_test.transaction_timeout=2s' AS pgx (TYPE postgres)
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_unknown'')::INTEGER)', prepare=FALSE)
+
+# the key wait ends at 1.6 s, not after the 40 s budget
+query II
+SELECT status, elapsed >= INTERVAL 1500 MILLISECONDS AND elapsed < INTERVAL 3000 MILLISECONDS
+FROM postgres_query('pgx', 'SELECT f.status, clock_timestamp() - statement_timestamp() AS elapsed
+FROM server_side_unknown.ducklake_commit_tt(0, ''no version'', 0, ARRAY[]::BIGINT[], ARRAY[]::BIGINT[],
+ARRAY[]::TEXT[], ARRAY[]::BIGINT[], ''SELECT 1'', 4, 10000, 1) AS f', use_transaction = false)
+----
+fallback	true
+
+statement ok con3
+COMMIT
+
+statement ok
+DETACH pgx
+
+# lock waits of an attempt end before the timeout
+statement ok
+ATTACH 'dbname=ducklakedb options=-cstatement_timeout=4000' AS pgt (TYPE postgres)
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT * FROM server_side_unknown.ducklake_table_stats FOR UPDATE', prepare=FALSE)
+
+query II
+SELECT status, detail FROM postgres_query('pgt', 'SELECT f.status, f.detail
+FROM (SELECT max(snapshot_id) AS s FROM server_side_unknown.ducklake_snapshot) AS l,
+(SELECT max(value) AS v FROM server_side_unknown.ducklake_metadata WHERE key = ''version'') AS m
+CROSS JOIN LATERAL server_side_unknown.ducklake_commit_v1(l.s, m.v, 0, ARRAY[]::BIGINT[], ARRAY[]::BIGINT[],
+ARRAY[]::TEXT[], ARRAY[]::BIGINT[], ''UPDATE server_side_unknown.ducklake_table_stats SET record_count = record_count'',
+10, 100, 1.5) AS f', use_transaction = false)
+----
+error	55P03: canceling statement due to lock timeout
+
+statement ok con3
+COMMIT
+
+# the backoff sleep saturates and ends at the timeout
+query III
+SELECT status, last_attempt, detail FROM postgres_query('pgt', 'SELECT f.*
+FROM (SELECT max(snapshot_id) AS s FROM server_side_unknown.ducklake_snapshot) AS l,
+(SELECT max(value) AS v FROM server_side_unknown.ducklake_metadata WHERE key = ''version'') AS m
+CROSS JOIN LATERAL server_side_unknown.ducklake_commit_v1(l.s, m.v, 0, ARRAY[]::BIGINT[], ARRAY[]::BIGINT[],
+ARRAY[]::TEXT[], ARRAY[]::BIGINT[], ''INSERT INTO server_side_unknown.ducklake_snapshot
+SELECT * FROM server_side_unknown.ducklake_snapshot WHERE snapshot_id = 0'', 2, 1000, 1e308) AS f', use_transaction = false)
+----
+exhausted	2	duplicate key value violates unique constraint "ducklake_snapshot_pkey"
+
+statement ok
+DETACH pgt
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA server_side_unknown CASCADE')

@@ -40,6 +40,8 @@ public:
 	static string InstallSql(const string &schema_literal, const std::function<string(const string &)> &substitute);
 	//! Lock budget shared with ducklake_commit_v1
 	static int64_t SequencedLockBudgetMs(const DuckLakeRetryConfig &retry_config);
+	//! Capped client backoff before an attempt, without jitter
+	static double RetrySleepMs(const DuckLakeRetryConfig &retry_config, idx_t attempt);
 	//! First statements of a sequenced commit attempt
 	static string SequencerSql(const string &schema_literal, int64_t lock_budget_ms);
 	//! Snapshot row columns of the sequenced state read

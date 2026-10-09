@@ -2211,6 +2211,9 @@ bool DuckLakeTransactionState::CommitOnServer(const DuckLakeCommitContext &conte
 	if (server.status == DuckLakeServerAttemptStatus::COMMITTED) {
 		try {
 			context.flush_cache_if_pending();
+			if (retry_config.debug_server_commit_fault == "local_commit_failed") {
+				throw IOException("debug fault: the local commit failed");
+			}
 			context.commit_connection();
 			commit_snapshot = server.snapshot;
 			return true;
@@ -2220,7 +2223,7 @@ bool DuckLakeTransactionState::CommitOnServer(const DuckLakeCommitContext &conte
 		}
 	}
 	if (server.status == DuckLakeServerAttemptStatus::CLIENT) {
-		attempt = MaxValue<idx_t>(attempt, MinValue<idx_t>(server.last_attempt, retry_config.max_retry_count));
+		attempt = MaxValue<idx_t>(attempt, server.last_attempt);
 		return false;
 	}
 	try {
@@ -2310,14 +2313,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 
 #ifndef DUCKDB_NO_THREADS
-			if (!context.retries_wait_on_server()) {
-				RandomEngine random;
-				// random multiplier between 0.5 - 1.0
-				double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
-				uint64_t sleep_amount = (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
-				                                   pow(retry_config.retry_backoff, static_cast<double>(i)));
-				std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
-			}
+			RandomEngine random;
+			// random multiplier between 0.5 - 1.0
+			double random_multiplier = (random.NextRandom() + 1.0) / 2.0;
+			auto sleep_ms = context.retry_sleep_ms(i, random_multiplier);
+			uint64_t sleep_amount = sleep_ms.IsValid()
+			                            ? sleep_ms.GetIndex()
+			                            : (uint64_t)((double)retry_config.retry_wait_ms * random_multiplier *
+			                                         pow(retry_config.retry_backoff, static_cast<double>(i)));
+			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_amount));
 #endif
 
 			// retry the transaction (with a new snapshot id)

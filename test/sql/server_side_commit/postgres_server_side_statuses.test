@@ -135,6 +135,64 @@ SELECT count(*) FROM dl.p
 ----
 0
 
+# malformed replies are outcome unknown
+foreach variant zero_rows two_rows null_ids negative_ids null_attempt negative_attempt absurd_attempt
+
+statement ok
+CREATE TABLE dl.m_{variant} (i INTEGER)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION server_side_statuses.ducklake_commit_v1(
+p_transaction_snapshot_id BIGINT, p_catalog_version TEXT, p_file_id_count BIGINT, p_insert_tables BIGINT[],
+p_inlined_insert_tables BIGINT[], p_known_change_kinds TEXT[], p_row_id_tables BIGINT[], p_body TEXT,
+p_max_retry_count BIGINT, p_retry_wait_ms BIGINT, p_retry_backoff DOUBLE PRECISION)
+RETURNS TABLE(status TEXT, committed_snapshot_id BIGINT, committed_schema_version BIGINT,
+committed_next_file_id BIGINT, last_attempt BIGINT, detail TEXT)
+LANGUAGE sql AS $$ SELECT r.status::TEXT, r.id::BIGINT, r.id::BIGINT, r.id::BIGINT, r.attempt::BIGINT, ''stub''::TEXT
+FROM (VALUES (''two_rows'', ''committed'', 100, 1), (''two_rows'', ''committed'', 100, 1),
+(''null_ids'', ''committed'', NULL, 1), (''negative_ids'', ''committed'', -1, 1), (''null_attempt'', ''fallback'', NULL, NULL),
+(''negative_attempt'', ''fallback'', NULL, -1), (''absurd_attempt'', ''fallback'', NULL, 1000000))
+AS r(variant, status, id, attempt) WHERE r.variant = ''{variant}'' $$')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.m_{variant} SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.m_{variant} VALUES (-1)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.\nThe metadata connection failed while the server-side commit was in flight, so it may or may not have been applied; the written data files were kept: ducklake_commit_v1 (returned no valid status row|committed without its ids|returned attempt -?[0-9]+)\s*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_statuses/main/m_{variant}/*.parquet')
+----
+1
+
+query II
+SELECT count(*), sum(i) FROM dl.m_{variant}
+----
+1	-1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_commit_v1(%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL%'
+----
+0
+
+endloop
+
 # fallback, error and exhausted before the retry count: a sequenced client attempt commits
 foreach status fallback error exhausted
 

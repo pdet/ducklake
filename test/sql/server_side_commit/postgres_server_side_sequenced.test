@@ -360,6 +360,155 @@ ORDER BY snapshot_id DESC LIMIT 2')
 ----
 true	true
 
+# an absurd backoff still waits for the key
+statement ok
+CREATE TABLE dl.x (i INTEGER)
+
+statement ok
+SET ducklake_retry_wait_ms = 1000000
+
+statement ok
+SET ducklake_retry_backoff = 1e308
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_sequenced'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'info')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.x VALUES (1)
+
+statement ok con2
+INSERT INTO dl.x VALUES (2)
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(['DuckLakeMetadata'])
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.y (i INTEGER)
+
+statement ok con2
+CREATE TABLE dl.z (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SET TRANSACTION ISOLATION LEVEL READ COMMITTED;%pg_advisory_xact_lock(1145848659, %'
+----
+1
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid), sum(i) FROM dl.x
+----
+2	2	1	3
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name IN ('y', 'z')
+----
+2
+
+# an unsequenced retry that loses again exhausts cleanly
+statement ok
+SET ducklake_max_retry_count = 1
+
+statement ok
+CREATE TABLE dl.w (i INTEGER)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION server_side_sequenced.lose() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN RAISE unique_violation USING MESSAGE = ''duplicate key value violates unique constraint "ducklake_snapshot_pkey"'';
+END $$')
+
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL postgres_execute('pg', 'SELECT pg_advisory_xact_lock(1145848659,
+(SELECT oid FROM pg_namespace WHERE nspname = ''server_side_sequenced'')::INTEGER)', prepare=FALSE)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging(level = 'info')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.w SELECT range FROM range(100)
+
+statement ok con2
+INSERT INTO dl.w VALUES (-1)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TRIGGER lose BEFORE INSERT ON server_side_sequenced.ducklake_snapshot
+FOR EACH ROW EXECUTE FUNCTION server_side_sequenced.lose()')
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction.*Exceeded the maximum retry count of 1 set by the ducklake_max_retry_count setting.*
+
+statement ok con3
+COMMIT
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER lose ON server_side_sequenced.ducklake_snapshot')
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message = 'DuckLake commit attempt 1 did not get the commit key within 800 ms and runs unsequenced'
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_sequenced/main/w/*.parquet')
+----
+0
+
+query II
+SELECT count(*), sum(i) FROM dl.w
+----
+1	-1
+
 statement ok
 DETACH dl
 

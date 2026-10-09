@@ -40,12 +40,15 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "DEBUG SETTING: commit appends on Postgres through the retry-invariant SQL template",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 	auto set_server_commit_fault = [](ClientContext &, SetScope, Value &parameter) {
-		if (!parameter.IsNull() && !parameter.ToString().empty() && parameter.ToString() != "ack_lost") {
-			throw InvalidInputException("ducklake_debug_server_commit_fault must be '' or 'ack_lost'");
+		auto fault = parameter.IsNull() ? string() : parameter.ToString();
+		if (!fault.empty() && fault != "ack_lost" && fault != "local_commit_failed") {
+			throw InvalidInputException(
+			    "ducklake_debug_server_commit_fault must be '', 'ack_lost' or 'local_commit_failed'");
 		}
 	};
 	config.AddExtensionOption("ducklake_debug_server_commit_fault",
-	                          "DEBUG SETTING: 'ack_lost' loses the reply of a committed server-side commit",
+	                          "DEBUG SETTING: 'ack_lost' loses the reply of a committed server-side commit, "
+	                          "'local_commit_failed' fails the local commit after it",
 	                          LogicalType::VARCHAR, Value(""), set_server_commit_fault, SetScope::GLOBAL);
 	config.AddExtensionOption("ducklake_default_data_inlining_row_limit",
 	                          "Default row limit for data inlining (0 disables inlining)", LogicalType::UBIGINT,

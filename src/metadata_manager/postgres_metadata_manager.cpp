@@ -495,8 +495,12 @@ void PostgresMetadataManager::PrepareCommitLoop(DuckLakeCommitContext &context,
 	                                                SnapshotAndStats &state, SnapshotChangeInfo &changes) {
 		return AcquireSequencedState(*retry, attempt, transaction_snapshot, state, changes);
 	};
-	context.retries_wait_on_server = [this, retry]() {
-		return RetryWaitsOnServer(*retry);
+	context.retry_sleep_ms = [this, retry, retry_config](idx_t attempt, double random_multiplier) {
+		if (RetryWaitsOnServer(*retry)) {
+			return optional_idx(0);
+		}
+		return optional_idx(
+		    static_cast<idx_t>(PostgresServerCommit::RetrySleepMs(retry_config, attempt) * random_multiplier));
 	};
 	auto execute_commit_batch = context.execute_commit_batch;
 	context.execute_commit_batch = [retry, execute_commit_batch](DuckLakeSnapshot snapshot, string &query) {
@@ -972,15 +976,25 @@ DuckLakeServerAttempt PostgresMetadataManager::ServerCommitStatus(QueryResult &q
 		}
 		row_count += chunk->size();
 	}
-	if (row_count != 1 || row.size() != 6 || row[0].IsNull() || (!row[4].IsNull() && row[4].GetValue<int64_t>() < 0)) {
+	if (row_count != 1 || row.size() != 6 || row[0].IsNull() || row[4].IsNull()) {
 		result.error = ErrorData(ExceptionType::INVALID_INPUT, "ducklake_commit_v1 returned no valid status row");
 		return result;
 	}
 	auto status = row[0].ToString();
 	auto detail = row[5].IsNull() ? string() : row[5].ToString();
-	result.last_attempt = row[4].IsNull() ? 0 : row[4].GetValue<idx_t>();
+	auto last_attempt = row[4].GetValue<int64_t>();
+	// the function never counts past max_retry_count
+	if (last_attempt < 0 || static_cast<idx_t>(last_attempt) > retry_config.max_retry_count) {
+		result.error = ErrorData(ExceptionType::INVALID_INPUT,
+		                         StringUtil::Format("ducklake_commit_v1 returned attempt %d", last_attempt));
+		return result;
+	}
+	result.last_attempt = static_cast<idx_t>(last_attempt);
 	if (status == "committed") {
-		if (row[1].IsNull() || row[2].IsNull() || row[3].IsNull()) {
+		auto is_id = [](const Value &id) {
+			return !id.IsNull() && id.GetValue<int64_t>() >= 0;
+		};
+		if (!is_id(row[1]) || !is_id(row[2]) || !is_id(row[3])) {
 			result.error = ErrorData(ExceptionType::INVALID_INPUT, "ducklake_commit_v1 committed without its ids");
 			return result;
 		}
