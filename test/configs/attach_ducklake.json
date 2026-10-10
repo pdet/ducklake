@@ -491,15 +491,13 @@
       "reason": "FIXME: BUGS? Weird behavior around hugeint",
       "paths": [
         "test/fuzzer/sqlsmith/test_abs_overflow.test",
-        "test/fuzzer/duckfuzz/bitstring_agg_uhugeint.test",
         "test/sql/order/hugeint_order_by_extremes.test",
         "test/sql/types/numeric/uhugeint_try_cast.test",
         "test/sql/types/numeric/hugeint_try_cast.test",
         "test/sql/join/inner/equality_join_limits.test",
         "test/sql/aggregate/group/group_by_limits.test",
         "test/sql/storage/types/test_uhugeint_storage.test",
-        "test/sql/export/parquet/export_parquet_hugeint.test",
-        "test/optimizer/statistics/statistics_numeric.test"
+        "test/sql/export/parquet/export_parquet_hugeint.test"
       ]
     },
     {

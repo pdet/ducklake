@@ -1,0 +1,44 @@
+# name: test/sql/stats/hugeint_stats.test
+# description: HUGEINT and UHUGEINT columns give their bounds to DuckDB
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/hugeint_stats', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (h HUGEINT, u UHUGEINT)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2), (10, 20)
+
+query IIII
+SELECT (stats(h)).min, (stats(h)).max, (stats(u)).min, (stats(u)).max FROM dl.t LIMIT 1
+----
+1	10	2	20
+
+query I
+SELECT bitstring_agg(u) FROM dl.t
+----
+1000000000000000001
+
+# parquet keeps no bounds for these types, so a flushed table has none either
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT (stats(h)).min IS NULL, (stats(u)).max IS NULL FROM dl.t LIMIT 1
+----
+true	true
+
+query I
+SELECT count(*) FROM dl.t WHERE h > 5 AND u > 10
+----
+1
