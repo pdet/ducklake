@@ -514,10 +514,9 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 }
 
 static unique_ptr<ParsedExpression> ParseLiteralDefault(const Value &value, const LogicalType &type) {
-	// the literal is stored as text, it gets the column type only when that prints the same text
-	// so a rounded value or a time zone string is still cast when the default is used
+	// keep the stored text when the column type changes it, or would when a FLOAT is widened to DOUBLE
 	auto typed_value = value.DefaultTryCastAs(type);
-	if (typed_value && typed_value->ToString() == value.ToString()) {
+	if (type.id() != LogicalTypeId::FLOAT && typed_value && typed_value->ToString() == value.ToString()) {
 		return ConstantExpression::FromValue(*typed_value);
 	}
 	return ConstantExpression::FromValue(value);

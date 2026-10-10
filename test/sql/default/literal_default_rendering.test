@@ -110,3 +110,34 @@ SELECT i, (SELECT column_default FROM information_schema.columns WHERE table_cat
     AND column_name = 'i') FROM dl.w
 ----
 1.5	CAST(1.5 AS DOUBLE)
+
+# a FLOAT default widened to DOUBLE in a transaction is the literal and not its FLOAT rounding
+statement ok
+CREATE TABLE dl.fl (f FLOAT DEFAULT 0.1, k INTEGER)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/literal_default_rendering')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.fl ALTER f TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.fl (k) VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.fl (k) VALUES (2)
+
+query II
+SELECT k, f = 0.1::DOUBLE FROM dl.fl ORDER BY k
+----
+1	true
+2	true
