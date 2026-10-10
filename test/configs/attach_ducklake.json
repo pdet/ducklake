@@ -430,13 +430,6 @@
       ]
     },
     {
-      "reason": "FIXME: Drop Null/Not Null Not Checked in DuckDB? Bug in core?",
-      "paths": [
-        "test/sql/alter/alter_col/test_drop_not_null.test",
-        "test/sql/alter/alter_col/test_set_not_null.test"
-      ]
-    },
-    {
       "reason": "FIXME: TIMETZ",
       "paths": [
         "test/sql/types/time/test_time_tz.test",
