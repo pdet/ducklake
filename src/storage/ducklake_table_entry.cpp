@@ -1044,12 +1044,6 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 
 	// re-create with the new type
 	auto column_data = source_id.GetColumnData().Copy();
-	Value literal_default;
-	if (column_data.default_value && DuckLakeUtil::TryGetLiteralValue(*column_data.default_value, literal_default) &&
-	    !literal_default.IsNull()) {
-		// read the literal default back as the catalog would after the commit
-		column_data.default_value = DuckLakeUtil::LiteralDefaultExpression(Value(literal_default.ToString()), target);
-	}
 	if (column_data.initial_default.IsNull()) {
 		column_data.initial_default = Value(target);
 	} else {
@@ -1065,6 +1059,11 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 		new_col.column_info.id = column_data.id;
 		new_col.column_info.name = source_id.Name();
 		ExtractDefaultValue(column_data, new_col.column_info);
+	}
+	// read the literal default back as the catalog would after the commit
+	const auto &literal_default = new_col.column_info.default_value;
+	if (new_col.column_info.default_value_type == "literal" && !literal_default.IsNull()) {
+		column_data.default_value = DuckLakeUtil::LiteralDefaultExpression(Value(literal_default.ToString()), target);
 	}
 	new_col.column_info.type = DuckLakeTypes::ToString(target);
 	new_col.parent_idx = parent_idx;

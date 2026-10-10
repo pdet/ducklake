@@ -172,3 +172,72 @@ SELECT k, d = TIMESTAMPTZ_NS '2020-01-01 05:00:00+00' FROM dl.dt ORDER BY k
 ----
 1	true
 2	true
+
+# a literal that does not cast to the new type fails when used, also within the transaction
+statement ok
+CREATE TABLE dl.b (v BOOLEAN)
+
+statement ok
+ALTER TABLE dl.b ALTER v SET DEFAULT true
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.b ALTER v TYPE INTEGER
+
+query I
+SELECT column_default FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 'b' AND column_name = 'v'
+----
+'true'
+
+statement ok
+COMMIT
+
+statement error
+INSERT INTO dl.b DEFAULT VALUES
+----
+Could not convert string 'true' to INT32
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.b ALTER v TYPE BIGINT
+
+statement error
+INSERT INTO dl.b DEFAULT VALUES
+----
+Could not convert string 'true' to INT64
+
+statement ok
+ROLLBACK
+
+# expression and NULL defaults are kept through a type change
+statement ok
+CREATE TABLE dl.e (v INTEGER DEFAULT 1 + 1, n INTEGER DEFAULT NULL)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.e ALTER v TYPE DOUBLE
+
+statement ok
+ALTER TABLE dl.e ALTER n TYPE BIGINT
+
+statement ok
+INSERT INTO dl.e DEFAULT VALUES
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.e DEFAULT VALUES
+
+query II
+SELECT v, n FROM dl.e
+----
+2.0	NULL
+2.0	NULL
