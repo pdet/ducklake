@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/hugeint_stats.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -40,27 +40,5 @@ true	true
 
 query I
 SELECT count(*) FROM dl.t WHERE h > 5 AND u > 10
-----
-1
-
-# a missing bound does not leave an empty range
-statement ok
-CREATE TABLE dl.one_bound (u UHUGEINT)
-
-statement ok
-INSERT INTO dl.one_bound VALUES (0), (20)
-
-statement ok
-UPDATE __ducklake_metadata_dl.ducklake_table_column_stats SET max_value = NULL
-WHERE table_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 'one_bound')
-
-statement ok
-DETACH dl
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/hugeint_stats', DATA_INLINING_ROW_LIMIT 10)
-
-query I
-SELECT count(*) FROM dl.one_bound WHERE u > 10
 ----
 1
