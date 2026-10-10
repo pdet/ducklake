@@ -513,15 +513,6 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return catalog_set;
 }
 
-static unique_ptr<ParsedExpression> ParseLiteralDefault(const Value &value, const LogicalType &type) {
-	// keep the stored text when the column type changes it, or would when a FLOAT is widened to DOUBLE
-	auto typed_value = value.DefaultTryCastAs(type);
-	if (type.id() != LogicalTypeId::FLOAT && typed_value && typed_value->ToString() == value.ToString()) {
-		return ConstantExpression::FromValue(*typed_value);
-	}
-	return ConstantExpression::FromValue(value);
-}
-
 static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col) {
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
@@ -532,7 +523,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 			col_data.default_value = ConstantExpression::Null();
 		} else {
 			if (col.default_value_type == "literal") {
-				col_data.default_value = ParseLiteralDefault(col.default_value, col_type);
+				col_data.default_value = DuckLakeUtil::LiteralDefaultExpression(col.default_value, col_type);
 			} else if (col.default_value_type == "expression") {
 				col_data.default_value =
 				    Parser::GetBuiltinParser().ParseSingleExpression(col.default_value.GetValue<string>());

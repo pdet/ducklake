@@ -141,3 +141,34 @@ SELECT k, f = 0.1::DOUBLE FROM dl.fl ORDER BY k
 ----
 1	true
 2	true
+
+# a DATE default widened to TIMESTAMPTZ_NS in a transaction is midnight in the session time zone
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE dl.dt (d DATE DEFAULT DATE '2020-01-01', k INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'dt')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.dt ALTER d TYPE TIMESTAMPTZ_NS
+
+statement ok
+INSERT INTO dl.dt (k) VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.dt (k) VALUES (2)
+
+query II
+SELECT k, d = TIMESTAMPTZ_NS '2020-01-01 05:00:00+00' FROM dl.dt ORDER BY k
+----
+1	true
+2	true
