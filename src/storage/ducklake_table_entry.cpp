@@ -705,7 +705,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
-	// the column is NOT NULL already, nothing changes
 	if (table_info.FindNotNullConstraint(col.Logical()).IsValid()) {
 		return nullptr;
 	}
@@ -754,7 +753,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
 	if (!existing_idx.IsValid()) {
-		// the column allows NULL already, nothing changes
 		return nullptr;
 	}
 	table_info.constraints.erase_at(existing_idx.GetIndex());
