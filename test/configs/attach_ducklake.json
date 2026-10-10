@@ -557,8 +557,6 @@
         "test/sql/catalog/dependencies/test_write_after_rename.test",
         "test/sql/alter/rename_table/test_rename_table_chain_rollback.test",
         "test/sql/alter/rename_table/test_rename_table_chain_commit.test",
-        "test/sql/alter/rename_table/test_rename_table_incorrect.test",
-        "test/sql/alter/rename_table/test_rename_table_transactions.test",
         "test/sql/alter/rename_table/test_rename_table.test",
         "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
