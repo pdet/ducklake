@@ -1,5 +1,5 @@
 # name: test/sql/stats/numeric_stats_one_bound.test
-# description: a numeric column with only one bound gives unknown statistics instead of an empty range
+# description: a numeric column with a missing bound gives unknown statistics instead of an empty range
 # group: [stats]
 
 require ducklake
@@ -14,15 +14,18 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/numeric_stats_one_bound',
     DATA_INLINING_ROW_LIMIT 10)
 
-# a missing bound does not leave an empty range
+foreach type INTEGER HUGEINT UHUGEINT
+
+foreach bound min_value max_value
+
 statement ok
-CREATE TABLE dl.one_bound (u UHUGEINT)
+CREATE TABLE dl.one_bound (v {type})
 
 statement ok
 INSERT INTO dl.one_bound VALUES (0), (20)
 
 statement ok
-UPDATE __ducklake_metadata_dl.ducklake_table_column_stats SET max_value = NULL
+UPDATE __ducklake_metadata_dl.ducklake_table_column_stats SET {bound} = NULL
 WHERE table_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 'one_bound')
 
 statement ok
@@ -32,7 +35,24 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/numeric_stats_one_bound',
     DATA_INLINING_ROW_LIMIT 10)
 
+query II
+SELECT (stats(v)).min IS NULL, (stats(v)).max IS NULL FROM dl.one_bound LIMIT 1
+----
+true	true
+
 query I
-SELECT count(*) FROM dl.one_bound WHERE u > 10
+SELECT count(*) FROM dl.one_bound WHERE v > 10
 ----
 1
+
+query I
+SELECT count(*) FROM dl.one_bound WHERE v < 10
+----
+1
+
+statement ok
+DROP TABLE dl.one_bound
+
+endloop
+
+endloop
