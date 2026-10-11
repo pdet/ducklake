@@ -679,6 +679,11 @@ void DuckLakeCatalog::AssignStableOid(CatalogEntry &entry, idx_t id) {
 	entry.oid = oid;
 }
 
+void DuckLakeCatalog::SetEntryOids(const ducklake_entry_oids_t &oids) {
+	lock_guard<mutex> guard(entry_oids_lock);
+	entry_oids.insert(oids.begin(), oids.end());
+}
+
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
                                                                       DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();

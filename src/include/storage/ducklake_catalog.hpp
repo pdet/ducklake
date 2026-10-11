@@ -321,6 +321,8 @@ public:
 		lock_guard<mutex> guard(commit_lock);
 		last_committed_snapshot = value;
 	}
+	//! Keeps the oids of committed entries for when they are loaded
+	void SetEntryOids(const ducklake_entry_oids_t &oids);
 
 	//! Whether the metadata server can execute the commit retry loop server-side.
 	bool RetrialsServerSide() const {
@@ -403,9 +405,9 @@ private:
 	void AssignStableOid(CatalogEntry &entry, idx_t id);
 
 private:
-	//! The oid of each loaded entry by its type and id
+	//! The oid of each loaded or committed entry
 	mutex entry_oids_lock;
-	map<pair<CatalogType, idx_t>, idx_t> entry_oids;
+	ducklake_entry_oids_t entry_oids;
 	mutex name_maps_lock;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;

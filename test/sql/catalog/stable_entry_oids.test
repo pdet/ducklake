@@ -66,3 +66,41 @@ true	true
 
 statement ok
 COMMIT
+
+# entries created in a transaction keep their oid when it commits
+statement ok
+CREATE TEMP MACRO s2_oids() AS [
+    (SELECT oid FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT function_oid FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'm'),
+    (SELECT function_oid FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'tm')]
+
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA dl.s2
+
+statement ok
+CREATE TABLE dl.s2.t (i INTEGER)
+
+statement ok
+CREATE VIEW dl.s2.v AS SELECT 1 AS x
+
+statement ok
+CREATE MACRO dl.s2.m(a) AS a
+
+statement ok
+CREATE MACRO dl.s2.tm() AS TABLE SELECT 1 AS x
+
+statement ok
+SET VARIABLE created_oids = s2_oids()
+
+statement ok
+COMMIT
+
+query II
+SELECT s2_oids() = getvariable('created_oids'), len(list_filter(s2_oids(), lambda x: x IS NOT NULL))
+----
+true	5
