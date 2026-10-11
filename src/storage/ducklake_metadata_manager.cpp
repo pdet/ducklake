@@ -5127,7 +5127,7 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 
 //! Selects the files that the filter matches or whose range no remaining snapshot lies in
 static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter) {
-	// only the first snapshot at or after the start of the range matters, a range join would hold all of them
+	// only the first remaining snapshot at or after begin_snapshot matters
 	return StringUtil::Format(R"(
 SELECT f.%s, f.table_id, f.path, f.path_is_relative
 FROM {METADATA_CATALOG}.%s f
