@@ -1153,15 +1153,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			return nullptr;
 		}
 	}
-	for (idx_t depth = 1; depth < info.column_path.size(); depth++) {
-		vector<Identifier> parent_path(info.column_path.begin(), info.column_path.begin() + depth);
-		auto parent_id = TryGetFieldId(parent_path);
-		if (!parent_id) {
-			break;
-		}
-		if (!parent_id->Type().IsNested()) {
+	auto path_id = TryGetFieldId(vector<Identifier> {info.column_path[0]});
+	for (idx_t depth = 1; path_id && depth < info.column_path.size(); depth++) {
+		if (!path_id->Type().IsNested()) {
 			throw CatalogException("Cannot drop field from column %s - not a nested type", info.column_path[0]);
 		}
+		path_id = path_id->GetChildByName(info.column_path[depth].GetIdentifierName());
 	}
 	optional_ptr<const DuckLakeFieldId> removed_id_ptr;
 	if (info.if_column_exists) {
@@ -1173,13 +1170,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		return nullptr;
 	}
 	auto &removed_id = *removed_id_ptr;
-	vector<Identifier> parent_path(info.column_path.begin(), info.column_path.end() - 1);
-	auto &parent_id = GetFieldId(parent_path);
-	if (parent_id.Type().id() == LogicalTypeId::STRUCT && parent_id.Children().size() == 1) {
-		throw CatalogException("Cannot drop field %s from column %s - it is the last field of the struct",
-		                       info.column_path.back().GetIdentifierName(),
-		                       info.column_path.front().GetIdentifierName());
-	}
 
 	// generate the removed column info
 	auto change_info = make_uniq<ColumnChangeInfo>();
