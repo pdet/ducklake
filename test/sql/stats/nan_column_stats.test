@@ -58,6 +58,29 @@ SELECT ((stats(x)).min)::${type}, ((stats(x)).max)::${type} FROM dl.t LIMIT 1
 
 endloop
 
+# added files and added columns do not say whether they hold NaN, so no bound is taken from them
+statement ok
+COPY (SELECT x::${type} AS x FROM (VALUES (1), (2)) v(x)) TO '{DATA_PATH}/nan_column_stats_${type}.parquet'
+
+statement ok
+CREATE OR REPLACE TABLE dl.t (x ${type})
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/nan_column_stats_${type}.parquet')
+
+query II
+SELECT min(x), max(x) FROM dl.t
+----
+1.0	2.0
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN y ${type} DEFAULT 7.5
+
+query II
+SELECT min(y), max(y) FROM dl.t
+----
+7.5	7.5
+
 # inlined data keeps NaN as both bounds of a column with only NaN
 statement ok
 CREATE OR REPLACE TABLE dl.t (x ${type}) WITH (data_inlining_row_limit = 10)
