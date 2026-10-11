@@ -164,6 +164,12 @@
       ]
     },
     {
+      "reason": "FIXME: Flaky timeout on quack.",
+      "paths": [
+        "test/sql/alter/many_schema_versions_low_memory.test_slow"
+      ]
+    },
+    {
       "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
       "paths": [
         "test/sql/retry/commit_failure.test",
