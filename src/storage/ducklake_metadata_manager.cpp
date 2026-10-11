@@ -1733,6 +1733,10 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	if (filter_condition.empty()) {
 		return string();
 	}
+	// the file statistics of a nested column do not show its NULL values
+	if (column_filter.column_type.IsNested() && referenced_stats.count("null_count") > 0) {
+		return string();
+	}
 
 	string null_checks;
 	for (const auto &stat : referenced_stats) {
