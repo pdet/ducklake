@@ -705,11 +705,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
-	// check if there is an existing constraint
-	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
-	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
-		                       col.GetName());
+	if (table_info.FindNotNullConstraint(col.Logical()).IsValid()) {
+		return nullptr;
 	}
 
 	if (transaction.HasTransactionLocalInserts(GetTableId())) {
@@ -754,10 +751,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
-	// find the existing index
 	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
 	if (!existing_idx.IsValid()) {
-		throw CatalogException("Cannot DROP NULL on column %s - it has no NOT NULL constraint defined", col.GetName());
+		return nullptr;
 	}
 	table_info.constraints.erase_at(existing_idx.GetIndex());
 
