@@ -485,7 +485,7 @@
       ]
     },
     {
-      "reason": "DuckLake reports write-write conflicts at COMMIT, these tests expect them at the conflicting statement",
+      "reason": "DuckLake reports conflicting updates at COMMIT, these tests expect the conflict at the statement",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
         "test/sql/update/test_update_many_updaters.test",
@@ -762,14 +762,6 @@
       ]
     },
     {
-      "reason": "These tests read DuckDB storage internals or geometry statistics that DuckLake does not keep",
-      "paths": [
-        "test/sql/types/geo/geometry_stats.test",
-        "test/sql/types/geo/geometry_shred_limit.test",
-        "test/sql/types/geo/geometry_shred.test"
-      ]
-    },
-    {
       "reason": "Multiple require storage sections create same-named tables, causing conflicts in DuckLake",
       "paths": [
         "test/sql/pivot/pivot_star.test",
@@ -782,12 +774,6 @@
         "test/parquet/variant/variant_comparison.test",
         "test/parquet/variant/variant_json_copy.test",
         "test/sql/function/variant/variant_extract_string_shredded.test"
-      ]
-    },
-    {
-      "reason": "The test reads DuckDB storage internals",
-      "paths": [
-        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
@@ -938,7 +924,10 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
-        "test/sql/storage/compression/constant/constant_negative_zero.test"
+        "test/sql/storage/compression/constant/constant_negative_zero.test",
+        "test/sql/types/geo/geometry_shred_limit.test",
+        "test/sql/types/geo/geometry_shred.test",
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
@@ -976,7 +965,8 @@
       "paths": [
         "test/sql/types/geo/geometry_from_wkb_stats.test",
         "test/sql/types/geo/geometry_vertex_extract.test",
-        "test/sql/types/geo/geometry_stats_prune_null.test"
+        "test/sql/types/geo/geometry_stats_prune_null.test",
+        "test/sql/types/geo/geometry_stats.test"
       ]
     },
     {
