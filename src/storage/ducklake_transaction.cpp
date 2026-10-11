@@ -508,8 +508,7 @@ bool LocalTableChanges::HasLocalDeleteForFile(TableIndex table_id, const string 
 	return false;
 }
 
-bool LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
-                                              optional_idx &begin_snapshot) const {
+bool LocalTableChanges::GetLocalDeleteFile(TableIndex table_id, const string &path, DuckLakeDeleteFile &result) const {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
 	if (!table_changes) {
@@ -519,7 +518,16 @@ bool LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string 
 	if (file_entry == table_changes->new_delete_files.end() || file_entry->second.empty()) {
 		return false;
 	}
-	auto &delete_file = file_entry->second.back();
+	result = file_entry->second.back();
+	return true;
+}
+
+bool LocalTableChanges::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
+                                              optional_idx &begin_snapshot) const {
+	DuckLakeDeleteFile delete_file;
+	if (!GetLocalDeleteFile(table_id, path, delete_file)) {
+		return false;
+	}
 	result = DuckLakeMultiFileList::GetDeleteData(delete_file);
 	begin_snapshot = delete_file.begin_snapshot;
 	return true;
@@ -1792,6 +1800,11 @@ bool DuckLakeTransaction::HasAnyLocalChanges(TableIndex table_id) const {
 		return true;
 	}
 	return state->tables_deleted_from.find(table_id) != state->tables_deleted_from.end();
+}
+
+bool DuckLakeTransaction::GetLocalDeleteFile(TableIndex table_id, const string &path,
+                                             DuckLakeDeleteFile &result) const {
+	return state->local_changes.GetLocalDeleteFile(table_id, path, result);
 }
 
 bool DuckLakeTransaction::GetLocalDeleteForFile(TableIndex table_id, const string &path, DuckLakeFileData &result,
