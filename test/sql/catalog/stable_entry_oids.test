@@ -54,10 +54,15 @@ BEGIN
 statement ok
 ALTER TABLE dl.s.t2 ADD COLUMN k INTEGER
 
-query I
-SELECT table_oid = getvariable('table_oid') FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't2'
+statement ok
+COMMENT ON VIEW dl.s.v IS 'a view'
+
+query II
+SELECT
+    (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't2') = getvariable('table_oid'),
+    (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v') = getvariable('view_oid')
 ----
-true
+true	true
 
 statement ok
 COMMIT
