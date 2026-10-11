@@ -46,3 +46,12 @@ query I
 SELECT data_type FROM information_schema.columns WHERE table_catalog = 'dl' AND table_name = 't'
 ----
 STRUCT(j INTEGER)
+
+# the names are given as written in the statement
+statement ok
+CREATE TABLE dl.c (S STRUCT(J INTEGER))
+
+statement error
+ALTER TABLE dl.c DROP COLUMN s.j
+----
+Catalog Error: Cannot drop field j from column s - it is the last field of the struct
