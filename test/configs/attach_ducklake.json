@@ -867,12 +867,6 @@
       ]
     },
     {
-      "reason": "DuckLake table entries get a new object id on ALTER, the test asserts oid stability.",
-      "paths": [
-        "test/sql/catalog/test_alter_oid_stability.test"
-      ]
-    },
-    {
       "reason": "Test assumes tables vanish on restart (in-memory catalog); DuckLake persists them.",
       "paths": [
         "test/sql/aggregate/aggregate_state_export/test_state_export_quantile.test",
