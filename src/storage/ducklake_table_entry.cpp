@@ -1158,6 +1158,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 			return nullptr;
 		}
 	}
+	auto path_id = TryGetFieldId(vector<Identifier> {info.column_path[0]});
+	for (idx_t depth = 1; path_id && depth < info.column_path.size(); depth++) {
+		if (!path_id->Type().IsNested()) {
+			throw CatalogException("Cannot drop field from column %s - not a nested type", info.column_path[0]);
+		}
+		path_id = path_id->GetChildByName(info.column_path[depth].GetIdentifierName());
+	}
 	optional_ptr<const DuckLakeFieldId> removed_id_ptr;
 	if (info.if_column_exists) {
 		removed_id_ptr = TryGetFieldId(info.column_path);

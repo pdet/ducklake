@@ -283,12 +283,6 @@
       ]
     },
     {
-      "reason": "FIXME: Drop the last column of a struct?",
-      "paths": [
-        "test/sql/alter/struct/drop_col_struct.test"
-      ]
-    },
-    {
       "reason": "No Catalog Dependencies",
       "paths": [
         "test/fuzzer/pedro/view_not_rebound_error.test",
