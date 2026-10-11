@@ -15,8 +15,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column
 
 foreach type FLOAT DOUBLE
 
+foreach inlining 10 0
+
 statement ok
-CREATE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = 10)
+CREATE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = {inlining})
 
 statement ok
 INSERT INTO dl.t VALUES (1), (2), ('nan')
@@ -31,10 +33,10 @@ DETACH dl
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column_stats_missing_min')
 
-query I
-SELECT (stats(x)).min IS NULL FROM dl.t LIMIT 1
+query III
+SELECT (stats(x)).min IS NULL, (stats(x)).has_null, (stats(x)).has_no_null FROM dl.t LIMIT 1
 ----
-true
+true	false	true
 
 query II
 SELECT count(*) FILTER (x < 10), count(*) FILTER (x > 10) FROM dl.t
@@ -43,5 +45,7 @@ SELECT count(*) FILTER (x < 10), count(*) FILTER (x > 10) FROM dl.t
 
 statement ok
 DROP TABLE dl.t
+
+endloop
 
 endloop
