@@ -431,7 +431,7 @@ void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t va
 	if (path.size() == variant_field_start + 1 && path.back() == "metadata") {
 		// metadata provides the top-level metadata, together with the shredding types
 		auto metadata_stats = DuckLakeInsert::ParseColumnStats(LogicalTypeId::VARIANT, col_stats);
-		// propagate the top-level stats, NULL variants are written with metadata so the null count stays unknown
+		// metadata is written for NULL variants too, so its null count does not show them
 		if (metadata_stats.has_num_values) {
 			result.has_num_values = true;
 			result.num_values = metadata_stats.num_values;
