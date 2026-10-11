@@ -457,7 +457,6 @@ WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 			file_info.max_snapshot = MaxValue(file_info.max_snapshot, MaxSnapshotId(merged_deletions));
 		}
 
-		// the delete file this transaction already wrote for the data file is replaced by the merged one
 		auto source = DeleteFileSource::FLUSH;
 		DuckLakeDeleteFile local_delete;
 		if (transaction.GetLocalDeleteFile(table_id, file_info.file_path, local_delete) &&
@@ -467,7 +466,7 @@ WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 			}
 			auto local_deletions =
 			    DuckLakeDeleteFilter::ScanDeleteFile(context, DuckLakeMultiFileList::GetDeleteData(local_delete));
-			// new deletes are dated to the expected commit snapshot, as in DuckLakeDelete
+			// new deletes are dated to the expected commit snapshot
 			MergeDeletesWithSnapshots(local_deletions, snapshot.snapshot_id + 1, merged_deletions);
 			file_info.max_snapshot = MaxValue(file_info.max_snapshot, MaxSnapshotId(merged_deletions));
 			source = DeleteFileSource::REGULAR;
