@@ -305,7 +305,8 @@
         "test/sql/catalog/view/recursive_view_with_dependencies.test",
         "test/sql/catalog/view/test_view_sql_with_dependencies.test",
         "test/sql/catalog/view/test_view_schema_change.test",
-        "test/sql/catalog/test_standard_schema.test"
+        "test/sql/catalog/test_standard_schema.test",
+        "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
     {
@@ -316,12 +317,6 @@
         "test/sql/storage/catalog/test_view_storage_no_view_dependencies.test",
         "test/sql/storage/catalog/test_view_storage.test",
         "test/sql/catalog/view/test_view_sql.test"
-      ]
-    },
-    {
-      "reason": "DuckLake does not track view dependencies, so the DROP succeeds with enable_view_dependencies",
-      "paths": [
-        "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
     {
@@ -485,11 +480,12 @@
       ]
     },
     {
-      "reason": "DuckLake reports conflicting updates at COMMIT, these tests expect the conflict at the statement",
+      "reason": "DuckLake detects transaction conflicts at COMMIT, these tests expect them at the statement",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
         "test/sql/update/test_update_many_updaters.test",
-        "test/sql/transactions/test_from_update_conflict.test"
+        "test/sql/transactions/test_from_update_conflict.test",
+        "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
     },
     {
@@ -581,12 +577,6 @@
         "test/sql/alter/rename_table/test_rename_table_incorrect.test",
         "test/sql/alter/rename_table/test_rename_table_transactions.test",
         "test/sql/alter/rename_table/test_rename_table.test"
-      ]
-    },
-    {
-      "reason": "DuckLake reports catalog conflicts at COMMIT, this test expects them at the conflicting statement",
-      "paths": [
-        "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
     },
     {
