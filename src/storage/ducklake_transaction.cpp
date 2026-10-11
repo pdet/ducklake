@@ -301,8 +301,7 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 
 		for (idx_t r = 0; r < chunk.size(); r++) {
 			idx_t position = base_row_id + r;
-			auto row_id = inlined_data.GetRowId(position);
-			if (new_deletes.find(row_id) != new_deletes.end()) {
+			if (new_deletes.find(position) != new_deletes.end()) {
 				// deleted - skip
 				continue;
 			}

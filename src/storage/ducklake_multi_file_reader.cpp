@@ -413,6 +413,10 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 			throw InternalException("No transaction local data");
 		}
 		auto columns = DuckLakeMultiFileReader::ColumnsFromFieldData(read_info.table.GetFieldData(), true);
+		if (transaction_local_data->HasPreservedRowIds()) {
+			// expose the preserved row ids as a row id column, so file row numbers stay positions
+			columns.push_back(*row_id_column);
+		}
 		return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, transaction_local_data, std::move(columns));
 	}
 	idx_t schema_version;
