@@ -55,3 +55,4 @@ benchmark/micro/maintenance/flush_inlined_row_deletes.benchmark
 benchmark/micro/read/float_bounded_pruning_added_files.benchmark
 benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark
 benchmark/micro/write/delete_commits_v10_history.benchmark
+benchmark/micro/maintenance/expire_one_snapshot.benchmark
