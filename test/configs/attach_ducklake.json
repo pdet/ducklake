@@ -283,12 +283,6 @@
       ]
     },
     {
-      "reason": "FIXME: Drop the last column of a struct?",
-      "paths": [
-        "test/sql/alter/struct/drop_col_struct.test"
-      ]
-    },
-    {
       "reason": "No Catalog Dependencies",
       "paths": [
         "test/fuzzer/pedro/view_not_rebound_error.test",
@@ -420,13 +414,6 @@
       ]
     },
     {
-      "reason": "FIXME: Drop Null/Not Null Not Checked in DuckDB? Bug in core?",
-      "paths": [
-        "test/sql/alter/alter_col/test_drop_not_null.test",
-        "test/sql/alter/alter_col/test_set_not_null.test"
-      ]
-    },
-    {
       "reason": "FIXME: TIMETZ",
       "paths": [
         "test/sql/types/time/test_time_tz.test",
@@ -437,12 +424,6 @@
       "reason": "FIXME: stats() min/max is NULL for a NaN-only column (native storage reports nan)",
       "paths": [
         "test/sql/storage/nan_min_statistics.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Immediate transaction mode not respected",
-      "paths": [
-        "test/sql/delete/test_using_delete_duplicates.test"
       ]
     },
     {
@@ -853,7 +834,7 @@
       ]
     },
     {
-      "reason": "FIXME: literal column defaults are reloaded as VARCHAR constants, so information_schema shows '1' instead of CAST(1 AS UTINYINT)",
+      "reason": "A literal column default is stored as its value, so CAST(1 AS INTEGER) on an INTEGER column reads back as 1",
       "paths": [
         "test/sql/types/test_quotes.test"
       ]
