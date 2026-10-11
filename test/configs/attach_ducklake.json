@@ -315,8 +315,7 @@
         "test/sql/storage/wal/wal_view_storage.test",
         "test/sql/storage/catalog/test_view_explicit_aliases.test",
         "test/sql/storage/catalog/test_view_storage_no_view_dependencies.test",
-        "test/sql/storage/catalog/test_view_storage.test",
-        "test/sql/catalog/view/test_view_sql.test"
+        "test/sql/storage/catalog/test_view_storage.test"
       ]
     },
     {
