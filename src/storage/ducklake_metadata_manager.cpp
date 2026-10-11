@@ -1837,6 +1837,11 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
                                                                const string &metadata_table_prefix) {
 	string select_list = "data_file_id";
 	for (const auto &stat : req.referenced_stats) {
+		if (stat == "value_count" || stat == "null_count") {
+			// every row of a file counts as a value or a NULL, so zero counts of both are unknown
+			select_list += StringUtil::Format(", CASE WHEN value_count + null_count > 0 THEN %s END AS %s", stat, stat);
+			continue;
+		}
 		select_list += ", " + stat;
 	}
 	return StringUtil::Format("  SELECT %s\n"
