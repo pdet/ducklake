@@ -101,3 +101,13 @@ query II
 SELECT (SELECT count(*) FROM legacy.t WHERE iv IS NULL), (SELECT count(*) FROM legacy.t WHERE iv IS NOT NULL)
 ----
 1	2
+
+unzip data/old_ducklake/interval_null_counts.db.gz {TEST_DIR}/issue_1665_alter.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1665_alter.db' AS alter_legacy (DATA_PATH 'data/old_ducklake/interval_null_counts/', OVERRIDE_DATA_PATH TRUE)
+
+statement error
+ALTER TABLE alter_legacy.t ALTER COLUMN iv SET NOT NULL
+----
+the column has NULL values

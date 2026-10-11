@@ -734,11 +734,7 @@ PhysicalOperator &DuckLakeVerifyNotNull::Plan(PhysicalPlanGenerator &planner, Du
 	auto not_null_fields = table.GetNotNullFields();
 	vector<pair<idx_t, Identifier>> columns;
 	for (auto &col : table.GetColumns().Physical()) {
-		// the file statistics of a nested column are per field, so they do not show a NULL value of the column
-		// and the Parquet writer collects no statistics for INTERVAL columns
-		auto &type = col.Type();
-		bool stats_show_nulls = !type.IsNested() && type.id() != LogicalTypeId::INTERVAL;
-		if (!stats_show_nulls && not_null_fields.count(col.Name().GetIdentifierName())) {
+		if (!FileStatsShowNulls(col.Type()) && not_null_fields.count(col.Name().GetIdentifierName())) {
 			columns.emplace_back(col.Physical().index, col.Name());
 		}
 	}
