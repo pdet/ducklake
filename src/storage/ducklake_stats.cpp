@@ -448,6 +448,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		auto stats = has_min ? CreateNumericStats() : NumericStats::CreateUnknown(type).ToUnique();
 		if (stats) {
 			NumericStats::SetMax(*stats, Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type));
+			SetValidity(*stats);
 		}
 		return stats;
 	}

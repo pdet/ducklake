@@ -18,13 +18,13 @@ foreach type FLOAT DOUBLE
 foreach inlining 10 0
 
 statement ok
-CREATE OR REPLACE TABLE dl.t (x ${type}) WITH (data_inlining_row_limit = ${inlining})
+CREATE OR REPLACE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = {inlining})
 
 statement ok
 INSERT INTO dl.t VALUES ('nan'), (42), (-42)
 
 query II
-SELECT ((stats(x)).min)::${type} = -42, isnan(((stats(x)).max)::${type}) FROM dl.t LIMIT 1
+SELECT ((stats(x)).min)::{type} = -42, isnan(((stats(x)).max)::{type}) FROM dl.t LIMIT 1
 ----
 true	true
 
@@ -35,7 +35,7 @@ SELECT count(*) FILTER (x > 100), count(*) FILTER (x < -100), count(*) FILTER (x
 1	0	3
 
 statement ok
-CREATE OR REPLACE TABLE dl.t (x ${type}) WITH (data_inlining_row_limit = ${inlining})
+CREATE OR REPLACE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = {inlining})
 
 statement ok
 INSERT INTO dl.t VALUES ('nan')
@@ -45,14 +45,19 @@ SELECT count(*) FILTER (x > 100), count(*) FILTER (x < 100) FROM dl.t
 ----
 1	0
 
+query I
+SELECT (stats(x)).has_null FROM dl.t LIMIT 1
+----
+false
+
 statement ok
-CREATE OR REPLACE TABLE dl.t (x ${type}) WITH (data_inlining_row_limit = ${inlining})
+CREATE OR REPLACE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = {inlining})
 
 statement ok
 INSERT INTO dl.t VALUES (1), (2)
 
 query II
-SELECT ((stats(x)).min)::${type}, ((stats(x)).max)::${type} FROM dl.t LIMIT 1
+SELECT ((stats(x)).min)::{type}, ((stats(x)).max)::{type} FROM dl.t LIMIT 1
 ----
 1.0	2.0
 
@@ -60,13 +65,13 @@ endloop
 
 # added files and added columns do not say whether they hold NaN, so no bound is taken from them
 statement ok
-COPY (SELECT x::${type} AS x FROM (VALUES (1), (2)) v(x)) TO '{DATA_PATH}/nan_column_stats_${type}.parquet'
+COPY (SELECT x::{type} AS x FROM (VALUES (1), (2)) v(x)) TO '{DATA_PATH}/nan_column_stats_{type}.parquet'
 
 statement ok
-CREATE OR REPLACE TABLE dl.t (x ${type})
+CREATE OR REPLACE TABLE dl.t (x {type})
 
 statement ok
-CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/nan_column_stats_${type}.parquet')
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/nan_column_stats_{type}.parquet')
 
 query II
 SELECT min(x), max(x) FROM dl.t
@@ -74,7 +79,7 @@ SELECT min(x), max(x) FROM dl.t
 1.0	2.0
 
 statement ok
-ALTER TABLE dl.t ADD COLUMN y ${type} DEFAULT 7.5
+ALTER TABLE dl.t ADD COLUMN y {type} DEFAULT 7.5
 
 query II
 SELECT min(y), max(y) FROM dl.t
@@ -83,13 +88,13 @@ SELECT min(y), max(y) FROM dl.t
 
 # inlined data keeps NaN as both bounds of a column with only NaN
 statement ok
-CREATE OR REPLACE TABLE dl.t (x ${type}) WITH (data_inlining_row_limit = 10)
+CREATE OR REPLACE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = 10)
 
 statement ok
 INSERT INTO dl.t VALUES ('nan')
 
 query II
-SELECT isnan(((stats(x)).min)::${type}), isnan(((stats(x)).max)::${type}) FROM dl.t LIMIT 1
+SELECT isnan(((stats(x)).min)::{type}), isnan(((stats(x)).max)::{type}) FROM dl.t LIMIT 1
 ----
 true	true
 
