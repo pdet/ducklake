@@ -354,12 +354,10 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		auto &table = GetAlterEntry<DuckLakeTableEntry>(*this, catalog_transaction, alter, NOT_A_TABLE_MESSAGE);
 		auto new_table = table.Alter(context, transaction, alter);
 		if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
-			// We must check if this table name does not yet exist.
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
 			if (alter.GetQualifiedName().Name() != new_table->name && existing_table) {
-				throw CatalogException(
-				    "Could not rename \"%s\" to \"%s\": another entry with this name already exists!",
-				    alter.GetQualifiedName().Name().GetIdentifierName(), new_table->name.GetIdentifierName());
+				throw CatalogException("Could not rename %s to %s: another entry with this name already exists!",
+				                       alter.GetQualifiedName().Name(), new_table->name);
 			}
 		}
 		transaction.AlterEntry(table, std::move(new_table));

@@ -29,3 +29,12 @@ SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl' ORDER BY ALL
 ----
 a
 b
+
+# a quote in the name is escaped as in DuckDB
+statement ok
+CREATE TABLE dl."quoted""name" (i INTEGER)
+
+statement error
+ALTER TABLE dl."quoted""name" RENAME TO a
+----
+Could not rename "quoted""name" to "a": another entry with this name already exists!
