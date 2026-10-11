@@ -399,8 +399,13 @@ private:
 	void RegisterCatalog();
 	//! Returns whether no other DuckLake uses the metadata catalog
 	bool UnregisterCatalog();
+	//! Gives an entry loaded from the catalog the oid of its id, so it keeps its oid across snapshots
+	void AssignStableOid(CatalogEntry &entry, idx_t id);
 
 private:
+	//! The oid of each loaded entry by its type and id
+	mutex entry_oids_lock;
+	map<pair<CatalogType, idx_t>, idx_t> entry_oids;
 	mutex name_maps_lock;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;

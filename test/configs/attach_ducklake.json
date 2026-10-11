@@ -564,12 +564,6 @@
       ]
     },
     {
-      "reason": "FIXME: Unstable OID",
-      "paths": [
-        "test/sql/pg_catalog/pg_namespace.test"
-      ]
-    },
-    {
       "reason": "FIXME: Statement differs from original result!",
       "paths": [
         "test/sql/types/nested/map/test_map_subscript.test",
