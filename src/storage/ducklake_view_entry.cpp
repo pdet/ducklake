@@ -83,7 +83,6 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 }
 
 string DuckLakeViewEntry::ToSQL() const {
-	// qualified like the view of DuckDB, with the query as written
 	auto qualified_name = schema.GetQualifiedName(name);
 	qualified_name.StripCatalog();
 	string result = "CREATE VIEW ";
