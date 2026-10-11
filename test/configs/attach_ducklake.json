@@ -312,11 +312,16 @@
       "reason": "FIXME: View Columns",
       "paths": [
         "test/sql/storage/wal/wal_view_storage_no_view_dependencies.test",
-        "test/sql/storage/wal/wal_view_storage.test",
         "test/sql/storage/catalog/test_view_explicit_aliases.test",
         "test/sql/storage/catalog/test_view_storage_no_view_dependencies.test",
         "test/sql/storage/catalog/test_view_storage.test",
         "test/sql/catalog/view/test_view_sql.test"
+      ]
+    },
+    {
+      "reason": "DuckLake does not track view dependencies, so the DROP succeeds with enable_view_dependencies",
+      "paths": [
+        "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
     {
@@ -476,9 +481,15 @@
     {
       "reason": "FIXME: Immediate transaction mode not respected",
       "paths": [
+        "test/sql/delete/test_using_delete_duplicates.test"
+      ]
+    },
+    {
+      "reason": "DuckLake reports write-write conflicts at COMMIT, these tests expect them at the conflicting statement",
+      "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
         "test/sql/update/test_update_many_updaters.test",
-        "test/sql/delete/test_using_delete_duplicates.test"
+        "test/sql/transactions/test_from_update_conflict.test"
       ]
     },
     {
@@ -505,8 +516,13 @@
     {
       "reason": "FIXME: BUGS? Uncaught/Weird exception",
       "paths": [
-        "test/sql/delete/test_segment_deletes.test",
         "test/sql/storage/mix/updates_deletes_persistent_segments.test"
+      ]
+    },
+    {
+      "reason": "Concurrent deletes from the same data file conflict in DuckLake, also when they delete different rows",
+      "paths": [
+        "test/sql/delete/test_segment_deletes.test"
       ]
     },
     {
@@ -547,7 +563,12 @@
     {
       "reason": "FIXME: Bugs? Cannot commit transaction local files",
       "paths": [
-        "test/sql/transactions/conflict_rename_append.test",
+        "test/sql/transactions/conflict_rename_append.test"
+      ]
+    },
+    {
+      "reason": "The test sets a 1000 KB memory limit, under which DuckLake metadata queries can run out of memory",
+      "paths": [
         "test/sql/logging/file_system_logging_attach_deadlock.test"
       ]
     },
@@ -559,7 +580,12 @@
         "test/sql/alter/rename_table/test_rename_table_chain_commit.test",
         "test/sql/alter/rename_table/test_rename_table_incorrect.test",
         "test/sql/alter/rename_table/test_rename_table_transactions.test",
-        "test/sql/alter/rename_table/test_rename_table.test",
+        "test/sql/alter/rename_table/test_rename_table.test"
+      ]
+    },
+    {
+      "reason": "DuckLake reports catalog conflicts at COMMIT, this test expects them at the conflicting statement",
+      "paths": [
         "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
     },
@@ -592,12 +618,6 @@
       "paths": [
         "test/sql/join/positional/test_positional_join.test",
         "test/sql/update/test_null_update.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Transaction Conflict Error",
-      "paths": [
-        "test/sql/transactions/test_from_update_conflict.test"
       ]
     },
     {
@@ -705,7 +725,7 @@
       ]
     },
     {
-      "reason": "FIXME: CI Deadlock?",
+      "reason": "INSERTs conflict with concurrent DELETEs in DuckLake, the final count of the test assumes they all commit",
       "paths": [
         "test/sql/update/test_stress_update_issue_19688.test"
       ]
@@ -737,10 +757,15 @@
     {
       "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
       "paths": [
-        "test/sql/types/geo/geometry_stats.test",
         "test/sql/types/geo/geometry_shred_list.test",
+        "test/sql/types/geo/geometry_crs.test"
+      ]
+    },
+    {
+      "reason": "These tests read DuckDB storage internals or geometry statistics that DuckLake does not keep",
+      "paths": [
+        "test/sql/types/geo/geometry_stats.test",
         "test/sql/types/geo/geometry_shred_limit.test",
-        "test/sql/types/geo/geometry_crs.test",
         "test/sql/types/geo/geometry_shred.test"
       ]
     },
@@ -755,9 +780,14 @@
       "reason": "FIXME: Variant Bugs?",
       "paths": [
         "test/parquet/variant/variant_comparison.test",
-        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
         "test/parquet/variant/variant_json_copy.test",
         "test/sql/function/variant/variant_extract_string_shredded.test"
+      ]
+    },
+    {
+      "reason": "The test reads DuckDB storage internals",
+      "paths": [
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
