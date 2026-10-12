@@ -4,6 +4,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "common/ducklake_util.hpp"
@@ -1742,6 +1743,10 @@ string DuckLakeMetadataManager::GenerateColumnFilterCondition(const ColumnFilter
 	if (filter_condition.empty()) {
 		return string();
 	}
+	// the file statistics of a nested column do not show its NULL values
+	if (column_filter.column_type.IsNested() && referenced_stats.count("null_count") > 0) {
+		return string();
+	}
 
 	string null_checks;
 	for (const auto &stat : referenced_stats) {
@@ -1846,6 +1851,12 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
                                                                const string &metadata_table_prefix) {
 	string select_list = "data_file_id";
 	for (const auto &stat : req.referenced_stats) {
+		if (stat == "value_count" || stat == "null_count") {
+			// every row of a file counts as a value or a NULL, so zero counts of both are unknown
+			select_list += StringUtil::Format(
+			    ", CASE WHEN value_count = 0 AND null_count = 0 THEN NULL ELSE %s END AS %s", stat, stat);
+			continue;
+		}
 		select_list += ", " + stat;
 	}
 	return StringUtil::Format("  SELECT %s\n"
@@ -4926,6 +4937,10 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 }
 
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter) {
+	// files of open transactions, collected before the metadata read and again after the listing
+	auto &transaction_manager = transaction.manager.Cast<DuckLakeTransactionManager>();
+	vector<string> written_files;
+	transaction_manager.GetWrittenFiles(written_files);
 	auto known_files_res = Query(GetKnownFilesForCleanupQuery());
 	known_files_res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 
@@ -4956,6 +4971,10 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 	SubstituteCatalogPlaceholders(query);
 	auto res = transaction.ExecuteRaw(query);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
+	transaction_manager.GetWrittenFiles(written_files);
+	for (auto &path : written_files) {
+		known_files.insert(canonical_path(path));
+	}
 
 	vector<DuckLakeFileForCleanup> result;
 	for (auto &row : *res) {

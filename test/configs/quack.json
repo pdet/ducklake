@@ -69,7 +69,8 @@
       "reason": "Test issues UPDATE against the metadata catalog directly",
       "paths": [
         "test/sql/delete/delete_legacy_missing_mapping_after_rename_add_files.test",
-        "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test"
+        "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test",
+        "test/sql/stats/nan_column_stats_missing_min.test"
       ]
     },
     {
@@ -170,7 +171,7 @@
       ]
     },
     {
-      "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
+      "reason": "Server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
       "paths": [
         "test/sql/retry/commit_failure.test",
         "test/sql/settings/max_retry_count.test"

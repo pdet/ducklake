@@ -156,6 +156,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
                          parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
                          parent.inlined_data_tables, local_change) {
+	oid = parent.oid;
 	if (parent.partition_data) {
 		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
 	}
@@ -739,7 +740,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	// Unknown stats or previously deleted NULLs require checking the live rows.
 	auto &col_stats = column_stats->second;
-	if (!col_stats.has_null_count || col_stats.null_count > 0) {
+	if (!col_stats.has_null_count || col_stats.null_count > 0 || !FileStatsShowNulls(col.Type())) {
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
