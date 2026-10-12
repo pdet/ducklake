@@ -114,6 +114,9 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
 	std::function<void(idx_t)> set_committed_snapshot_id;
+	//! Keeps the oids of the entries created by the commit on the catalog.
+	std::function<void(const ducklake_entry_oids_t &)> set_entry_oids = [](const ducklake_entry_oids_t &) {
+	};
 	//! Publishes the options of newly created tables onto the catalog.
 	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
 	    [](const vector<DuckLakeConfigOption> &) {
