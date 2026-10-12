@@ -259,7 +259,13 @@ statement ok
 CREATE TABLE ducklake.later (i INTEGER);
 
 statement ok
-SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')))
+SET VARIABLE inl_unknown_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')
+
+statement ok
+SET VARIABLE inl_unknown_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id = getvariable('inl_unknown_id'))
+
+statement ok
+SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = getvariable('inl_unknown_version'))
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', versions => getvariable('schema_snapshots'))
@@ -280,3 +286,34 @@ query I
 SELECT count(*) FROM ducklake.inl_unknown WHERE b > 10
 ----
 1
+
+# of two columns with unknown bounds only the one without values gets the new bounds
+statement ok
+CREATE TABLE ducklake.mc (a INTEGER, b INTEGER);
+
+statement ok
+CREATE TABLE ducklake.mc_inl (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+foreach tbl mc mc_inl
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (5, NULL);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = '{tbl}')
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (1, 2);
+
+query III
+SELECT s.column_id, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{tbl}' ORDER BY s.column_id
+----
+1	NULL	NULL
+2	2	2
+
+query I
+SELECT count(*) FROM ducklake.{tbl} WHERE a > 3
+----
+1
+
+endloop

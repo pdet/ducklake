@@ -4296,8 +4296,10 @@ string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id,
 		auto values_from = added == null_default_columns.end() ? 0 : added->second;
 		column_values.push_back(StringUtil::Format("(%d, %d)", column_id.index, values_from));
 	}
+	// a single column stops at the first file with a value
+	bool single_column = column_ids.size() == 1;
 	return StringUtil::Format(R"(
-SELECT DISTINCT c.column_id
+SELECT %s c.column_id
 FROM (VALUES %s) c(column_id, values_from)
 CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
 LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
@@ -4305,8 +4307,9 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
 WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
     WHEN s.data_file_id IS NULL THEN COALESCE(f.partial_max, f.begin_snapshot) >= c.values_from
     ELSE s.value_count IS NULL OR s.value_count > 0
-END)",
-	                          StringUtil::Join(column_values, ", "), table_id.index);
+END%s)",
+	                          single_column ? "" : "DISTINCT", StringUtil::Join(column_values, ", "), table_id.index,
+	                          single_column ? " LIMIT 1" : "");
 }
 
 string DuckLakeMetadataManager::GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
@@ -4341,7 +4344,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_column c
 
 string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
                                                     const DuckLakeInlinedColNames &col_names) {
-	// one row with the live value count of every check, the checks of a table are counted in one scan
+	// one row with the live values of every check, the checks of a table are counted in one scan
 	vector<string> tables;
 	vector<string> counts;
 	for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
@@ -4351,10 +4354,18 @@ string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlined
 		if (check_idx + 1 < checks.size() && checks[check_idx + 1].table_name == check.table_name) {
 			continue;
 		}
-		tables.push_back(StringUtil::Format("(SELECT %s FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d) t%d",
-		                                    StringUtil::Join(counts, ", "), SQLIdentifier(check.table_name),
-		                                    col_names.end_snapshot, col_names.begin_snapshot, check.flushed_up_to,
-		                                    tables.size()));
+		auto rows = StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
+		                               SQLIdentifier(check.table_name), col_names.end_snapshot,
+		                               col_names.begin_snapshot, check.flushed_up_to);
+		if (counts.size() == 1) {
+			// a single check stops at the first value
+			if (!check.column_name.empty()) {
+				rows += StringUtil::Format(" AND %s IS NOT NULL", counted);
+			}
+			rows += " LIMIT 1";
+		}
+		tables.push_back(
+		    StringUtil::Format("(SELECT %s FROM (%s) r) t%d", StringUtil::Join(counts, ", "), rows, tables.size()));
 		counts.clear();
 	}
 	return "SELECT * FROM " + StringUtil::Join(tables, ", ");
