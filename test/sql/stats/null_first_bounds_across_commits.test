@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/null_first_bounds_across_commits.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -186,10 +186,7 @@ SELECT count(*) FROM ducklake.m WHERE c > 10
 
 # inlined rows written before a column without default read it as NULL (duckdb/ducklake#625)
 statement ok
-CREATE TABLE ducklake.inl_added (column_one INTEGER);
-
-statement ok
-CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inl_added')
+CREATE TABLE ducklake.inl_added (column_one INTEGER) WITH (data_inlining_row_limit = 10);
 
 statement ok
 INSERT INTO ducklake.inl_added VALUES (1);
@@ -221,10 +218,7 @@ physical_plan	<REGEX>:.*Empty Result.*
 
 # inlined values written under the old name of a renamed column keep unknown bounds unknown
 statement ok
-CREATE TABLE ducklake.inl_renamed (c FLOAT);
-
-statement ok
-CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inl_renamed')
+CREATE TABLE ducklake.inl_renamed (c FLOAT) WITH (data_inlining_row_limit = 10);
 
 statement ok
 INSERT INTO ducklake.inl_renamed VALUES (0.2);
@@ -245,5 +239,44 @@ NULL	NULL
 
 query I
 SELECT count(*) FROM ducklake.inl_renamed WHERE d < 1
+----
+1
+
+# once the snapshots of its schema version are expired an inlined data table counts as holding values
+statement ok
+CREATE TABLE ducklake.inl_unknown (a INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.inl_unknown VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.inl_unknown ADD COLUMN b INTEGER;
+
+statement ok
+INSERT INTO ducklake.inl_unknown VALUES (2, 100);
+
+statement ok
+CREATE TABLE ducklake.later (i INTEGER);
+
+statement ok
+SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')))
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => getvariable('schema_snapshots'))
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_across_commits', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.inl_unknown VALUES (3, 5);
+
+query I
+SELECT count(*) FROM ducklake.inl_unknown WHERE b > 10
 ----
 1

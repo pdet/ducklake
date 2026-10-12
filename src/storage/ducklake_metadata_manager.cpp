@@ -4323,13 +4323,14 @@ GROUP BY column_id)",
 }
 
 string DuckLakeMetadataManager::GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
-	// an inlined data table holds the columns of the table at its schema version
+	// an inlined data table holds the columns of the table at the snapshot that began its schema version, the schema
+	// is unknown once that snapshot is expired
 	return StringUtil::Format(R"(
 WITH inlined AS (
     SELECT i.table_name, (
-        SELECT MAX(sv.begin_snapshot)
-        FROM {METADATA_CATALOG}.ducklake_schema_versions sv
-        WHERE sv.table_id = i.table_id AND sv.schema_version <= i.schema_version
+        SELECT MIN(s.snapshot_id)
+        FROM {METADATA_CATALOG}.ducklake_snapshot s
+        WHERE s.schema_version = i.schema_version
     ) AS schema_snapshot
     FROM {METADATA_CATALOG}.ducklake_inlined_data_tables i
     WHERE i.table_id = %d

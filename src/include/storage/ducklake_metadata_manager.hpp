@@ -46,7 +46,6 @@ struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
-//! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 //! A check whether the live rows of an inlined data table hold a value of a column
 struct DuckLakeInlinedValueCheck {
 	string table_name;
@@ -57,6 +56,7 @@ struct DuckLakeInlinedValueCheck {
 	string column_name;
 };
 
+//! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
 	static constexpr const char *PREFIX = "_ducklake_";
