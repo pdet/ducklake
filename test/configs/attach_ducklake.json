@@ -206,7 +206,8 @@
         "test/optimizer/joins/join_filter_build_side.test",
         "test/sql/sql_export/compression_fallbacks.test",
         "test/sql/sql_export/compression_fallbacks_plan.test",
-        "test/sql/sql_export/rewritten_functions.test"
+        "test/sql/sql_export/rewritten_functions.test",
+        "test/optimizer/statistics/statistics_early_join_range.test"
       ]
     },
     {
@@ -689,18 +690,21 @@
         "test/sql/optimizer/multiple_column_stats_pruning.test",
         "test/sql/optimizer/struct_segment_pruning.test",
         "test/optimizer/joins/always_true_scan_filter_estimate.test",
-        "test/sql/sql_export/pushed_column_paths.test"
+        "test/sql/sql_export/pushed_column_paths.test",
+        "test/sql/optimizer/plan/dense_or_filter_pushdown.test",
+        "test/sql/storage/distinct_statistics_sample.test"
       ]
     },
     {
-      "reason": "Asserts DuckDB-native BASE_TABLE memory accounting via duckdb_memory().",
+      "reason": "Asserts DuckDB-native table memory accounting (BASE_TABLE, IN_MEMORY_TABLE) via duckdb_memory().",
       "paths": [
         "test/sql/storage/prefetch/async_native_scan_read_ahead_pruning.test",
         "test/sql/delete/bulk_delete_version_info_memory.test",
         "test/sql/delete/delete_compression_blocked_by_old_snapshot.test",
         "test/sql/delete/partial_delete_version_info_memory.test",
         "test/sql/storage/partial_delete_pending_compress.test",
-        "test/sql/storage/partial_delete_checkpoint_mask.test"
+        "test/sql/storage/partial_delete_checkpoint_mask.test",
+        "test/sql/storage/adaptive_segment_rollback.test"
       ]
     },
     {
@@ -749,7 +753,8 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
-        "test/sql/storage/compression/constant/constant_negative_zero.test"
+        "test/sql/storage/compression/constant/constant_negative_zero.test",
+        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test"
       ]
     },
     {
@@ -832,6 +837,18 @@
       "reason": "Asserts insertion order of a large parallel CTAS copy via LIMIT/OFFSET without ORDER BY; DuckLake does not preserve it.",
       "paths": [
         "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
+      ]
+    },
+    {
+      "reason": "Asserts the vector type of VARIANT values in DuckDB-native storage; DuckLake reads them back from Parquet as SHREDDED_VECTOR.",
+      "paths": [
+        "test/issues/general/test_24298.test"
+      ]
+    },
+    {
+      "reason": "FIXME: GEOMETRY columns lose their CRS, so typeof returns GEOMETRY instead of GEOMETRY('OGC:CRS84').",
+      "paths": [
+        "test/sql/types/geo/geometry_crs_persist.test"
       ]
     }
   ]
