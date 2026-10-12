@@ -1,5 +1,5 @@
 # name: benchmark/micro/maintenance/expire_one_snapshot.benchmark
-# description: Expire one of 1006 snapshots, so the 2000 ended files keep hundreds of snapshots in their range
+# description: Expire one of 1006 snapshots ten times, so the 2000 ended files keep hundreds of snapshots in their range
 # group: [maintenance]
 
 name Expire One Snapshot
@@ -14,7 +14,35 @@ argument work expire_one_work
 
 include benchmark/micro/fixtures/snap1000.benchmark.in
 
+# Each expiration is rolled back, so the next one expires the same snapshot again
 run
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
 BEGIN;
 SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', versions => [500]);
 
