@@ -16,10 +16,11 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/buck
 statement ok
 USE ducklake
 
-foreach target_type HUGEINT DOUBLE DECIMAL(38,0)
+# type changes that change the hash of a value
+foreach source,target INTEGER,HUGEINT INTEGER,DOUBLE INTEGER,DECIMAL(38) BIGINT,HUGEINT UTINYINT,SMALLINT
 
 statement ok
-CREATE TABLE h (c INTEGER, k INTEGER)
+CREATE TABLE h (c {source}, k INTEGER)
 
 statement ok
 ALTER TABLE h SET PARTITIONED BY (bucket(16, c))
@@ -28,7 +29,7 @@ statement ok
 INSERT INTO h VALUES (5, 1), (6, 2)
 
 statement ok
-ALTER TABLE h ALTER c TYPE {target_type}
+ALTER TABLE h ALTER c TYPE {target}
 
 query I
 SELECT k FROM h WHERE c = 5
@@ -61,48 +62,6 @@ DROP TABLE h
 
 endloop
 
-# unsigned integers hash their text and signed integers their value
-statement ok
-CREATE TABLE h (c UTINYINT, k INTEGER)
-
-statement ok
-ALTER TABLE h SET PARTITIONED BY (bucket(16, c))
-
-statement ok
-INSERT INTO h VALUES (5, 1), (6, 2)
-
-statement ok
-ALTER TABLE h ALTER c TYPE SMALLINT
-
-query I
-SELECT k FROM h WHERE c = 5
-----
-1
-
-query I
-SELECT k FROM h WHERE c IN (5, 6, 99) ORDER BY k
-----
-1
-2
-
-statement ok
-INSERT INTO h VALUES (5, 3), (7, 4)
-
-query I
-SELECT k FROM h WHERE c = 5 ORDER BY k
-----
-1
-3
-
-query I
-SELECT k FROM h WHERE c IN (6, 7) ORDER BY k
-----
-2
-4
-
-statement ok
-DROP TABLE h
-
 # a DECIMAL that gets wider hashes its text instead of its unscaled value
 statement ok
 CREATE TABLE d (c DECIMAL(18,2), k INTEGER)
@@ -118,6 +77,24 @@ ALTER TABLE d ALTER c TYPE DECIMAL(38,2)
 
 query I
 SELECT k FROM d WHERE c = 1.25
+----
+1
+
+# a DECIMAL with a larger scale hashes another unscaled value
+statement ok
+CREATE TABLE e (c DECIMAL(4,1), k INTEGER)
+
+statement ok
+ALTER TABLE e SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO e VALUES (1.5, 1)
+
+statement ok
+ALTER TABLE e ALTER c TYPE DECIMAL(9,2)
+
+query I
+SELECT k FROM e WHERE c = 1.5
 ----
 1
 
@@ -197,9 +174,11 @@ SELECT k FROM s WHERE c = 5
 ----
 1
 
-# widening a signed integer keeps the bucket of every value, so the old files are still pruned
+# type changes that keep the hash of every value, so the old files are still pruned
+foreach source,target INTEGER,BIGINT FLOAT,DOUBLE UTINYINT,UBIGINT UINTEGER,HUGEINT UBIGINT,UHUGEINT HUGEINT,HUGEINT DECIMAL(4),DECIMAL(18) DECIMAL(20),DECIMAL(38)
+
 statement ok
-CREATE TABLE w (c INTEGER, k INTEGER)
+CREATE TABLE w (c {source}, k INTEGER)
 
 statement ok
 ALTER TABLE w SET PARTITIONED BY (bucket(16, c))
@@ -208,7 +187,7 @@ statement ok
 INSERT INTO w SELECT i, i FROM range(64) t(i)
 
 statement ok
-ALTER TABLE w ALTER c TYPE BIGINT
+ALTER TABLE w ALTER c TYPE {target}
 
 query I
 SELECT k FROM w WHERE c = 5
@@ -219,6 +198,11 @@ query II
 EXPLAIN ANALYZE SELECT k FROM w WHERE c = 5
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+DROP TABLE w
+
+endloop
 
 # a type change of a column that is no bucket key keeps the spec
 statement ok
@@ -235,28 +219,5 @@ ALTER TABLE p ALTER c TYPE HUGEINT
 
 query II
 EXPLAIN ANALYZE SELECT k FROM p WHERE k = 5
-----
-analyzed_plan	<REGEX>:.*Total Files Read: 1.*
-
-# FLOAT and DOUBLE values hash as a DOUBLE
-statement ok
-CREATE TABLE f (c FLOAT, k INTEGER)
-
-statement ok
-ALTER TABLE f SET PARTITIONED BY (bucket(16, c))
-
-statement ok
-INSERT INTO f SELECT i, i FROM range(64) t(i)
-
-statement ok
-ALTER TABLE f ALTER c TYPE DOUBLE
-
-query I
-SELECT k FROM f WHERE c = 5
-----
-5
-
-query II
-EXPLAIN ANALYZE SELECT k FROM f WHERE c = 5
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*

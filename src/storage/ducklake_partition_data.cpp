@@ -3,6 +3,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -183,17 +184,41 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 	                    make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 }
 
-static bool HashesAsBigint(const LogicalType &type) {
-	return type.IsSigned() && type.InternalType() != PhysicalType::INT128;
+//! Types with the same bucket hash type give every value the same murmur3_32 hash
+static LogicalType GetBucketHashType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+		// hashed as a BIGINT
+		return LogicalType::BIGINT;
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+		// hashed as a DOUBLE
+		return LogicalType::DOUBLE;
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+		// hashed as their text
+		return LogicalType::HUGEINT;
+	case LogicalTypeId::DECIMAL: {
+		// hashed as the unscaled value up to 18 digits and as text above
+		auto width = DecimalType::GetWidth(type) <= Decimal::MAX_WIDTH_INT64 ? Decimal::MAX_WIDTH_INT64
+		                                                                     : Decimal::MAX_WIDTH_DECIMAL;
+		return LogicalType::DECIMAL(width, DecimalType::GetScale(type));
+	}
+	default:
+		return type;
+	}
 }
 
 bool DuckLakePartitionUtils::BucketChangesWithType(const DuckLakePartition &partition, FieldIndex field_id,
                                                    const LogicalType &source_type, const LogicalType &target_type) {
-	// murmur3_32 hashes signed integers as a BIGINT and floating point values as a DOUBLE
-	if (HashesAsBigint(source_type) && HashesAsBigint(target_type)) {
-		return false;
-	}
-	if (source_type.IsFloating() && target_type.IsFloating()) {
+	if (GetBucketHashType(source_type) == GetBucketHashType(target_type)) {
 		return false;
 	}
 	for (auto &field : partition.fields) {
