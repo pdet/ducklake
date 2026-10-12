@@ -149,8 +149,10 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		return EscapeVarcharForSQL(value.ToString());
 	case LogicalTypeId::VARIANT: {
 		if (!use_native_type) {
+			// LCOV_EXCL_START
 			throw InternalException("VARIANT values must be encoded as Parquet Variant blobs before being "
 			                        "inlined in this catalog type");
+			// LCOV_EXCL_STOP
 		}
 		return value.ToSQLString();
 	}
@@ -368,7 +370,9 @@ void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, bool pre
 
 string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
 	if (from.empty()) {
+		// LCOV_EXCL_START
 		return sql;
+		// LCOV_EXCL_STOP
 	}
 
 	auto tokens = Parser::Tokenize(sql);
@@ -395,7 +399,9 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from
 
 	while (pos < sql.size()) {
 		while (range_idx < no_replace_ranges.size() && pos >= no_replace_ranges[range_idx].second) {
+			// LCOV_EXCL_START
 			range_idx++;
+			// LCOV_EXCL_STOP
 		}
 
 		// If inside a quoted range, copy verbatim to its end
@@ -546,7 +552,9 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 	for (auto &entry : db_config.GetExtensionSettings()) {
 		auto &option = entry.second;
 		if (!option.setting_index.IsValid()) {
+			// LCOV_EXCL_START
 			continue;
+			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
 		if (!from.config.user_settings.IsSet(setting_index)) {

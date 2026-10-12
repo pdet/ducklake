@@ -79,3 +79,27 @@ Could not find parent column for column a
 
 statement ok
 DETACH dl
+
+# a view that references a schema that does not exist
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_view_schema.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_view_schema')
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS i
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_view SET schema_id = 999
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_view_schema.db' AS dl
+
+statement error
+SELECT * FROM dl.v
+----
+could not find schema that corresponds to the view entry "v"
+
+statement ok
+DETACH dl

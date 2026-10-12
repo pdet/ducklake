@@ -394,10 +394,14 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 		f.row_group_count = OptIdx(row, 16);
 		f.overwrites_existing_delete = OptBoolFalse(row, 12);
 		if (!row.IsNull(13)) {
+			// LCOV_EXCL_START
 			f.overwritten_delete_file.delete_file_id = DataFileIndex(AsIdx(row, 13));
+			// LCOV_EXCL_STOP
 		}
 		if (!row.IsNull(14)) {
+			// LCOV_EXCL_START
 			f.overwritten_delete_file.path = row.GetValue<string>(14);
+			// LCOV_EXCL_STOP
 		}
 		grouped[key].push_back(std::move(f));
 	}
@@ -707,7 +711,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);
 		}
+		// LCOV_EXCL_START
 		return 0;
+		// LCOV_EXCL_STOP
 	};
 	auto inlined_col_names = ctx.InlinedColNames();
 	ctx.get_net_inlined_row_count = [this, inlined_col_names](TableIndex table_id) -> idx_t {

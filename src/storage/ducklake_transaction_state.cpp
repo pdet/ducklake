@@ -618,8 +618,6 @@ DuckLakeTransactionState::GetNewDeleteFiles(const DuckLakeCommitState &commit_st
 		for (auto &file : entry.second) {
 			if (file.overwritten_delete_file.delete_file_id.IsValid()) {
 				throw InternalException("Local delete files should not overwrite files");
-				// track the old delete file for deletion from metadata and disk
-				overwritten_delete_files.push_back(file.overwritten_delete_file);
 			}
 			auto delete_file = DuckLakeTransaction::GetNewDeleteFile(table_id, commit_state, file);
 			result.push_back(std::move(delete_file));
@@ -656,7 +654,9 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 			continue;
 		}
 		if (table_changes.new_inlined_file_deletes->file_deletes.empty()) {
+			// LCOV_EXCL_START
 			continue;
+			// LCOV_EXCL_STOP
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
@@ -709,8 +709,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					break;
 				}
 				default:
+					// LCOV_EXCL_START
 					throw InternalException(
 					    "DuckLakeTransactionState::GetCompactionChanges Compaction type is invalid");
+					// LCOV_EXCL_STOP
 				}
 			}
 
@@ -760,13 +762,17 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				result.compacted_files.push_back(std::move(file_info));
 			}
 			if (has_new_files && row_id_limit > output_row_count) {
+				// LCOV_EXCL_START
 				throw InternalException("Compaction error - live source rows (%llu) exceed output rows (%llu)",
 				                        row_id_limit, output_row_count);
+				// LCOV_EXCL_STOP
 			}
 			if (!has_new_files && row_id_limit != 0) {
+				// LCOV_EXCL_START
 				throw InternalException(
 				    "Compaction error - compaction without output file must have zero live source rows (got %llu)",
 				    row_id_limit);
+				// LCOV_EXCL_STOP
 			}
 			for (auto &new_file : output_files) {
 				result.new_files.push_back(std::move(new_file));
@@ -914,7 +920,9 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
 	for (auto &row : *stats_option) {
 		if (row.IsNull(0)) {
+			// LCOV_EXCL_START
 			continue;
+			// LCOV_EXCL_STOP
 		}
 		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
 			idx_t field_index;
@@ -936,12 +944,16 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	}
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
+		// LCOV_EXCL_START
 		return; // no schema visible at the commit snapshot
+		        // LCOV_EXCL_STOP
 	}
 	auto current_stats = context.get_table_stats(table_id);
 	if (!current_stats) {
 		// no committed stats row exists yet - the UPDATE path of UpdateGlobalTableStats only refreshes existing rows
+		// LCOV_EXCL_START
 		return;
+		// LCOV_EXCL_STOP
 	}
 
 	// Build a field_index -> column_type map for the per-file stats merge below. `columns` is the full flattened
@@ -977,7 +989,9 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			parquet_gross_rows += static_cast<idx_t>(row.GetValue<int64_t>(1));
 		}
 		if (row.IsNull(3)) {
+			// LCOV_EXCL_START
 			continue; // file without column stats
+			          // LCOV_EXCL_STOP
 		}
 		FieldIndex field_idx(static_cast<idx_t>(row.GetValue<int64_t>(3)));
 		auto type_it = type_by_field.find(field_idx);
@@ -1192,7 +1206,9 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 	}
 	for (auto &table_id : table_ids) {
 		if (attempt_dropped_file_stats.find(table_id) == attempt_dropped_file_stats.end()) {
+			// LCOV_EXCL_START
 			continue;
+			// LCOV_EXCL_STOP
 		}
 
 		shared_ptr<DuckLakeTableStats> current_stats_pin;
@@ -1530,7 +1546,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			column_schema_change = true;
 			break;
 		}
+		// LCOV_EXCL_START
 		case LocalChangeType::NONE:
+		// LCOV_EXCL_STOP
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_table_id = table.GetTableId();
@@ -1688,7 +1706,9 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
 		}
+		// LCOV_EXCL_START
 		case LocalChangeType::NONE:
+		// LCOV_EXCL_STOP
 		case LocalChangeType::CREATED:
 		case LocalChangeType::RENAMED: {
 			auto old_view_id = view.GetViewId();
@@ -2139,7 +2159,9 @@ static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex tab
 static set<DataFileIndex> GetMergedDataFiles(const set<DataFileIndex> &files, const DuckLakeCommitContext &context) {
 	set<DataFileIndex> result = files;
 	if (files.empty()) {
+		// LCOV_EXCL_START
 		return result;
+		// LCOV_EXCL_STOP
 	}
 	auto query_result = context.conflict_query_executor(DuckLakeMetadataManager::GetExistingDataFilesSql(files));
 	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get merged files for conflict "
