@@ -464,16 +464,14 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
-	//! Selects the given columns that a data file of the table records values of, also a dropped file, or that a live
-	//! file written before a column with a default other than NULL holds
+	//! Selects the given columns that a live data file of the table records values of, or holds the default of
 	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
 	                                          const map<FieldIndex, idx_t> &null_default_columns);
-	//! Selects the versions of the given columns with their begin snapshot and whether their initial default is NULL
+	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
+	//! whether they are top level columns
 	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
-	//! Selects the inlined data tables of the table, whether their schema is known and the given columns they hold
-	static string GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
 	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
 	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
 	                                  const DuckLakeInlinedColNames &col_names);

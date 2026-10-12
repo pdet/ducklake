@@ -1273,29 +1273,13 @@ static void RemoveReturnedColumns(const string &sql, set<FieldIndex> &columns, c
 	}
 }
 
-//! The top level columns an inlined data table holds by their name in it, a nested field by an empty name
-struct DuckLakeInlinedTableColumns {
-	bool schema_known = false;
-	map<FieldIndex, string> names;
-};
-
 //! Removes the columns that a live inlined row may hold a value of
 static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
-                                           const map<FieldIndex, idx_t> &null_default_columns, set<FieldIndex> &columns,
+                                           const map<FieldIndex, idx_t> &null_default_columns,
+                                           const set<FieldIndex> &top_level_columns, set<FieldIndex> &columns,
                                            const DuckLakeCommitContext &context) {
-	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedColumnNamesSql(table_id, columns));
-	names->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
-	map<string, DuckLakeInlinedTableColumns> inlined_tables;
-	for (auto &row : *names) {
-		auto &table = inlined_tables[row.GetValue<string>(0)];
-		table.schema_known = row.GetValue<bool>(1);
-		if (!row.IsNull(2)) {
-			auto top_level = row.GetValue<bool>(4);
-			table.names[FieldIndex(row.GetValue<idx_t>(2))] = top_level ? row.GetValue<string>(3) : string();
-		}
-	}
 	vector<vector<DuckLakeInlinedValueCheck>> table_checks;
-	for (auto &table : inlined_tables) {
+	for (auto &table : ReadInlinedTableColumns(table_id, context)) {
 		// this commit flushes the rows up to the flush snapshot into its new files
 		idx_t flushed_up_to = 0;
 		for (auto &flushed : flushed_tables) {
@@ -1303,16 +1287,20 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 				flushed_up_to = flushed.flush_snapshot_id;
 			}
 		}
-		auto &columns_of_table = table.second;
 		vector<DuckLakeInlinedValueCheck> checks;
 		for (auto &column_id : columns) {
-			auto held = columns_of_table.names.find(column_id);
-			bool held_column = held != columns_of_table.names.end();
-			if (columns_of_table.schema_known && !held_column && null_default_columns.count(column_id)) {
-				// the rows were written before the column, they read its NULL default
-				continue;
+			// a nested field is checked as a whole row
+			string column_name;
+			if (top_level_columns.count(column_id)) {
+				auto held = table.second.find(column_id);
+				if (held == table.second.end() && null_default_columns.count(column_id)) {
+					// the rows were written before the column, they read its NULL default
+					continue;
+				}
+				if (held != table.second.end()) {
+					column_name = held->second.column_name;
+				}
 			}
-			string column_name = columns_of_table.schema_known && held_column ? held->second : string();
 			checks.push_back(DuckLakeInlinedValueCheck {table.first, flushed_up_to, column_id, column_name});
 		}
 		if (!checks.empty()) {
@@ -1321,11 +1309,19 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 	}
 	// a query joins the counts of a bounded number of inlined data tables
 	static constexpr idx_t TABLES_PER_QUERY = 16;
-	for (idx_t batch_start = 0; batch_start < table_checks.size(); batch_start += TABLES_PER_QUERY) {
+	for (idx_t batch_start = 0; batch_start < table_checks.size() && !columns.empty();
+	     batch_start += TABLES_PER_QUERY) {
 		vector<DuckLakeInlinedValueCheck> checks;
-		for (idx_t table_idx = batch_start; table_idx < MinValue(batch_start + TABLES_PER_QUERY, table_checks.size());
-		     table_idx++) {
-			checks.insert(checks.end(), table_checks[table_idx].begin(), table_checks[table_idx].end());
+		auto batch_end = MinValue(batch_start + TABLES_PER_QUERY, table_checks.size());
+		for (idx_t table_idx = batch_start; table_idx < batch_end; table_idx++) {
+			for (auto &check : table_checks[table_idx]) {
+				if (columns.count(check.column_id)) {
+					checks.push_back(check);
+				}
+			}
+		}
+		if (checks.empty()) {
+			continue;
 		}
 		auto values = context.conflict_query_executor(
 		    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
@@ -1353,6 +1349,7 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
 	// the snapshot each column with a NULL initial default was added in
 	map<FieldIndex, idx_t> null_default_columns;
 	set<FieldIndex> value_defaults;
+	set<FieldIndex> top_level_columns;
 	for (auto &row : *defaults) {
 		FieldIndex column_id(row.GetValue<idx_t>(0));
 		auto begin_snapshot = row.GetValue<idx_t>(1);
@@ -1361,6 +1358,9 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
 		if (!row.GetValue<bool>(2)) {
 			value_defaults.insert(column_id);
 		}
+		if (row.GetValue<bool>(3)) {
+			top_level_columns.insert(column_id);
+		}
 	}
 	for (auto &column_id : value_defaults) {
 		null_default_columns.erase(column_id);
@@ -1368,7 +1368,8 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
 	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, columns, null_default_columns),
 	                      columns, context);
 	if (!columns.empty()) {
-		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_default_columns, columns, context);
+		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_default_columns, top_level_columns,
+		                               columns, context);
 	}
 }
 
@@ -1379,7 +1380,6 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 	set<FieldIndex> null_only_columns;
 	for (auto &entry : stats.column_stats) {
 		auto &column_stats = entry.second;
-		// a column without NULL values holds values
 		bool without_nulls = column_stats.has_null_count && column_stats.null_count == 0;
 		if (column_stats.bounds_unknown && !without_nulls &&
 		    !context.column_holds_values(table_id, entry.first, snapshot_id) &&
@@ -1428,7 +1428,6 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
-		// the commit builds on the snapshot before its own
 		ResolveNullOnlyBounds(table_id, table_changes, new_stats, commit_state.commit_snapshot.snapshot_id - 1,
 		                      context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);

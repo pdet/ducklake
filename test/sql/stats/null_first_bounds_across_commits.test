@@ -403,3 +403,29 @@ query I
 SELECT count(*) FROM ducklake.updated WHERE c > 10
 ----
 0
+
+# the values of dropped files do not keep new values from setting the bounds
+statement ok
+CREATE TABLE ducklake.reloaded (c INTEGER);
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (100);
+
+statement ok
+DELETE FROM ducklake.reloaded;
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (7);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'reloaded'
+----
+7	7
+
+query II
+EXPLAIN SELECT * FROM ducklake.reloaded WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*

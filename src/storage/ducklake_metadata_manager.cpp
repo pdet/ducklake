@@ -902,9 +902,7 @@ WHERE table_id = %d AND schema_version < (
 	                          table_id.index, table_id.index);
 }
 
-//! The inlined data tables with the snapshot their schema version began at, a version without a row of the table
-//! has the schema the table was created with
-static string InlinedTableSnapshotsSql(optional_idx table_id) {
+string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id) {
 	string table_filter;
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format("\n\tWHERE idt.table_id = %d", table_id.GetIndex());
@@ -917,17 +915,13 @@ WITH inlined AS (
 	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
 	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
 		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
-))",
-	                          table_filter);
-}
-
-string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id) {
-	return InlinedTableSnapshotsSql(table_id) + R"(
+)
 SELECT inlined.table_name, col.column_name, col.column_type, col.column_id
 FROM inlined
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
 WHERE col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id)
-)";
+)",
+	                          table_filter);
 }
 
 unordered_set<string> DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
@@ -4298,14 +4292,16 @@ string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table
 	// a live file written before a column with a default other than NULL holds the default
 	auto ids = GenerateIDList(column_ids);
 	auto sql = StringUtil::Format(R"(
-SELECT column_id
-FROM {METADATA_CATALOG}.ducklake_file_column_stats
-WHERE table_id = %d AND column_id IN (%s) AND (value_count IS NULL OR value_count > 0)
+SELECT s.column_id
+FROM {METADATA_CATALOG}.ducklake_file_column_stats s
+JOIN {METADATA_CATALOG}.ducklake_data_file f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
+WHERE s.table_id = %d AND s.column_id IN (%s) AND (s.value_count IS NULL OR s.value_count > 0)
 UNION ALL
 SELECT c.column_id
 FROM {METADATA_CATALOG}.ducklake_column c
 JOIN {METADATA_CATALOG}.ducklake_data_file f
-    ON f.table_id = c.table_id AND f.end_snapshot IS NULL AND COALESCE(f.partial_max, f.begin_snapshot) < c.begin_snapshot
+    ON f.table_id = c.table_id AND f.end_snapshot IS NULL
+    AND COALESCE(f.partial_max, f.begin_snapshot) < c.begin_snapshot
 WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)",
 	                              table_id.index, ids, table_id.index, ids);
 	if (column_ids.size() == 1) {
@@ -4338,20 +4334,10 @@ END)",
 
 string DuckLakeMetadataManager::GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
 	return StringUtil::Format(R"(
-SELECT column_id, begin_snapshot, initial_default IS NULL
+SELECT column_id, begin_snapshot, initial_default IS NULL, parent_column IS NULL
 FROM {METADATA_CATALOG}.ducklake_column
 WHERE table_id = %d AND column_id IN (%s))",
 	                          table_id.index, GenerateIDList(column_ids));
-}
-
-string DuckLakeMetadataManager::GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
-	return InlinedTableSnapshotsSql(table_id.index) + StringUtil::Format(R"(
-SELECT inlined.table_name, inlined.snapshot_id IS NOT NULL, col.column_id, col.column_name, col.parent_column IS NULL
-FROM inlined
-LEFT JOIN {METADATA_CATALOG}.ducklake_column col
-    ON col.table_id = inlined.table_id AND col.column_id IN (%s) AND col.begin_snapshot <= inlined.snapshot_id
-    AND (col.end_snapshot IS NULL OR col.end_snapshot > inlined.snapshot_id))",
-	                                                                     GenerateIDList(column_ids));
 }
 
 string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
