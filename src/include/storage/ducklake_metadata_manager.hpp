@@ -454,7 +454,7 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
-	//! Selects the given columns that a live data file of the table may hold a non-NULL value of
+	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
 	//! Selects a row when one of the inlined data tables holds a live row that began after its given snapshot
 	static string GetLiveInlinedRowSql(const vector<pair<string, idx_t>> &tables,

@@ -153,3 +153,33 @@ query I
 SELECT count(*) FROM ducklake.d WHERE f < 8
 ----
 1
+
+# a merged file holds the rows of its newest source file, even when its statistics of a column are missing
+statement ok
+CREATE TABLE ducklake.m (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.m VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.m ADD COLUMN c INTEGER;
+
+statement ok
+INSERT INTO ducklake.m VALUES (2, 100);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'm')
+
+statement ok
+DELETE FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'm') AND column_id IN (SELECT column_id FROM __ducklake_metadata_ducklake.ducklake_column WHERE column_name = 'c')
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'm')
+
+statement ok
+INSERT INTO ducklake.m VALUES (3, 5);
+
+query I
+SELECT count(*) FROM ducklake.m WHERE c > 10
+----
+1
