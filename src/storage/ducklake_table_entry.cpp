@@ -448,10 +448,12 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
-bool DuckLakeTableEntry::ChangedColumnType() {
-	reference<CatalogEntry> entry = *this;
+//! Whether an entry of the transaction-local history of the table matches
+template <class FUNC>
+static bool AnyLocalChange(DuckLakeTableEntry &table, FUNC &&matches) {
+	reference<CatalogEntry> entry = table;
 	while (true) {
-		if (entry.get().Cast<DuckLakeTableEntry>().local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE) {
+		if (matches(entry.get().Cast<DuckLakeTableEntry>())) {
 			return true;
 		}
 		if (!entry.get().HasChild()) {
@@ -461,21 +463,16 @@ bool DuckLakeTableEntry::ChangedColumnType() {
 	}
 }
 
+bool DuckLakeTableEntry::ChangedColumnType() {
+	return AnyLocalChange(*this, [](DuckLakeTableEntry &entry) {
+		return entry.local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE;
+	});
+}
+
 bool DuckLakeTableEntry::AddedColumn(FieldIndex field_index) {
-	reference<CatalogEntry> entry = *this;
-	while (true) {
-		auto &table = entry.get().Cast<DuckLakeTableEntry>();
-		if (table.local_change.type == LocalChangeType::ADD_COLUMN) {
-			auto &added_column = table.GetColumn(LogicalIndex(table.columns.LogicalColumnCount() - 1));
-			if (table.GetFieldId(added_column.Physical()).GetFieldIndex() == field_index) {
-				return true;
-			}
-		}
-		if (!entry.get().HasChild()) {
-			return false;
-		}
-		entry = entry.get().Child();
-	}
+	return AnyLocalChange(*this, [&](DuckLakeTableEntry &entry) {
+		return entry.local_change.type == LocalChangeType::ADD_COLUMN && entry.GetAddColumnInfo().id == field_index;
+	});
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {

@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require icu
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/set_default_expression.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -122,3 +124,50 @@ statement error
 ALTER TABLE dl.t_renamed ADD COLUMN f DOUBLE DEFAULT random()
 ----
 We cannot add a column with a non-literal default value
+
+# nested columns take no default
+statement ok
+CREATE TABLE dl.nested(i INT, s STRUCT(a INT))
+
+statement error
+ALTER TABLE dl.nested ALTER s SET DEFAULT CAST('{a: 7}' AS STRUCT(a INT))
+----
+Default value for STRUCT type not supported
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.nested ADD COLUMN s2 STRUCT(a INT)
+
+statement error
+ALTER TABLE dl.nested ALTER s2 SET DEFAULT CAST('{a: 7}' AS STRUCT(a INT))
+----
+Default value for STRUCT type not supported
+
+statement ok
+ROLLBACK
+
+# the literal default of a column added in this transaction is not cast while it is set
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.nested ADD COLUMN ts TIMESTAMPTZ
+
+statement ok
+ALTER TABLE dl.nested ALTER ts SET DEFAULT '2020-01-01 00:00:00 America/New_York'
+
+statement ok
+INSERT INTO dl.nested (i) VALUES (1)
+
+statement ok
+COMMIT
+
+query I
+SELECT ts FROM dl.nested
+----
+2020-01-01 05:00:00+00
