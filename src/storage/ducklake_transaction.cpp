@@ -1175,6 +1175,7 @@ DuckLakeTableInfo DuckLakeTransaction::GetNewTable(DuckLakeCommitState &commit_s
 	bool is_new_table;
 	if (IsTransactionLocal(original_id.index)) {
 		table_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		commit_state.AddNewEntry(table, table_entry.id.index);
 		is_new_table = true;
 	} else {
 		// this table already has an id - keep it
@@ -1196,6 +1197,7 @@ DuckLakeViewInfo DuckLakeTransaction::GetNewView(DuckLakeCommitState &commit_sta
 	auto original_id = view.GetViewId();
 	if (IsTransactionLocal(original_id.index)) {
 		view_entry.id = TableIndex(commit_state.commit_snapshot.next_catalog_id++);
+		commit_state.AddNewEntry(view, view_entry.id.index);
 	} else {
 		// this view already has an id - keep it
 		// this happens if e.g. this view is renamed
@@ -1572,6 +1574,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
+	};
+	context.set_entry_oids = [&](const ducklake_entry_oids_t &oids) {
+		ducklake_catalog.SetEntryOids(oids);
 	};
 	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
 		for (auto &option : options) {
