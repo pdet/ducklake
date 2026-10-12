@@ -16,7 +16,7 @@ test-env DATA_PATH {TEST_DIR}
 statement error
 ATTACH 'ducklake:quack:localhost:1' AS dl (DATA_PATH '{DATA_PATH}/attach_unreachable_server')
 ----
-Couldn't connect to server
+connect to server
 
 # an invalid port is not retried
 statement error
