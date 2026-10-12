@@ -710,28 +710,19 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		return nullptr;
 	}
 
-	if (transaction.HasTransactionLocalInserts(GetTableId())) {
-		VerifyNoNullValues(context, transaction, *this, col);
-		table_info.constraints.push_back(make_uniq<NotNullConstraint>(col.Logical()));
-		return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::SetNull(field_id.GetFieldIndex()));
+	// the stats only rule out NULL values when they count no NULL in the committed rows
+	bool stats_show_no_nulls = false;
+	if (!transaction.HasTransactionLocalInserts(GetTableId()) && FileStatsShowNulls(col.Type())) {
+		auto stats = GetTableStats(transaction);
+		if (stats) {
+			auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
+			if (column_stats != stats->column_stats.end()) {
+				auto &col_stats = column_stats->second;
+				stats_show_no_nulls = col_stats.has_null_count && col_stats.null_count == 0;
+			}
+		}
 	}
-
-	// verify the column has no NULL values currently by looking at the stats
-	auto stats = GetTableStats(transaction);
-	if (!stats) {
-		throw CatalogException(
-		    "Cannot SET NOT NULL on table %s - the table has transaction-local changes or no stats are available",
-		    name);
-	}
-
-	auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
-	if (column_stats == stats->column_stats.end()) {
-		throw CatalogException("Cannot SET NOT NULL on table %s - no column stats are available", name);
-	}
-
-	// Unknown stats or previously deleted NULLs require checking the live rows.
-	auto &col_stats = column_stats->second;
-	if (!col_stats.has_null_count || col_stats.null_count > 0 || !FileStatsShowNulls(col.Type())) {
+	if (!stats_show_no_nulls) {
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
