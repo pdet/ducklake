@@ -645,13 +645,6 @@ static string ParseBoolean(ClientContext &context, const string &, const Value &
 	return DuckLakeUtil::BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
 }
 
-static string ParseAutoCompact(ClientContext &context, const string &option, const Value &val) {
-	if (val.IsNull()) {
-		throw BinderException("The %s option can't be null.", option.c_str());
-	}
-	return ParseBoolean(context, option, val);
-}
-
 //! resolved against the table by the caller
 static string ParseSkippedStatsColumns(ClientContext &, const string &, const Value &) {
 	return string();
@@ -671,7 +664,7 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	    {"rewrite_delete_threshold", ParseDeleteThreshold},
 	    {"delete_older_than", ParseInterval},
 	    {"expire_older_than", ParseInterval},
-	    {"auto_compact", ParseAutoCompact},
+	    {"auto_compact", ParseBoolean},
 	    {"per_thread_output", ParseBoolean},
 	    {"write_deletion_vectors", ParseBoolean},
 	    {"sort_on_insert", ParseBoolean},
@@ -688,6 +681,10 @@ void DuckLakeUtil::ValidateConfigOptionName(const string &option) {
 
 string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val) {
 	ValidateConfigOptionName(option);
+	// a NULL list of columns clears skip_stats_columns
+	if (val.IsNull() && option != "skip_stats_columns") {
+		throw BinderException("The %s option can't be null.", option.c_str());
+	}
 	return ConfigOptionParsers().at(option)(context, option, val);
 }
 
