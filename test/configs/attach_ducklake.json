@@ -454,8 +454,6 @@
     {
       "reason": "FIXME: BUGS? Incorrect rename + re-create behavior",
       "paths": [
-        "test/sql/alter/rename_table/test_rename_table_incorrect.test",
-        "test/sql/alter/rename_table/test_rename_table_transactions.test",
         "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
     },
