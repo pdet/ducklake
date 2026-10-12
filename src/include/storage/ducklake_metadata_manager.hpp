@@ -543,6 +543,8 @@ public:
 	bool HasV1_1Dev1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Adds the schema version rows of inlined tables that older versions registered without one
+	void MigrateInlinedSchemaVersions();
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}
