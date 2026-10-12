@@ -840,7 +840,7 @@
       ]
     },
     {
-      "reason": "Asserts the vector type of VARIANT values in DuckDB-native storage; DuckLake reads them back from Parquet as SHREDDED_VECTOR.",
+      "reason": "Asserts DuckDB-native VARIANT shredding statistics and vector types, which differ for VARIANT values stored in Parquet.",
       "paths": [
         "test/issues/general/test_24298.test"
       ]
