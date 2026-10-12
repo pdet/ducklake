@@ -28,6 +28,11 @@ SET binary_as_string = true
 statement ok
 CHECKPOINT lake
 
+query I
+SELECT current_setting('binary_as_string')
+----
+true
+
 statement ok
 SET binary_as_string = false
 
@@ -46,13 +51,15 @@ statement ok
 INSERT INTO lake.t VALUES ('\x5Cx42'::BLOB)
 
 statement ok
-RESET binary_as_string
-
-statement ok
 SET GLOBAL binary_as_string = true
 
-statement ok
+statement ok global_connection
 CHECKPOINT lake
+
+query I global_connection
+SELECT current_setting('binary_as_string')
+----
+true
 
 statement ok
 SET GLOBAL binary_as_string = false

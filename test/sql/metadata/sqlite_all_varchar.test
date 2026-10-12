@@ -24,6 +24,11 @@ SELECT i FROM lake.t
 ----
 1
 
+query I
+SELECT DISTINCT typeof(snapshot_id) FROM __ducklake_metadata_lake.ducklake_snapshot
+----
+VARCHAR
+
 statement ok
 SET GLOBAL sqlite_all_varchar = false
 
