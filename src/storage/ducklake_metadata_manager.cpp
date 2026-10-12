@@ -4629,9 +4629,11 @@ static unordered_map<idx_t, T> GetChangedSpecs(const vector<T> &old_specs, const
 			new_spec_map.erase(entry);
 		}
 	}
-	for (auto &spec : new_specs) {
-		if (old_spec_tables.find(spec.table_id.index) == old_spec_tables.end() && spec.fields.empty()) {
-			new_spec_map.erase(spec.table_id.index);
+	for (auto entry = new_spec_map.begin(); entry != new_spec_map.end();) {
+		if (old_spec_tables.find(entry->first) == old_spec_tables.end() && entry->second.fields.empty()) {
+			entry = new_spec_map.erase(entry);
+		} else {
+			entry++;
 		}
 	}
 	return new_spec_map;
