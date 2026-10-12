@@ -116,6 +116,10 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
+		// the max leaves out NaN, which orders above every other value
+		if (column_filter.column_type.IsFloating() && !(column_stats.has_contains_nan && !column_stats.contains_nan)) {
+			return false;
+		}
 		auto file_max = TryCastStatsBound(column_stats.max, column_filter.column_type);
 		if (!file_max) {
 			return false;
