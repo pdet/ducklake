@@ -1086,9 +1086,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-	bool bucket_changes =
-	    partition_data && DuckLakePartitionUtils::BucketChangesWithType(*partition_data, field_id.GetFieldIndex(),
-	                                                                    field_id.Type(), info.target_type);
 	col.SetType(info.target_type);
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
@@ -1097,13 +1094,31 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	table_info.columns.SetAllowDuplicates(false);
 
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_field_id));
-	auto result = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE,
-	                                            std::move(change_info), std::move(new_field_ids));
-	if (bucket_changes) {
-		// files written before the change keep the buckets of the old type under the old spec
-		result->partition_data->partition_id = transaction.GetLocalCatalogId();
-		result->partition_data->local_partition_id = result->partition_data->partition_id;
-		result->starts_partition_spec = true;
+	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
+                                                             unique_ptr<ColumnChangeInfo> change_info,
+                                                             shared_ptr<DuckLakeFieldData> new_field_data) {
+	auto result = make_uniq<DuckLakeTableEntry>(*this, info, LocalChangeType::CHANGE_COLUMN_TYPE,
+	                                            std::move(change_info), std::move(new_field_data));
+	auto &partition = result->partition_data;
+	if (!partition) {
+		return std::move(result);
+	}
+	for (auto &field : partition->fields) {
+		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+			continue;
+		}
+		auto &old_type = GetFieldId(field.field_id)->Type();
+		auto &new_type = result->GetFieldId(field.field_id)->Type();
+		if (DuckLakePartitionUtils::BucketChangesWithType(old_type, new_type)) {
+			// files written before the change keep the buckets of the old type under the old spec
+			partition->partition_id = transaction.GetLocalCatalogId();
+			partition->local_partition_id = partition->partition_id;
+			result->starts_partition_spec = true;
+			break;
+		}
 	}
 	return std::move(result);
 }
@@ -1156,8 +1171,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_root_id = GetFieldId(col.Physical()).AddField(info.column_path, std::move(child_field_id));
 	col.SetType(new_root_id->Type());
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_root_id));
-	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE, std::move(change_info),
-	                                     std::move(new_field_ids));
+	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RemoveFieldInfo &info) {
@@ -1195,8 +1209,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_root_id = GetFieldId(col.Physical()).RemoveField(info.column_path);
 	col.SetType(new_root_id->Type());
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_root_id));
-	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE, std::move(change_info),
-	                                     std::move(new_field_ids));
+	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
 }
 
 void RenameField(const DuckLakeFieldId &field_id, const DuckLakeFieldId &parent_id, string new_name,
@@ -1238,8 +1251,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_root_id = GetFieldId(col.Physical()).RenameField(info.column_path, info.new_name.GetIdentifierName());
 	col.SetType(new_root_id->Type());
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_root_id));
-	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE, std::move(change_info),
-	                                     std::move(new_field_ids));
+	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, SetDefaultInfo &info) {

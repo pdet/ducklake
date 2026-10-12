@@ -191,42 +191,30 @@ static LogicalType GetBucketHashType(const LogicalType &type) {
 	case LogicalTypeId::SMALLINT:
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::BIGINT:
-		// hashed as a BIGINT
-		return LogicalType::BIGINT;
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-		// hashed as a DOUBLE
-		return LogicalType::DOUBLE;
+		// hashed as a BIGINT like the unscaled value of a DECIMAL up to 18 digits
+		return LogicalType::DECIMAL(Decimal::MAX_WIDTH_INT64, 0);
 	case LogicalTypeId::UTINYINT:
 	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UHUGEINT:
-		// hashed as their text
-		return LogicalType::HUGEINT;
+		// hashed as their text like a wider DECIMAL
+		return LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, 0);
 	case LogicalTypeId::DECIMAL: {
-		// hashed as the unscaled value up to 18 digits and as text above
 		auto width = DecimalType::GetWidth(type) <= Decimal::MAX_WIDTH_INT64 ? Decimal::MAX_WIDTH_INT64
 		                                                                     : Decimal::MAX_WIDTH_DECIMAL;
 		return LogicalType::DECIMAL(width, DecimalType::GetScale(type));
 	}
+	case LogicalTypeId::FLOAT:
+		return LogicalType::DOUBLE;
 	default:
 		return type;
 	}
 }
 
-bool DuckLakePartitionUtils::BucketChangesWithType(const DuckLakePartition &partition, FieldIndex field_id,
-                                                   const LogicalType &source_type, const LogicalType &target_type) {
-	if (GetBucketHashType(source_type) == GetBucketHashType(target_type)) {
-		return false;
-	}
-	for (auto &field : partition.fields) {
-		if (field.field_id == field_id && field.transform.type == DuckLakeTransformType::BUCKET) {
-			return true;
-		}
-	}
-	return false;
+bool DuckLakePartitionUtils::BucketChangesWithType(const LogicalType &source_type, const LogicalType &target_type) {
+	return GetBucketHashType(source_type) != GetBucketHashType(target_type);
 }
 
 static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_ptr<Expression> column_expr) {

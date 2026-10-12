@@ -174,8 +174,48 @@ SELECT k FROM s WHERE c = 5
 ----
 1
 
+# adding, dropping and renaming a field changes the text that a STRUCT hashes, each starts a spec
+statement ok
+CREATE TABLE st (c STRUCT(x INTEGER, y INTEGER), k INTEGER)
+
+statement ok
+ALTER TABLE st SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO st VALUES ({'x': 5, 'y': 6}, 1)
+
+statement ok
+ALTER TABLE st ADD COLUMN c.z INTEGER
+
+query I
+SELECT k FROM st WHERE c = {'x': 5, 'y': 6, 'z': NULL}
+----
+1
+
+statement ok
+INSERT INTO st VALUES ({'x': 7, 'y': 8, 'z': 9}, 2)
+
+statement ok
+ALTER TABLE st DROP COLUMN c.y
+
+query I
+SELECT k FROM st WHERE c = {'x': 7, 'z': 9}
+----
+2
+
+statement ok
+SET VARIABLE st_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'st')
+
+statement ok
+ALTER TABLE st RENAME c.x TO w
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info WHERE table_id = getvariable('st_id')
+----
+4
+
 # type changes that keep the hash of every value, so the old files are still pruned
-foreach source,target INTEGER,BIGINT FLOAT,DOUBLE UTINYINT,UBIGINT UINTEGER,HUGEINT UBIGINT,UHUGEINT HUGEINT,HUGEINT DECIMAL(4),DECIMAL(18) DECIMAL(20),DECIMAL(38)
+foreach source,target INTEGER,BIGINT INTEGER,DECIMAL(18) FLOAT,DOUBLE UTINYINT,UBIGINT UINTEGER,HUGEINT UBIGINT,UHUGEINT UTINYINT,DECIMAL(38) HUGEINT,HUGEINT DECIMAL(4),DECIMAL(18) DECIMAL(20),DECIMAL(38)
 
 statement ok
 CREATE TABLE w (c {source}, k INTEGER)
