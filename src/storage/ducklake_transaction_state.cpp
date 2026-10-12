@@ -1239,7 +1239,7 @@ string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAdded
 	return result;
 }
 
-//! Whether the new data has values of the column and statistics of all its rows at the type of the column
+//! Whether the new data has bounds of the column and statistics of all its rows at the type of the column
 static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
                               const LocalTableDataChanges &table_changes) {
 	bool has_values = false;
@@ -1248,8 +1248,11 @@ static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
 		if (entry == column_stats.end() || entry->second.type != type) {
 			return false;
 		}
-		has_values = has_values || entry->second.AnyValid();
-		return true;
+		if (!entry->second.AnyValid()) {
+			return true;
+		}
+		has_values = true;
+		return entry->second.has_min && entry->second.has_max;
 	};
 	for (auto &file : table_changes.new_data_files) {
 		if (!covers_column(file.column_stats)) {
@@ -1264,16 +1267,8 @@ static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
 
 //! Removes the columns that a live inlined row may hold a value of
 static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
-                                           set<FieldIndex> &columns, const DuckLakeCommitContext &context) {
-	auto defaults =
-	    context.conflict_query_executor(DuckLakeMetadataManager::GetColumnNullDefaultsSql(table_id, columns));
-	defaults->ThrowIfError("Failed to commit DuckLake transaction - failed to get the defaults of a table:");
-	set<FieldIndex> null_defaults;
-	for (auto &row : *defaults) {
-		if (row.GetValue<bool>(1)) {
-			null_defaults.insert(FieldIndex(row.GetValue<idx_t>(0)));
-		}
-	}
+                                           const map<FieldIndex, idx_t> &null_default_columns, set<FieldIndex> &columns,
+                                           const DuckLakeCommitContext &context) {
 	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedColumnNamesSql(table_id, columns));
 	names->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
 	// per inlined data table, whether its schema is known and the names of the top level columns it holds
@@ -1300,7 +1295,7 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 		auto &held_columns = table.second.second;
 		for (auto &column_id : columns) {
 			auto held = held_columns.find(column_id);
-			if (schema_known && held == held_columns.end() && null_defaults.count(column_id)) {
+			if (schema_known && held == held_columns.end() && null_default_columns.count(column_id)) {
 				// the rows were written before the column, they read its NULL default
 				continue;
 			}
@@ -1332,14 +1327,22 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 	if (null_only_columns.empty()) {
 		return;
 	}
+	auto defaults =
+	    context.conflict_query_executor(DuckLakeMetadataManager::GetColumnNullDefaultsSql(table_id, null_only_columns));
+	defaults->ThrowIfError("Failed to commit DuckLake transaction - failed to get the defaults of a table:");
+	map<FieldIndex, idx_t> null_default_columns;
+	for (auto &row : *defaults) {
+		null_default_columns.emplace(FieldIndex(row.GetValue<idx_t>(0)), row.GetValue<idx_t>(1));
+	}
 	auto result = context.conflict_query_executor(
-	    DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, null_only_columns));
+	    DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, null_only_columns, null_default_columns));
 	result->ThrowIfError("Failed to commit DuckLake transaction - failed to get the file statistics of a table:");
 	for (auto &row : *result) {
 		null_only_columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
 	}
 	if (!null_only_columns.empty()) {
-		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_only_columns, context);
+		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_default_columns, null_only_columns,
+		                               context);
 	}
 	for (auto &column_id : null_only_columns) {
 		stats.column_stats.find(column_id)->second.bounds_unknown = false;

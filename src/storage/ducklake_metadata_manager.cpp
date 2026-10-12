@@ -4287,44 +4287,40 @@ string DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(const string &metadat
 	    metadata_table_name, id_name, GenerateIDList(ids));
 }
 
-string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
-	vector<string> column_values;
+string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+                                                            const map<FieldIndex, idx_t> &null_default_columns) {
+	vector<string> selects;
 	for (auto &column_id : column_ids) {
-		column_values.push_back(StringUtil::Format("(%d)", column_id.index));
+		auto added = null_default_columns.find(column_id);
+		string missing_stats_values = "true";
+		if (added != null_default_columns.end()) {
+			missing_stats_values = StringUtil::Format("COALESCE(f.partial_max, f.begin_snapshot) >= %d", added->second);
+		}
+		selects.push_back(StringUtil::Format(R"(
+SELECT %d AS column_id WHERE EXISTS (
+    SELECT 1
+    FROM {METADATA_CATALOG}.ducklake_data_file f
+    LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s ON s.data_file_id = f.data_file_id AND s.column_id = %d
+    WHERE f.table_id = %d AND f.end_snapshot IS NULL
+        AND CASE WHEN s.data_file_id IS NULL THEN %s ELSE s.value_count IS NULL OR s.value_count > 0 END
+))",
+		                                     column_id.index, column_id.index, table_id.index, missing_stats_values));
 	}
-	// a file written before a column without default holds only NULL values of it
-	return StringUtil::Format(R"(
-SELECT DISTINCT c.column_id
-FROM (VALUES %s) c(column_id)
-LEFT JOIN (
-    SELECT column_id, MIN(begin_snapshot) AS added_snapshot, BOOL_AND(initial_default IS NULL) AS null_default
-    FROM {METADATA_CATALOG}.ducklake_column
-    WHERE table_id = %d
-    GROUP BY column_id
-) col ON col.column_id = c.column_id
-CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
-    ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
-WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
-    WHEN s.data_file_id IS NULL
-        THEN NOT COALESCE(COALESCE(f.partial_max, f.begin_snapshot) < col.added_snapshot AND col.null_default, false)
-    ELSE s.value_count IS NULL OR s.value_count > 0
-END)",
-	                          StringUtil::Join(column_values, ", "), table_id.index, table_id.index);
+	return StringUtil::Join(selects, " UNION ALL ");
 }
 
 string DuckLakeMetadataManager::GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
 	return StringUtil::Format(R"(
-SELECT column_id, BOOL_AND(initial_default IS NULL)
+SELECT column_id, MIN(begin_snapshot)
 FROM {METADATA_CATALOG}.ducklake_column
 WHERE table_id = %d AND column_id IN (%s)
-GROUP BY column_id)",
+GROUP BY column_id
+HAVING BOOL_AND(initial_default IS NULL))",
 	                          table_id.index, GenerateIDList(column_ids));
 }
 
 string DuckLakeMetadataManager::GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
-	// an inlined data table holds the columns of the table at the snapshots of its schema version, the schema is
-	// unknown once all of them are expired
+	// the schema of an inlined data table is unknown once the snapshots of its schema version are expired
 	return StringUtil::Format(R"(
 WITH inlined AS (
     SELECT i.table_name, (
@@ -4347,15 +4343,15 @@ string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlined
                                                     const DuckLakeInlinedColNames &col_names) {
 	vector<string> selects;
 	for (auto &check : checks) {
-		auto select = StringUtil::Format(
-		    "SELECT %d AS column_id FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d", check.column_id.index,
-		    SQLIdentifier(check.table_name), col_names.end_snapshot, col_names.begin_snapshot, check.flushed_up_to);
+		auto rows = StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
+		                               SQLIdentifier(check.table_name), col_names.end_snapshot,
+		                               col_names.begin_snapshot, check.flushed_up_to);
 		if (!check.column_name.empty()) {
-			select += StringUtil::Format(" AND %s IS NOT NULL", SQLIdentifier(check.column_name));
+			rows += StringUtil::Format(" AND %s IS NOT NULL", SQLIdentifier(check.column_name));
 		}
-		selects.push_back(std::move(select));
+		selects.push_back(StringUtil::Format("SELECT %d AS column_id WHERE EXISTS (%s)", check.column_id.index, rows));
 	}
-	return "SELECT DISTINCT column_id FROM (" + StringUtil::Join(selects, " UNION ALL ") + ")";
+	return StringUtil::Join(selects, " UNION ALL ");
 }
 
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {
