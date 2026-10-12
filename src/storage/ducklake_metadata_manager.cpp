@@ -4323,8 +4323,8 @@ GROUP BY column_id)",
 }
 
 string DuckLakeMetadataManager::GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
-	// an inlined data table holds the columns of the table at the snapshot that began its schema version, the schema
-	// is unknown once that snapshot is expired
+	// an inlined data table holds the columns of the table at the snapshots of its schema version, the schema is
+	// unknown once all of them are expired
 	return StringUtil::Format(R"(
 WITH inlined AS (
     SELECT i.table_name, (

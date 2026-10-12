@@ -1239,19 +1239,27 @@ string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAdded
 	return result;
 }
 
-static bool NewDataHasValues(FieldIndex column_id, const LocalTableDataChanges &table_changes) {
+//! Whether the new data has values of the column and statistics of all its rows at the type of the column
+static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
+                              const LocalTableDataChanges &table_changes) {
+	bool has_values = false;
+	auto covers_column = [&](const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
+		auto entry = column_stats.find(column_id);
+		if (entry == column_stats.end() || entry->second.type != type) {
+			return false;
+		}
+		has_values = has_values || entry->second.AnyValid();
+		return true;
+	};
 	for (auto &file : table_changes.new_data_files) {
-		auto entry = file.column_stats.find(column_id);
-		if (entry != file.column_stats.end() && entry->second.AnyValid()) {
-			return true;
+		if (!covers_column(file.column_stats)) {
+			return false;
 		}
 	}
-	if (!table_changes.new_inlined_data) {
+	if (table_changes.new_inlined_data && !covers_column(table_changes.new_inlined_data->column_stats)) {
 		return false;
 	}
-	auto &inlined_stats = table_changes.new_inlined_data->column_stats;
-	auto entry = inlined_stats.find(column_id);
-	return entry != inlined_stats.end() && entry->second.AnyValid();
+	return has_values;
 }
 
 //! Removes the columns that a live inlined row may hold a value of
@@ -1317,7 +1325,7 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 	// committed stats do not tell all NULL values apart from invalidated bounds, the live data does
 	set<FieldIndex> null_only_columns;
 	for (auto &entry : stats.column_stats) {
-		if (entry.second.bounds_unknown && NewDataHasValues(entry.first, table_changes)) {
+		if (entry.second.bounds_unknown && NewDataSetsBounds(entry.first, entry.second.type, table_changes)) {
 			null_only_columns.insert(entry.first);
 		}
 	}
