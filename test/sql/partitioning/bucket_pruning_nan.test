@@ -1,0 +1,67 @@
+# name: test/sql/partitioning/bucket_pruning_nan.test
+# description: Bucket pruning keeps the files of every NaN value that equals a NaN constant
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_nan', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE f (d DOUBLE, k INTEGER);
+
+statement ok
+ALTER TABLE f SET PARTITIONED BY (bucket(8, d));
+
+statement ok
+INSERT INTO f VALUES ('nan'::DOUBLE, 1);
+
+# a NaN with the sign bit set is equal to NaN, but hashes to a different bucket
+statement ok
+INSERT INTO f SELECT -('nan'::DOUBLE), 2;
+
+statement ok
+INSERT INTO f VALUES (1.5, 3);
+
+query I
+SELECT 'nan'::DOUBLE = -('nan'::DOUBLE)
+----
+true
+
+query I
+SELECT k FROM f WHERE isnan(d) ORDER BY k
+----
+1
+2
+
+query I
+SELECT k FROM f WHERE d = 1.5
+----
+3
+
+# FIXME: an equality filter on NaN only keeps the bucket of the canonical NaN, see https://github.com/pdet/ducklake_internal/issues/108
+mode skip
+
+query I
+SELECT k FROM f WHERE d = 'nan'::DOUBLE ORDER BY k
+----
+1
+2
+
+query I
+SELECT k FROM f WHERE d IN ('nan'::DOUBLE, 1.5, 2.5) ORDER BY k
+----
+1
+2
+3
+
+mode unskip

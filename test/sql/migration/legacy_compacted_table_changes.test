@@ -1,0 +1,21 @@
+# name: test/sql/migration/legacy_compacted_table_changes.test
+# description: Snapshots of an old DuckLake with compacted_table changes can still be listed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+unzip data/old_ducklake/compacted_files.db.gz {TEST_DIR}/legacy_compacted_table_changes.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/legacy_compacted_table_changes.db' AS ducklake (DATA_PATH '{TEST_DIR}/legacy_compacted_table_changes_files', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+# snapshot 8 compacted table 1 with the legacy compacted_table change type
+query II
+SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id BETWEEN 6 AND 9 ORDER BY snapshot_id
+----
+6	{tables_inserted_into=[1]}
+7	{flushed_inlined=[1]}
+8	{}
+9	{inlined_insert=[1]}

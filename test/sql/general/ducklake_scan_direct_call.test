@@ -1,0 +1,26 @@
+# name: test/sql/general/ducklake_scan_direct_call.test
+# description: The ducklake_scan table function is registered for deserialization and cannot scan files on its own
+# group: [general]
+
+# loaded before DuckLake, so ducklake_scan is registered with the bind of parquet_scan
+require parquet
+
+require ducklake
+
+statement ok
+COPY (SELECT 42 AS x) TO '{TEST_DIR}/ducklake_scan_direct_call.parquet'
+
+query I
+SELECT x FROM parquet_scan('{TEST_DIR}/ducklake_scan_direct_call.parquet')
+----
+42
+
+# FIXME: calling ducklake_scan directly dereferences its missing function info, see https://github.com/pdet/ducklake_internal/issues/114
+mode skip
+
+statement error
+SELECT * FROM ducklake_scan('{TEST_DIR}/ducklake_scan_direct_call.parquet')
+----
+ducklake_scan
+
+mode unskip
