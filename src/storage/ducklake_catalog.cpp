@@ -1378,6 +1378,16 @@ void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t
 	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
 }
 
+bool DuckLakeCatalog::ColumnHoldsValues(TableIndex table_id, FieldIndex column_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	return columns_with_values.count(make_pair(table_id.index, column_id.index)) > 0;
+}
+
+void DuckLakeCatalog::SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	columns_with_values.emplace(table_id.index, column_id.index);
+}
+
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
 	                          next_file_id, table_id.index);

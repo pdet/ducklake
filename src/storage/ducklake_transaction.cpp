@@ -1511,6 +1511,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
+	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id) {
+		return ducklake_catalog.ColumnHoldsValues(table_id, column_id);
+	};
+	context.set_column_holds_values = [&](TableIndex table_id, FieldIndex column_id) {
+		ducklake_catalog.SetColumnHoldsValues(table_id, column_id);
+	};
 	auto get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
 		if (!entry) {

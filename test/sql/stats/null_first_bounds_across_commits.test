@@ -242,36 +242,40 @@ SELECT count(*) FROM ducklake.inl_renamed WHERE d < 1
 ----
 1
 
-# once the snapshots of its schema version are expired an inlined data table counts as holding values
-statement ok
-CREATE TABLE ducklake.inl_unknown (a INTEGER) WITH (data_inlining_row_limit = 10);
+# the schema of an inlined data table stays known once the snapshots of its schema version are expired
+foreach tbl inl_expired_null inl_expired_value
 
 statement ok
-INSERT INTO ducklake.inl_unknown VALUES (1);
+CREATE TABLE ducklake.{tbl} (a INTEGER) WITH (data_inlining_row_limit = 10);
 
 statement ok
-ALTER TABLE ducklake.inl_unknown ADD COLUMN b INTEGER;
+INSERT INTO ducklake.{tbl} VALUES (1);
 
 statement ok
-INSERT INTO ducklake.inl_unknown VALUES (2, 100);
+ALTER TABLE ducklake.{tbl} ADD COLUMN b INTEGER;
 
 statement ok
-CREATE TABLE ducklake.later (i INTEGER);
+INSERT INTO ducklake.{tbl} VALUES (2, CASE WHEN '{tbl}' = 'inl_expired_value' THEN 100 END);
 
 statement ok
-SET VARIABLE inl_unknown_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')
+CREATE TABLE ducklake.later_{tbl} (i INTEGER);
 
 statement ok
-SET VARIABLE inl_unknown_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id = getvariable('inl_unknown_id'))
+SET VARIABLE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = '{tbl}')
 
 statement ok
-SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = getvariable('inl_unknown_version'))
+SET VARIABLE inlined_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id = getvariable('table_id'))
+
+statement ok
+SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = getvariable('inlined_version'))
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', versions => getvariable('schema_snapshots'))
 
 statement ok
-UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_unknown')
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = getvariable('table_id')
+
+endloop
 
 statement ok
 DETACH ducklake
@@ -279,13 +283,22 @@ DETACH ducklake
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_across_commits', DATA_INLINING_ROW_LIMIT 0)
 
-statement ok
-INSERT INTO ducklake.inl_unknown VALUES (3, 5);
+foreach tbl inl_expired_null inl_expired_value
 
-query I
-SELECT count(*) FROM ducklake.inl_unknown WHERE b > 10
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (3, 5);
+
+endloop
+
+query II
+EXPLAIN SELECT * FROM ducklake.inl_expired_null WHERE b > 10
 ----
-1
+physical_plan	<REGEX>:.*Empty Result.*
+
+query II
+SELECT (SELECT count(*) FROM ducklake.inl_expired_null WHERE b > 10), (SELECT count(*) FROM ducklake.inl_expired_value WHERE b > 10)
+----
+0	1
 
 # of two columns with unknown bounds only the one without values gets the new bounds
 statement ok
