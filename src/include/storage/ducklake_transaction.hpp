@@ -374,6 +374,8 @@ private:
 	unique_ptr<Connection> connection;
 	//! Flushes of several tables finalize in parallel while scans check the flushed tables
 	mutex flushed_inlined_lock;
+	//! The delete and insert actions of a MERGE finalize in parallel
+	mutex delete_attempted_lock;
 	//! The snapshots expired by this transaction, deleted when it commits
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
 	//! The snapshot of the transaction (latest snapshot in DuckLake)

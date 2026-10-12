@@ -1912,6 +1912,7 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 }
 
 void DuckLakeTransaction::MarkDeleteAttempted(TableIndex table_id) {
+	lock_guard<mutex> guard(delete_attempted_lock);
 	state->tables_delete_attempted.insert(table_id);
 }
 
