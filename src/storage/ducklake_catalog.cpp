@@ -1388,6 +1388,15 @@ void DuckLakeCatalog::SetColumnHoldsValues(TableIndex table_id, FieldIndex colum
 	columns_with_values.emplace(table_id.index, column_id.index);
 }
 
+void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	for (auto &table_id : table_ids) {
+		auto begin = columns_with_values.lower_bound(make_pair(table_id.index, idx_t(0)));
+		auto end = columns_with_values.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
+		columns_with_values.erase(begin, end);
+	}
+}
+
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
 	                          next_file_id, table_id.index);

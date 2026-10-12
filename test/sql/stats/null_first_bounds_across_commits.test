@@ -330,3 +330,76 @@ SELECT count(*) FROM ducklake.{tbl} WHERE a > 3
 1
 
 endloop
+
+# the inlined data tables of many schema versions are checked in batches
+statement ok
+CREATE TABLE ducklake.many_versions (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+CREATE TABLE ducklake.many_versions_value (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+foreach tbl many_versions many_versions_value
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (1, NULL);
+
+loop i 0 17
+
+statement ok
+ALTER TABLE ducklake.{tbl} ADD COLUMN c${i} INTEGER;
+
+endloop
+
+endloop
+
+statement ok
+INSERT INTO ducklake.many_versions_value (a, b) VALUES (2, 100);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'many_versions_value')
+
+foreach tbl many_versions many_versions_value
+
+statement ok
+INSERT INTO ducklake.{tbl} (a, b) VALUES (3, 5);
+
+endloop
+
+query II
+EXPLAIN SELECT * FROM ducklake.many_versions WHERE b > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query II
+SELECT (SELECT count(*) FROM ducklake.many_versions WHERE b > 10), (SELECT count(*) FROM ducklake.many_versions_value WHERE b > 10)
+----
+0	1
+
+# rows deleted by a commit can leave a column found with values without them
+statement ok
+CREATE TABLE ducklake.updated (c INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.updated VALUES (100), (NULL);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'updated')
+
+statement ok
+INSERT INTO ducklake.updated VALUES (5);
+
+statement ok
+UPDATE ducklake.updated SET c = NULL;
+
+statement ok
+INSERT INTO ducklake.updated VALUES (7);
+
+query II
+EXPLAIN SELECT * FROM ducklake.updated WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query I
+SELECT count(*) FROM ducklake.updated WHERE c > 10
+----
+0

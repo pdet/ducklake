@@ -4309,7 +4309,6 @@ JOIN {METADATA_CATALOG}.ducklake_data_file f
 WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)",
 	                              table_id.index, ids, table_id.index, ids);
 	if (column_ids.size() == 1) {
-		// a single column stops at the first value
 		return sql + "\nLIMIT 1";
 	}
 	return "SELECT DISTINCT column_id FROM (" + sql + ")";
@@ -4371,7 +4370,6 @@ string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlined
 		                               SQLIdentifier(check.table_name), col_names.end_snapshot,
 		                               col_names.begin_snapshot, check.flushed_up_to);
 		if (counts.size() == 1) {
-			// a single check stops at the first value
 			if (!check.column_name.empty()) {
 				rows += StringUtil::Format(" AND %s IS NOT NULL", counted);
 			}

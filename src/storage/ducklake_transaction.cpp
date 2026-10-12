@@ -1373,6 +1373,9 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
+	// deleted rows can leave a column without values
+	ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_from);
+	ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_inlined);
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
 		lock_guard<mutex> guard(snapshot_lock);
 		auto transaction_snapshot = snapshot ? *snapshot : DuckLakeSnapshot();

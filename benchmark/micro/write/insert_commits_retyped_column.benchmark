@@ -16,7 +16,7 @@ include benchmark/micro/fixtures/float_files.benchmark.in
 
 include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
-# The default of w does not survive the retype and w holds a NULL, so every commit checks the live files
+# The default of w does not survive the retype and w holds a NULL, so the first commit checks the live files
 run
 ALTER TABLE lake.events ADD COLUMN w FLOAT DEFAULT 0.2;
 INSERT INTO lake.events VALUES (-1, 0.5, NULL);

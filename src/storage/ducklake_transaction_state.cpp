@@ -1265,7 +1265,6 @@ static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
 	return has_values;
 }
 
-//! Removes the columns that the query returns
 static void RemoveReturnedColumns(const string &sql, set<FieldIndex> &columns, const DuckLakeCommitContext &context) {
 	auto result = context.conflict_query_executor(sql);
 	result->ThrowIfError("Failed to commit DuckLake transaction - failed to get the file statistics of a table:");
@@ -1274,24 +1273,28 @@ static void RemoveReturnedColumns(const string &sql, set<FieldIndex> &columns, c
 	}
 }
 
+//! The top level columns an inlined data table holds by their name in it, a nested field by an empty name
+struct DuckLakeInlinedTableColumns {
+	bool schema_known = false;
+	map<FieldIndex, string> names;
+};
+
 //! Removes the columns that a live inlined row may hold a value of
 static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
                                            const map<FieldIndex, idx_t> &null_default_columns, set<FieldIndex> &columns,
                                            const DuckLakeCommitContext &context) {
 	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedColumnNamesSql(table_id, columns));
 	names->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
-	// per inlined data table, whether its schema is known and the names of the top level columns it holds
-	map<string, pair<bool, map<FieldIndex, string>>> inlined_tables;
+	map<string, DuckLakeInlinedTableColumns> inlined_tables;
 	for (auto &row : *names) {
 		auto &table = inlined_tables[row.GetValue<string>(0)];
-		table.first = row.GetValue<bool>(1);
+		table.schema_known = row.GetValue<bool>(1);
 		if (!row.IsNull(2)) {
-			// a nested field is checked as a whole row
 			auto top_level = row.GetValue<bool>(4);
-			table.second[FieldIndex(row.GetValue<idx_t>(2))] = top_level ? row.GetValue<string>(3) : string();
+			table.names[FieldIndex(row.GetValue<idx_t>(2))] = top_level ? row.GetValue<string>(3) : string();
 		}
 	}
-	vector<DuckLakeInlinedValueCheck> checks;
+	vector<vector<DuckLakeInlinedValueCheck>> table_checks;
 	for (auto &table : inlined_tables) {
 		// this commit flushes the rows up to the flush snapshot into its new files
 		idx_t flushed_up_to = 0;
@@ -1300,28 +1303,38 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 				flushed_up_to = flushed.flush_snapshot_id;
 			}
 		}
-		auto schema_known = table.second.first;
-		auto &held_columns = table.second.second;
+		auto &columns_of_table = table.second;
+		vector<DuckLakeInlinedValueCheck> checks;
 		for (auto &column_id : columns) {
-			auto held = held_columns.find(column_id);
-			if (schema_known && held == held_columns.end() && null_default_columns.count(column_id)) {
+			auto held = columns_of_table.names.find(column_id);
+			bool held_column = held != columns_of_table.names.end();
+			if (columns_of_table.schema_known && !held_column && null_default_columns.count(column_id)) {
 				// the rows were written before the column, they read its NULL default
 				continue;
 			}
-			string column_name = schema_known && held != held_columns.end() ? held->second : string();
+			string column_name = columns_of_table.schema_known && held_column ? held->second : string();
 			checks.push_back(DuckLakeInlinedValueCheck {table.first, flushed_up_to, column_id, column_name});
 		}
+		if (!checks.empty()) {
+			table_checks.push_back(std::move(checks));
+		}
 	}
-	if (checks.empty()) {
-		return;
-	}
-	auto values = context.conflict_query_executor(
-	    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
-	values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
-	for (auto &row : *values) {
-		for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
-			if (row.GetValue<int64_t>(check_idx) > 0) {
-				columns.erase(checks[check_idx].column_id);
+	// a query joins the counts of a bounded number of inlined data tables
+	static constexpr idx_t TABLES_PER_QUERY = 16;
+	for (idx_t batch_start = 0; batch_start < table_checks.size(); batch_start += TABLES_PER_QUERY) {
+		vector<DuckLakeInlinedValueCheck> checks;
+		for (idx_t table_idx = batch_start; table_idx < MinValue(batch_start + TABLES_PER_QUERY, table_checks.size());
+		     table_idx++) {
+			checks.insert(checks.end(), table_checks[table_idx].begin(), table_checks[table_idx].end());
+		}
+		auto values = context.conflict_query_executor(
+		    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
+		values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
+		for (auto &row : *values) {
+			for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
+				if (row.GetValue<int64_t>(check_idx) > 0) {
+					columns.erase(checks[check_idx].column_id);
+				}
 			}
 		}
 	}

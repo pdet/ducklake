@@ -381,6 +381,7 @@ public:
 	//! Whether a commit found committed values of the column, which then keeps its unknown table bounds
 	bool ColumnHoldsValues(TableIndex table_id, FieldIndex column_id);
 	void SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id);
+	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
