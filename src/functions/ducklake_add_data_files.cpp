@@ -506,6 +506,8 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::TIMESTAMP_NS;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
 			return LogicalType::TIMESTAMP_TZ;
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimeType(isAdjustedToUTC=1")) {
+			return LogicalType::TIME_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
