@@ -47,6 +47,16 @@ struct FlushedInlinedTableInfo;
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
+//! A check whether the live rows of an inlined data table hold a value of a column
+struct DuckLakeInlinedValueCheck {
+	string table_name;
+	//! The rows up to this snapshot are flushed by the commit
+	idx_t flushed_up_to;
+	FieldIndex column_id;
+	//! The name of the column in the inlined data table, empty when any live row counts as a value
+	string column_name;
+};
+
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
 	static constexpr const char *PREFIX = "_ducklake_";
@@ -456,9 +466,13 @@ public:
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
-	//! Selects a row when one of the inlined data tables holds a live row that began after its given snapshot
-	static string GetLiveInlinedRowSql(const vector<pair<string, idx_t>> &tables,
-	                                   const DuckLakeInlinedColNames &col_names);
+	//! Selects whether the initial default of each of the given columns is NULL
+	static string GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the inlined data tables of the table with the given columns they hold, by their name in the table
+	static string GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the columns of the checks that a live inlined row holds a value of
+	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
+	                                  const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids);

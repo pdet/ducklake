@@ -4313,15 +4313,48 @@ END)",
 	                          StringUtil::Join(column_values, ", "), table_id.index, table_id.index);
 }
 
-string DuckLakeMetadataManager::GetLiveInlinedRowSql(const vector<pair<string, idx_t>> &tables,
-                                                     const DuckLakeInlinedColNames &col_names) {
+string DuckLakeMetadataManager::GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
+	return StringUtil::Format(R"(
+SELECT column_id, BOOL_AND(initial_default IS NULL)
+FROM {METADATA_CATALOG}.ducklake_column
+WHERE table_id = %d AND column_id IN (%s)
+GROUP BY column_id)",
+	                          table_id.index, GenerateIDList(column_ids));
+}
+
+string DuckLakeMetadataManager::GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
+	// an inlined data table holds the columns of the table at its schema version
+	return StringUtil::Format(R"(
+WITH inlined AS (
+    SELECT i.table_name, (
+        SELECT MAX(sv.begin_snapshot)
+        FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+        WHERE sv.table_id = i.table_id AND sv.schema_version <= i.schema_version
+    ) AS schema_snapshot
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables i
+    WHERE i.table_id = %d
+)
+SELECT inlined.table_name, inlined.schema_snapshot IS NOT NULL, c.column_id, c.column_name, c.parent_column IS NULL
+FROM inlined
+LEFT JOIN {METADATA_CATALOG}.ducklake_column c
+    ON c.table_id = %d AND c.column_id IN (%s) AND c.begin_snapshot <= inlined.schema_snapshot
+    AND (c.end_snapshot IS NULL OR c.end_snapshot > inlined.schema_snapshot))",
+	                          table_id.index, table_id.index, GenerateIDList(column_ids));
+}
+
+string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
+                                                    const DuckLakeInlinedColNames &col_names) {
 	vector<string> selects;
-	for (auto &table : tables) {
-		selects.push_back(StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
-		                                     SQLIdentifier(table.first), col_names.end_snapshot,
-		                                     col_names.begin_snapshot, table.second));
+	for (auto &check : checks) {
+		auto select = StringUtil::Format(
+		    "SELECT %d AS column_id FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d", check.column_id.index,
+		    SQLIdentifier(check.table_name), col_names.end_snapshot, col_names.begin_snapshot, check.flushed_up_to);
+		if (!check.column_name.empty()) {
+			select += StringUtil::Format(" AND %s IS NOT NULL", SQLIdentifier(check.column_name));
+		}
+		selects.push_back(std::move(select));
 	}
-	return "SELECT * FROM (" + StringUtil::Join(selects, " UNION ALL ") + ") LIMIT 1";
+	return "SELECT DISTINCT column_id FROM (" + StringUtil::Join(selects, " UNION ALL ") + ")";
 }
 
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {

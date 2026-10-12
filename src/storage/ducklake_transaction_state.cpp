@@ -1254,29 +1254,61 @@ static bool NewDataHasValues(FieldIndex column_id, const LocalTableDataChanges &
 	return entry != inlined_stats.end() && entry->second.AnyValid();
 }
 
-static bool HasLiveInlinedRows(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
-                               const DuckLakeCommitContext &context) {
-	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id));
+//! Removes the columns that a live inlined row may hold a value of
+static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                           set<FieldIndex> &columns, const DuckLakeCommitContext &context) {
+	auto defaults =
+	    context.conflict_query_executor(DuckLakeMetadataManager::GetColumnNullDefaultsSql(table_id, columns));
+	defaults->ThrowIfError("Failed to commit DuckLake transaction - failed to get the defaults of a table:");
+	set<FieldIndex> null_defaults;
+	for (auto &row : *defaults) {
+		if (row.GetValue<bool>(1)) {
+			null_defaults.insert(FieldIndex(row.GetValue<idx_t>(0)));
+		}
+	}
+	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedColumnNamesSql(table_id, columns));
 	names->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
-	vector<pair<string, idx_t>> tables;
+	// per inlined data table, whether its schema is known and the names of the top level columns it holds
+	map<string, pair<bool, map<FieldIndex, string>>> inlined_tables;
 	for (auto &row : *names) {
-		auto table_name = row.GetValue<string>(0);
+		auto &table = inlined_tables[row.GetValue<string>(0)];
+		table.first = row.GetValue<bool>(1);
+		if (!row.IsNull(2)) {
+			// a nested field is checked as a whole row
+			auto top_level = row.GetValue<bool>(4);
+			table.second[FieldIndex(row.GetValue<idx_t>(2))] = top_level ? row.GetValue<string>(3) : string();
+		}
+	}
+	vector<DuckLakeInlinedValueCheck> checks;
+	for (auto &table : inlined_tables) {
 		// this commit flushes the rows up to the flush snapshot into its new files
 		idx_t flushed_up_to = 0;
 		for (auto &flushed : flushed_tables) {
-			if (flushed.inlined_table.table_name == table_name) {
+			if (flushed.inlined_table.table_name == table.first) {
 				flushed_up_to = flushed.flush_snapshot_id;
 			}
 		}
-		tables.emplace_back(std::move(table_name), flushed_up_to);
+		auto schema_known = table.second.first;
+		auto &held_columns = table.second.second;
+		for (auto &column_id : columns) {
+			auto held = held_columns.find(column_id);
+			if (schema_known && held == held_columns.end() && null_defaults.count(column_id)) {
+				// the rows were written before the column, they read its NULL default
+				continue;
+			}
+			string column_name = schema_known && held != held_columns.end() ? held->second : string();
+			checks.push_back(DuckLakeInlinedValueCheck {table.first, flushed_up_to, column_id, column_name});
+		}
 	}
-	if (tables.empty()) {
-		return false;
+	if (checks.empty()) {
+		return;
 	}
-	auto rows = context.conflict_query_executor(
-	    DuckLakeMetadataManager::GetLiveInlinedRowSql(tables, context.InlinedColNames()));
-	rows->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
-	return rows->begin() != rows->end();
+	auto values = context.conflict_query_executor(
+	    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
+	values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
+	for (auto &row : *values) {
+		columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
+	}
 }
 
 void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
@@ -1298,8 +1330,8 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 	for (auto &row : *result) {
 		null_only_columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
 	}
-	if (null_only_columns.empty() || HasLiveInlinedRows(table_id, flushed_inlined_tables, context)) {
-		return;
+	if (!null_only_columns.empty()) {
+		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_only_columns, context);
 	}
 	for (auto &column_id : null_only_columns) {
 		stats.column_stats.find(column_id)->second.bounds_unknown = false;
