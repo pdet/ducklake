@@ -70,6 +70,8 @@ struct LocalTableDataChanges {
 	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
 	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
+	//! The source files of the compactions
+	set<DataFileIndex> compacted_files;
 	bool IsEmpty() const;
 	void AddWrittenFiles(vector<string> &data_files, vector<string> &other_files, bool include_added_files) const;
 };
@@ -124,7 +126,9 @@ public:
 	void AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table, const set<FieldIndex> &fields);
 	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
-	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
+	//! Returns false without adding it when one of its source files is already compacted
+	bool AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
+	set<DataFileIndex> GetCompactedFiles(TableIndex table_id) const;
 	set<TableIndex> GetCompactedTables() const;
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
@@ -236,7 +240,9 @@ public:
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);
-	void AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
+	bool AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
+	//! Source files of the compactions recorded earlier in this transaction
+	set<DataFileIndex> GetCompactedFiles(TableIndex table_id) const;
 
 	MappingIndex AddNameMap(unique_ptr<DuckLakeNameMap> name_map);
 	shared_ptr<const DuckLakeNameMap> GetMappingById(MappingIndex mapping_id);

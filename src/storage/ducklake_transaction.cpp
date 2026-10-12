@@ -110,6 +110,7 @@ void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
 		table_changes.compactions.clear();
+		table_changes.compacted_files.clear();
 	}
 }
 
@@ -483,10 +484,29 @@ void LocalTableChanges::AddNewInlinedFileDeletes(TableIndex table_id, idx_t file
 	file_deletes.insert(new_deletes.begin(), new_deletes.end());
 }
 
-void LocalTableChanges::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
+bool LocalTableChanges::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
 	lock_guard<mutex> guard(lock);
 	auto &table_changes = changes[table_id];
+	auto &compacted_files = table_changes.compacted_files;
+	for (auto &source : entry.source_files) {
+		if (compacted_files.count(source.file.id)) {
+			return false;
+		}
+	}
+	for (auto &source : entry.source_files) {
+		compacted_files.insert(source.file.id);
+	}
 	table_changes.compactions.push_back(std::move(entry));
+	return true;
+}
+
+set<DataFileIndex> LocalTableChanges::GetCompactedFiles(TableIndex table_id) const {
+	lock_guard<mutex> guard(lock);
+	auto table_changes = Find(table_id);
+	if (!table_changes) {
+		return set<DataFileIndex>();
+	}
+	return table_changes->compacted_files;
 }
 
 set<TableIndex> LocalTableChanges::GetCompactedTables() const {
@@ -1781,8 +1801,12 @@ void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteF
 	state->local_changes.AddDeletes(*context_ref, table_id, std::move(files));
 }
 
-void DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
-	state->local_changes.AddCompaction(table_id, std::move(entry));
+bool DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
+	return state->local_changes.AddCompaction(table_id, std::move(entry));
+}
+
+set<DataFileIndex> DuckLakeTransaction::GetCompactedFiles(TableIndex table_id) const {
+	return state->local_changes.GetCompactedFiles(table_id);
 }
 
 bool DuckLakeTransaction::HasLocalDeletes(TableIndex table_id) const {
