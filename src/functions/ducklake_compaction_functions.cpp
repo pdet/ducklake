@@ -870,18 +870,26 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	} else {
 		tables = DuckLakeBaseMetadataFunction::GetTablesInScope(context, ducklake_catalog, schema, string());
 	}
+	// one query finds the tables with live data files, the others have nothing to compact
+	bool skip_tables_without_files = tables.size() > 1;
+	unordered_set<idx_t> tables_with_files;
+	if (skip_tables_without_files) {
+		for (auto &table_size : transaction.GetMetadataManager().GetTableSizes(transaction.GetSnapshot())) {
+			if (table_size.file_count > 0) {
+				tables_with_files.insert(table_size.table_id.index);
+			}
+		}
+	}
 	vector<unique_ptr<LogicalOperator>> compactions;
 	for (auto &table_ref : tables) {
 		auto &cur_table = table_ref.get();
 		if (!ducklake_catalog.AutoCompactEnabled(cur_table)) {
 			continue;
 		}
-		// a table without rows has no data files to compact
-		auto table_stats = ducklake_catalog.GetTableStats(transaction, cur_table.GetTableId());
-		if (!table_stats || (!table_stats->record_count_unknown && table_stats->record_count == 0)) {
+		auto delete_threshold = GetDeleteThreshold(cur_table, ducklake_catalog, input);
+		if (skip_tables_without_files && !tables_with_files.count(cur_table.GetTableId().index)) {
 			continue;
 		}
-		auto delete_threshold = GetDeleteThreshold(cur_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold, max_files,
 		                   merge_options, compactions);
 	}

@@ -62,3 +62,9 @@ SELECT p, v FROM ducklake.t ORDER BY v
 ----
 1	1
 1	2
+
+# the options are checked also when no table has files to rewrite
+statement error
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => -1);
+----
+The delete_threshold option must be between 0 and 1
