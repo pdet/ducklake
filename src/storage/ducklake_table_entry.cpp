@@ -448,7 +448,6 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
-//! Whether an entry of the transaction-local history of the table matches
 template <class FUNC>
 static bool AnyLocalChange(DuckLakeTableEntry &table, FUNC &&matches) {
 	reference<CatalogEntry> entry = table;
