@@ -235,25 +235,6 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, table, update_op);
 
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
-	if (!transaction.merge_update_without_row_ids.empty()) {
-		// an UPDATE action of a MERGE, which DuckLakeCatalog::PlanMergeInto split by the kind of row id
-		auto without_row_ids = transaction.merge_update_without_row_ids.front();
-		transaction.merge_update_without_row_ids.pop_front();
-		if (!without_row_ids) {
-			return PlanUpdateInsert(context, planner, table, verified_plan, copy_input);
-		}
-		vector<unique_ptr<Expression>> columns;
-		for (idx_t col_idx = 0; col_idx < update_op.row_id_index; col_idx++) {
-			columns.push_back(make_uniq<BoundReferenceExpression>(verified_plan.types[col_idx], col_idx));
-		}
-		vector<LogicalType> column_types(verified_plan.types.begin(),
-		                                 verified_plan.types.begin() + NumericCast<int64_t>(update_op.row_id_index));
-		auto &projection = planner.Make<PhysicalProjection>(std::move(column_types), std::move(columns),
-		                                                    verified_plan.estimated_cardinality);
-		projection.children.push_back(verified_plan);
-		DuckLakeCopyInput local_copy_input(context, table);
-		return PlanUpdateInsert(context, planner, table, projection, local_copy_input);
-	}
 	if (!transaction.HasTransactionLocalInserts(table.GetTableId()) || IsMergeActionInput(child_plan)) {
 		return PlanUpdateInsert(context, planner, table, verified_plan, copy_input);
 	}

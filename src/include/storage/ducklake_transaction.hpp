@@ -274,8 +274,6 @@ public:
 	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
 	//! Record that a delete predicate was evaluated against a table, even if no rows matched
 	void MarkDeleteAttempted(TableIndex table_id);
-	//! Whether the UPDATE actions of the MERGE being planned write their new rows without row ids, in planning order
-	deque<bool> merge_update_without_row_ids;
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
