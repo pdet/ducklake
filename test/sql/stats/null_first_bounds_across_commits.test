@@ -310,7 +310,7 @@ CREATE TABLE ducklake.mc_inl (a INTEGER, b INTEGER) WITH (data_inlining_row_limi
 foreach tbl mc mc_inl
 
 statement ok
-INSERT INTO ducklake.{tbl} VALUES (5, NULL);
+INSERT INTO ducklake.{tbl} VALUES (5, NULL), (NULL, NULL);
 
 statement ok
 UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = '{tbl}')
@@ -346,7 +346,7 @@ INSERT INTO ducklake.{tbl} VALUES (1, NULL);
 loop i 0 17
 
 statement ok
-ALTER TABLE ducklake.{tbl} ADD COLUMN c${i} INTEGER;
+ALTER TABLE ducklake.{tbl} ADD COLUMN c{i} INTEGER;
 
 endloop
 

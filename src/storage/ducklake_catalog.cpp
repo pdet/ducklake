@@ -1378,14 +1378,28 @@ void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t
 	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
 }
 
-bool DuckLakeCatalog::ColumnHoldsValues(TableIndex table_id, FieldIndex column_id) {
+bool DuckLakeCatalog::ColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
 	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != snapshot_id) {
+		return false;
+	}
 	return columns_with_values.count(make_pair(table_id.index, column_id.index)) > 0;
 }
 
-void DuckLakeCatalog::SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id) {
+void DuckLakeCatalog::SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
 	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != snapshot_id) {
+		columns_with_values.clear();
+		columns_with_values_snapshot = snapshot_id;
+	}
 	columns_with_values.emplace(table_id.index, column_id.index);
+}
+
+void DuckLakeCatalog::AdvanceColumnsWithValues(idx_t snapshot_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (columns_with_values_snapshot.IsValid() && columns_with_values_snapshot.GetIndex() + 1 == snapshot_id) {
+		columns_with_values_snapshot = snapshot_id;
+	}
 }
 
 void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) {

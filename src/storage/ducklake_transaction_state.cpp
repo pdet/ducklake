@@ -1373,7 +1373,7 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
 }
 
 void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
-                                                     DuckLakeTableStats &stats,
+                                                     DuckLakeTableStats &stats, idx_t snapshot_id,
                                                      const DuckLakeCommitContext &context) const {
 	// committed stats do not tell all NULL values apart from invalidated bounds, the live data does
 	set<FieldIndex> null_only_columns;
@@ -1381,7 +1381,8 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 		auto &column_stats = entry.second;
 		// a column without NULL values holds values
 		bool without_nulls = column_stats.has_null_count && column_stats.null_count == 0;
-		if (column_stats.bounds_unknown && !without_nulls && !context.column_holds_values(table_id, entry.first) &&
+		if (column_stats.bounds_unknown && !without_nulls &&
+		    !context.column_holds_values(table_id, entry.first, snapshot_id) &&
 		    NewDataSetsBounds(entry.first, column_stats.type, table_changes)) {
 			null_only_columns.insert(entry.first);
 		}
@@ -1396,7 +1397,7 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 		stats.column_stats.find(column_id)->second.bounds_unknown = false;
 	}
 	for (auto &column_id : columns_with_values) {
-		context.set_column_holds_values(table_id, column_id);
+		context.set_column_holds_values(table_id, column_id, snapshot_id);
 	}
 }
 
@@ -1427,7 +1428,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
-		ResolveNullOnlyBounds(table_id, table_changes, new_stats, context);
+		// the commit builds on the snapshot before its own
+		ResolveNullOnlyBounds(table_id, table_changes, new_stats, commit_state.commit_snapshot.snapshot_id - 1,
+		                      context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
