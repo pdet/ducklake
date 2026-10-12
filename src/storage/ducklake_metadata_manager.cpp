@@ -1939,20 +1939,28 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 		if (op_expr.GetChildren().size() < 2 || !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 			return false;
 		}
+		// an element that is not a constant can match in any bucket, a NULL constant matches no row
+		vector<string> partition_values;
 		for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
 			auto &child = *op_expr.GetChildren()[i];
 			if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+				return false;
+			}
+			auto &constant = child.Cast<BoundConstantExpression>().GetValue();
+			if (constant.IsNull()) {
 				continue;
 			}
 			string partition_value;
-			if (!FoldBucketValue(context, child.Cast<BoundConstantExpression>().GetValue(), col_type, bucket_count,
-			                     partition_value)
-			         .IsValid()) {
-				continue;
+			if (!FoldBucketValue(context, constant, col_type, bucket_count, partition_value).IsValid()) {
+				return false;
 			}
-			out.push_back(std::move(partition_value));
+			partition_values.push_back(std::move(partition_value));
 		}
-		return !out.empty();
+		if (partition_values.empty()) {
+			return false;
+		}
+		out.insert(out.end(), partition_values.begin(), partition_values.end());
+		return true;
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		// Only AND conjunctions give a valid (tighter) prune. A child equality on this column suffices;
