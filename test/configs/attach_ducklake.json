@@ -298,12 +298,6 @@
       ]
     },
     {
-      "reason": "FIXME: View Columns",
-      "paths": [
-        "test/sql/catalog/view/test_view_sql.test"
-      ]
-    },
-    {
       "reason": "Hugeint is unsupported",
       "paths": [
         "test/sql/types/hugeint/test_hugeint_aggregates.test",
@@ -452,19 +446,6 @@
       "reason": "The test sets a 1000 KB memory limit, under which DuckLake metadata queries can run out of memory",
       "paths": [
         "test/sql/logging/file_system_logging_attach_deadlock.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Incorrect rename + re-create behavior",
-      "paths": [
-        "test/sql/alter/rename_table/test_rename_table_incorrect.test",
-        "test/sql/alter/rename_table/test_rename_table_transactions.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Unstable OID",
-      "paths": [
-        "test/sql/pg_catalog/pg_namespace.test"
       ]
     },
     {
@@ -712,12 +693,6 @@
         "test/sql/catalog/sequence/test_sequence_google_fuzz.test",
         "test/sql/attach/attach_hidden.test",
         "test/sql/settings/test_disabled_file_systems.test"
-      ]
-    },
-    {
-      "reason": "DuckLake table entries get a new object id on ALTER, the test asserts oid stability.",
-      "paths": [
-        "test/sql/catalog/test_alter_oid_stability.test"
       ]
     },
     {
