@@ -1,0 +1,106 @@
+# name: test/sql/stats/null_first_bounds_across_commits.test
+# description: A column whose first commits hold only NULL values gets its table bounds from later commits
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_across_commits', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.f (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.f VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.f VALUES (0.2);
+
+statement ok
+INSERT INTO ducklake.f VALUES (0.5);
+
+query III
+SELECT s.contains_null, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'f'
+----
+true	0.2	0.5
+
+query II
+EXPLAIN SELECT * FROM ducklake.f WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query I
+SELECT count(*) FROM ducklake.f WHERE c > 0.3
+----
+1
+
+# a NULL row that is inlined first gets its bounds from the flush that writes it to a file
+statement ok
+CREATE TABLE ducklake.i (c FLOAT);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'i')
+
+statement ok
+INSERT INTO ducklake.i VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.i VALUES (0.2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'i')
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'i'
+----
+0.2	0.2
+
+query II
+EXPLAIN SELECT * FROM ducklake.i WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# unknown bounds of a column that holds values stay unknown, so no filter skips those values
+statement ok
+CREATE TABLE ducklake.v (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.v VALUES (0.2);
+
+statement ok
+CREATE TABLE ducklake.w (c FLOAT);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'w')
+
+statement ok
+INSERT INTO ducklake.w VALUES (0.2);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name IN ('v', 'w'))
+
+foreach tbl v w
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (5);
+
+statement ok
+INSERT INTO ducklake.{tbl} SELECT 6 FROM range(20);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{tbl}'
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.{tbl} WHERE c < 1
+----
+1
+
+endloop

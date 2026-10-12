@@ -1239,6 +1239,73 @@ string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAdded
 	return result;
 }
 
+static bool NewDataHasValues(FieldIndex column_id, const LocalTableDataChanges &table_changes) {
+	for (auto &file : table_changes.new_data_files) {
+		auto entry = file.column_stats.find(column_id);
+		if (entry != file.column_stats.end() && entry->second.AnyValid()) {
+			return true;
+		}
+	}
+	if (!table_changes.new_inlined_data) {
+		return false;
+	}
+	auto &inlined_stats = table_changes.new_inlined_data->column_stats;
+	auto entry = inlined_stats.find(column_id);
+	return entry != inlined_stats.end() && entry->second.AnyValid();
+}
+
+static bool HasLiveInlinedRows(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
+                               const DuckLakeCommitContext &context) {
+	auto tables = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedDataTablesSql(table_id));
+	tables->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
+	vector<string> table_names;
+	for (auto &row : *tables) {
+		auto table_name = row.GetValue<string>(0);
+		// the rows of a table flushed by this commit are in its new files
+		auto flushed =
+		    std::find_if(flushed_tables.begin(), flushed_tables.end(), [&](const FlushedInlinedTableInfo &info) {
+			    return info.inlined_table.table_name == table_name;
+		    });
+		if (flushed == flushed_tables.end()) {
+			table_names.push_back(std::move(table_name));
+		}
+	}
+	if (table_names.empty()) {
+		return false;
+	}
+	auto rows = context.conflict_query_executor(
+	    DuckLakeMetadataManager::GetLiveInlinedRowSql(table_names, context.InlinedColNames()));
+	rows->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
+	return rows->begin() != rows->end();
+}
+
+void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
+                                                     DuckLakeTableStats &stats,
+                                                     const DuckLakeCommitContext &context) const {
+	// committed stats do not tell all NULL values apart from invalidated bounds, the live data does
+	set<FieldIndex> null_only_columns;
+	for (auto &entry : stats.column_stats) {
+		if (entry.second.bounds_unknown && NewDataHasValues(entry.first, table_changes)) {
+			null_only_columns.insert(entry.first);
+		}
+	}
+	if (null_only_columns.empty()) {
+		return;
+	}
+	auto result = context.conflict_query_executor(
+	    DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, null_only_columns));
+	result->ThrowIfError("Failed to commit DuckLake transaction - failed to get the file statistics of a table:");
+	for (auto &row : *result) {
+		null_only_columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
+	}
+	if (null_only_columns.empty() || HasLiveInlinedRows(table_id, flushed_inlined_tables, context)) {
+		return;
+	}
+	for (auto &column_id : null_only_columns) {
+		stats.column_stats.find(column_id)->second.bounds_unknown = false;
+	}
+}
+
 NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
     string &batch_query, DuckLakeCommitState &commit_state, optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
     const DuckLakeCommitContext &context, map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
@@ -1266,6 +1333,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
+		ResolveNullOnlyBounds(table_id, table_changes, new_stats, context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {

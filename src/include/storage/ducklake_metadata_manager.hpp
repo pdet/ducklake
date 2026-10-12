@@ -454,6 +454,12 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
+	//! Selects the given columns that a live data file of the table may hold a non-NULL value of
+	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the names of the inlined data tables of the table
+	static string GetInlinedDataTablesSql(TableIndex table_id);
+	//! Selects a row when one of the inlined data tables holds a live row
+	static string GetLiveInlinedRowSql(const vector<string> &table_names, const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids);
