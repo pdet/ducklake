@@ -150,6 +150,16 @@ public:
 			}
 			has_variant_columns |= field_id->Type().id() == LogicalTypeId::VARIANT;
 		}
+		auto partition_data = table.GetPartitionData();
+		if (partition_data) {
+			auto key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*partition_data, table.GetFieldData());
+			for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
+				auto &partition_field = partition_data->fields[field_idx];
+				if (partition_field.transform.type == DuckLakeTransformType::IDENTITY) {
+					identity_hive_keys.emplace(partition_field.field_id.index, key_names[field_idx]);
+				}
+			}
+		}
 	}
 
 	vector<DuckLakeDataFile> AddFiles(const vector<string> &globs);
@@ -173,7 +183,7 @@ private:
 	DuckLakeColumnStats ConstantColumnStats(const ParquetFileMetadata &file_metadata, FieldIndex field_index,
 	                                        const LogicalType &field_type, const Value &value) const;
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
-	                                               const Value &hive_value);
+	                                               const string &hive_key, const Value &hive_value);
 	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name, const DuckLakeFieldId &field_id,
 	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
@@ -194,6 +204,8 @@ private:
 	unordered_set<idx_t> skipped_fields;
 	//! The root columns of the table that do not allow NULL values, by field index
 	unordered_map<idx_t, string> not_null_columns;
+	//! The hive keys of the identity partitions by field index, renamed when an earlier transform has their name
+	unordered_map<idx_t, string> identity_hive_keys;
 	bool has_variant_columns = false;
 };
 
@@ -861,7 +873,7 @@ static optional_idx GetIdentityPartitionKeyIndex(optional_ptr<DuckLakePartition>
 
 unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFileMetadata &file_metadata,
                                                                       const DuckLakeFieldId &field_id,
-                                                                      const Value &hive_value) {
+                                                                      const string &hive_key, const Value &hive_value) {
 	auto &target_type = field_id.Type();
 	auto target_field_id = field_id.GetFieldIndex();
 
@@ -884,9 +896,9 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	file_metadata.hive_partition_values.emplace_back(
 	    HivePartition {target_field_id, field_id.Type(), hive_value, transform, partition_key_index});
 
-	// return the map - the name is empty on purpose to signal this comes from a partition
+	// return the map - the source name is the hive key that the value is read from
 	auto result = make_uniq<DuckLakeNameMapEntry>();
-	result->source_name = field_id.Name();
+	result->source_name = hive_key;
 	result->target_field_id = target_field_id;
 	result->hive_partition = true;
 	return result;
@@ -895,12 +907,14 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name,
                                              const DuckLakeFieldId &field_id,
                                              vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
-	auto hive_entry = hive_partitions.find(name);
+	auto identity_key = identity_hive_keys.find(field_id.GetFieldIndex().index);
+	auto &hive_key = identity_key == identity_hive_keys.end() ? name : identity_key->second;
+	auto hive_entry = hive_partitions.find(hive_key);
 	if (hive_entry == hive_partitions.end()) {
 		return false;
 	}
-	auto hive_value = HivePartitioning::GetValue(context, name, hive_entry->second, field_id.Type());
-	column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_value));
+	auto hive_value = HivePartitioning::GetValue(context, hive_key, hive_entry->second, field_id.Type());
+	column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_key, hive_value));
 	return true;
 }
 
