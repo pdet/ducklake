@@ -392,6 +392,9 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	if (!extra_stats) {
 		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
 	}
+	if (bounds_unknown) {
+		return GeometryStats::CreateUnknown(type).ToUnique();
+	}
 	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
 	auto stats = geometry_stats.ToStats();
 	SetValidity(*stats);
