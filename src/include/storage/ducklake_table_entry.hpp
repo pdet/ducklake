@@ -217,7 +217,7 @@ private:
 	                                    SetTableOptionsInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
 	                                    ResetTableOptionsInfo &info);
-	//! The entry of a change of the type of a column, starting a new partition spec if a bucket can change
+	//! The entry of a column type change, which starts a new partition spec when bucket hashes change
 	unique_ptr<CatalogEntry> AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
 	                                         unique_ptr<ColumnChangeInfo> change_info,
 	                                         shared_ptr<DuckLakeFieldData> new_field_data);

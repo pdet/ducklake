@@ -237,7 +237,7 @@ SELECT k FROM w WHERE c = 5
 query II
 EXPLAIN ANALYZE SELECT k FROM w WHERE c = 5
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
 
 statement ok
 DROP TABLE w
@@ -260,4 +260,4 @@ ALTER TABLE p ALTER c TYPE HUGEINT
 query II
 EXPLAIN ANALYZE SELECT k FROM p WHERE k = 5
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
