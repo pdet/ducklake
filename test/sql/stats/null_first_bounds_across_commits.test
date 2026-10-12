@@ -104,3 +104,52 @@ SELECT count(*) FROM ducklake.{tbl} WHERE c < 1
 1
 
 endloop
+
+# a column added without a default reads as NULL in the older files
+statement ok
+CREATE TABLE ducklake.a (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.a VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN f INTEGER;
+
+statement ok
+INSERT INTO ducklake.a VALUES (2, 5);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'a' AND c.column_name = 'f'
+----
+5	5
+
+query II
+EXPLAIN SELECT * FROM ducklake.a WHERE f > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# with a default the older files read the default, so unknown bounds stay unknown
+statement ok
+CREATE TABLE ducklake.d (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.d VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.d ADD COLUMN f INTEGER DEFAULT 7;
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'd')
+
+statement ok
+INSERT INTO ducklake.d VALUES (2, 9);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND c.column_name = 'f'
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.d WHERE f < 8
+----
+1

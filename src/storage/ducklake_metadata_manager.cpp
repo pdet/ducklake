@@ -4292,27 +4292,34 @@ string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id,
 	for (auto &column_id : column_ids) {
 		column_values.push_back(StringUtil::Format("(%d)", column_id.index));
 	}
-	// a file without statistics for the column may hold values too
+	// a file written before a column without default holds only NULL values of it
 	return StringUtil::Format(R"(
 SELECT DISTINCT c.column_id
 FROM (VALUES %s) c(column_id)
+LEFT JOIN (
+    SELECT column_id, MIN(begin_snapshot) AS added_snapshot, BOOL_AND(initial_default IS NULL) AS null_default
+    FROM {METADATA_CATALOG}.ducklake_column
+    WHERE table_id = %d
+    GROUP BY column_id
+) col ON col.column_id = c.column_id
 CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
-WHERE f.table_id = %d AND f.end_snapshot IS NULL AND (s.data_file_id IS NULL OR s.value_count IS NULL OR s.value_count > 0))",
-	                          StringUtil::Join(column_values, ", "), table_id.index);
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
+    ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
+WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
+    WHEN s.data_file_id IS NULL
+        THEN NOT COALESCE(f.begin_snapshot < col.added_snapshot AND col.null_default, false)
+    ELSE s.value_count IS NULL OR s.value_count > 0
+END)",
+	                          StringUtil::Join(column_values, ", "), table_id.index, table_id.index);
 }
 
-string DuckLakeMetadataManager::GetInlinedDataTablesSql(TableIndex table_id) {
-	return StringUtil::Format(
-	    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d", table_id.index);
-}
-
-string DuckLakeMetadataManager::GetLiveInlinedRowSql(const vector<string> &table_names,
+string DuckLakeMetadataManager::GetLiveInlinedRowSql(const vector<pair<string, idx_t>> &tables,
                                                      const DuckLakeInlinedColNames &col_names) {
 	vector<string> selects;
-	for (auto &table_name : table_names) {
-		selects.push_back(StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE %s IS NULL",
-		                                     SQLIdentifier(table_name), col_names.end_snapshot));
+	for (auto &table : tables) {
+		selects.push_back(StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
+		                                     SQLIdentifier(table.first), col_names.end_snapshot,
+		                                     col_names.begin_snapshot, table.second));
 	}
 	return "SELECT * FROM (" + StringUtil::Join(selects, " UNION ALL ") + ") LIMIT 1";
 }

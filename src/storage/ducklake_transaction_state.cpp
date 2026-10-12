@@ -1256,25 +1256,25 @@ static bool NewDataHasValues(FieldIndex column_id, const LocalTableDataChanges &
 
 static bool HasLiveInlinedRows(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
                                const DuckLakeCommitContext &context) {
-	auto tables = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedDataTablesSql(table_id));
-	tables->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
-	vector<string> table_names;
-	for (auto &row : *tables) {
+	auto names = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id));
+	names->ThrowIfError("Failed to commit DuckLake transaction - failed to get the inlined data tables of a table:");
+	vector<pair<string, idx_t>> tables;
+	for (auto &row : *names) {
 		auto table_name = row.GetValue<string>(0);
-		// the rows of a table flushed by this commit are in its new files
-		auto flushed =
-		    std::find_if(flushed_tables.begin(), flushed_tables.end(), [&](const FlushedInlinedTableInfo &info) {
-			    return info.inlined_table.table_name == table_name;
-		    });
-		if (flushed == flushed_tables.end()) {
-			table_names.push_back(std::move(table_name));
+		// this commit flushes the rows up to the flush snapshot into its new files
+		idx_t flushed_up_to = 0;
+		for (auto &flushed : flushed_tables) {
+			if (flushed.inlined_table.table_name == table_name) {
+				flushed_up_to = flushed.flush_snapshot_id;
+			}
 		}
+		tables.emplace_back(std::move(table_name), flushed_up_to);
 	}
-	if (table_names.empty()) {
+	if (tables.empty()) {
 		return false;
 	}
 	auto rows = context.conflict_query_executor(
-	    DuckLakeMetadataManager::GetLiveInlinedRowSql(table_names, context.InlinedColNames()));
+	    DuckLakeMetadataManager::GetLiveInlinedRowSql(tables, context.InlinedColNames()));
 	rows->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
 	return rows->begin() != rows->end();
 }

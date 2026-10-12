@@ -1,0 +1,45 @@
+# name: test/sql/stats/null_first_bounds_concurrent_flush.test
+# description: A flush does not set table bounds from its files when rows were inlined after its snapshot
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_concurrent_flush', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.t VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.t VALUES (0.2);
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (100);
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c > 10
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+3

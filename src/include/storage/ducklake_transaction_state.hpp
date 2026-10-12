@@ -182,9 +182,10 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context,
 	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
-	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
+	//! Lets new values set the unknown bounds of the columns whose live values are all NULL
 	void ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
 	                           DuckLakeTableStats &stats, const DuckLakeCommitContext &context) const;
+	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
 	bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
 	                           map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
