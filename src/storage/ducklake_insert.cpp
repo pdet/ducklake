@@ -145,7 +145,7 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 }
 
 static bool IsLeafColumnStats(const vector<Value> &col_stats) {
-	// structs, lists and VARIANT groups report counts but no size
+	// only leaf columns report a size
 	for (auto &stat : col_stats) {
 		if (StringValue::Get(StructValue::GetChildren(stat)[0]) == "column_size_bytes") {
 			return true;
