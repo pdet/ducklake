@@ -41,3 +41,30 @@ SELECT b, octet_length(b) FROM lake.t ORDER BY b
 ----
 \x5Cx41	4
 \xFF\xFE	2
+
+statement ok
+INSERT INTO lake.t VALUES ('\x5Cx42'::BLOB)
+
+statement ok
+RESET binary_as_string
+
+statement ok
+SET GLOBAL binary_as_string = true
+
+statement ok
+CHECKPOINT lake
+
+statement ok
+SET GLOBAL binary_as_string = false
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1
+
+query II
+SELECT b, octet_length(b) FROM lake.t ORDER BY b
+----
+\x5Cx41	4
+\x5Cx42	4
+\xFF\xFE	2

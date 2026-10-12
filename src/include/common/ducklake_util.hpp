@@ -94,7 +94,7 @@ public:
 	                                      const string &table_name);
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings
-	//! and settings that change the types read are not copied.
+	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 	//! Sets a session extension setting without checking the configuration lock
 	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);

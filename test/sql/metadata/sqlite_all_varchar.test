@@ -17,6 +17,17 @@ statement ok
 CREATE TABLE lake.t AS SELECT 1 AS i
 
 statement ok
+SET GLOBAL sqlite_all_varchar = true
+
+query I
+SELECT i FROM lake.t
+----
+1
+
+statement ok
+SET GLOBAL sqlite_all_varchar = false
+
+statement ok
 SET sqlite_all_varchar = true
 
 query I
