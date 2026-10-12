@@ -1310,7 +1310,11 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 	    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
 	values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
 	for (auto &row : *values) {
-		columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
+		for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
+			if (row.GetValue<int64_t>(check_idx) > 0) {
+				columns.erase(checks[check_idx].column_id);
+			}
+		}
 	}
 }
 

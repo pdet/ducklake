@@ -40,7 +40,7 @@ SELECT count(*) FROM ducklake.f WHERE c > 0.3
 ----
 1
 
-# a NULL row that is inlined first gets its bounds from the flush that writes it to a file
+# an inlined NULL row lets the next inlined value set the bounds, and the flush keeps them
 statement ok
 CREATE TABLE ducklake.i (c FLOAT);
 
@@ -184,7 +184,7 @@ SELECT count(*) FROM ducklake.m WHERE c > 10
 ----
 1
 
-# inlined rows written before a column without default read it as NULL (duckdb/ducklake#625)
+# inlined rows written before a column without default read it as NULL
 statement ok
 CREATE TABLE ducklake.inl_added (column_one INTEGER) WITH (data_inlining_row_limit = 10);
 

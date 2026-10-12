@@ -4289,24 +4289,24 @@ string DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(const string &metadat
 
 string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
                                                             const map<FieldIndex, idx_t> &null_default_columns) {
-	vector<string> selects;
+	// a file without statistics of a column holds values of it unless it was written before a NULL default column
+	vector<string> column_values;
 	for (auto &column_id : column_ids) {
 		auto added = null_default_columns.find(column_id);
-		string missing_stats_values = "true";
-		if (added != null_default_columns.end()) {
-			missing_stats_values = StringUtil::Format("COALESCE(f.partial_max, f.begin_snapshot) >= %d", added->second);
-		}
-		selects.push_back(StringUtil::Format(R"(
-SELECT %d AS column_id WHERE EXISTS (
-    SELECT 1
-    FROM {METADATA_CATALOG}.ducklake_data_file f
-    LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s ON s.data_file_id = f.data_file_id AND s.column_id = %d
-    WHERE f.table_id = %d AND f.end_snapshot IS NULL
-        AND CASE WHEN s.data_file_id IS NULL THEN %s ELSE s.value_count IS NULL OR s.value_count > 0 END
-))",
-		                                     column_id.index, column_id.index, table_id.index, missing_stats_values));
+		auto values_from = added == null_default_columns.end() ? 0 : added->second;
+		column_values.push_back(StringUtil::Format("(%d, %d)", column_id.index, values_from));
 	}
-	return StringUtil::Join(selects, " UNION ALL ");
+	return StringUtil::Format(R"(
+SELECT DISTINCT c.column_id
+FROM (VALUES %s) c(column_id, values_from)
+CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
+    ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
+WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
+    WHEN s.data_file_id IS NULL THEN COALESCE(f.partial_max, f.begin_snapshot) >= c.values_from
+    ELSE s.value_count IS NULL OR s.value_count > 0
+END)",
+	                          StringUtil::Join(column_values, ", "), table_id.index);
 }
 
 string DuckLakeMetadataManager::GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
@@ -4341,17 +4341,23 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_column c
 
 string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
                                                     const DuckLakeInlinedColNames &col_names) {
-	vector<string> selects;
-	for (auto &check : checks) {
-		auto rows = StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
-		                               SQLIdentifier(check.table_name), col_names.end_snapshot,
-		                               col_names.begin_snapshot, check.flushed_up_to);
-		if (!check.column_name.empty()) {
-			rows += StringUtil::Format(" AND %s IS NOT NULL", SQLIdentifier(check.column_name));
+	// one row with the live value count of every check, the checks of a table are counted in one scan
+	vector<string> tables;
+	vector<string> counts;
+	for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
+		auto &check = checks[check_idx];
+		auto counted = check.column_name.empty() ? string("*") : SQLIdentifier::ToString(check.column_name);
+		counts.push_back(StringUtil::Format("COUNT(%s) AS c%d", counted, check_idx));
+		if (check_idx + 1 < checks.size() && checks[check_idx + 1].table_name == check.table_name) {
+			continue;
 		}
-		selects.push_back(StringUtil::Format("SELECT %d AS column_id WHERE EXISTS (%s)", check.column_id.index, rows));
+		tables.push_back(StringUtil::Format("(SELECT %s FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d) t%d",
+		                                    StringUtil::Join(counts, ", "), SQLIdentifier(check.table_name),
+		                                    col_names.end_snapshot, col_names.begin_snapshot, check.flushed_up_to,
+		                                    tables.size()));
+		counts.clear();
 	}
-	return StringUtil::Join(selects, " UNION ALL ");
+	return "SELECT * FROM " + StringUtil::Join(tables, ", ");
 }
 
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {

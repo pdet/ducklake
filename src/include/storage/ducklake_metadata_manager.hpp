@@ -464,15 +464,14 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
-	//! Selects the given columns that may hold values other than NULL in a live data file of the table, the files
-	//! written before a column with a NULL default hold only NULL values of it
+	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
 	                                          const map<FieldIndex, idx_t> &null_default_columns);
 	//! Selects the snapshot each of the given columns with a NULL initial default was added in
 	static string GetColumnNullDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
 	//! Selects the inlined data tables of the table with the given columns they hold, by their name in the table
 	static string GetInlinedColumnNamesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
-	//! Selects the columns of the checks that a live inlined row holds a value of
+	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
 	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
 	                                  const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
