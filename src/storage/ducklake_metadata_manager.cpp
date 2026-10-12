@@ -1883,10 +1883,7 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
 }
 
-//! Fold a single constant through the bucket() transform, returning the resulting partition_value
-//! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
-//! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
-//! Whether a value equals values with another bucket, as a NaN or a zero inside a nested value does
+//! Whether equal values can hash to other buckets, as for NaNs and for zeros inside nested values
 static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
 	if (value.IsNull()) {
 		return false;
@@ -1894,7 +1891,6 @@ static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
 	switch (value.type().InternalType()) {
 	case PhysicalType::FLOAT:
 	case PhysicalType::DOUBLE: {
-		// murmur3_32 hashes the bits of a NaN and the text of a nested value, which keeps the sign of a zero
 		auto number = value.GetValue<double>();
 		return Value::IsNan(number) || (nested && number == 0);
 	}
@@ -1917,6 +1913,9 @@ static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
 	}
 }
 
+//! Fold a single constant through the bucket() transform, returning the resulting partition_value
+//! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
+//! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
 static optional_idx FoldBucketValue(ClientContext &context, const Value &constant, const LogicalType &col_type,
                                     idx_t bucket_count, string &out_partition_value) {
 	if (constant.IsNull()) {
