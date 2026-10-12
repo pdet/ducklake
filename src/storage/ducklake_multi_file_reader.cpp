@@ -88,26 +88,26 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 	}
 }
 
+//! Reads the boundary of a Top-N dynamic filter, which is not set before the first rows arrive
+static bool TryGetTopNBoundary(DynamicFilterData &filter_data, ExpressionType &comparison_type, Value &constant) {
+	lock_guard<mutex> l(filter_data.lock);
+	if (!filter_data.initialized) {
+		return false;
+	}
+	comparison_type = filter_data.comparison_type;
+	constant = filter_data.constant;
+	return true;
+}
+
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
                                            const ColumnFilterInfo &column_filter) {
 	auto filter_data = ExpressionFilter::GetOptionalDynamicFilterData(*column_filter.table_filter);
-	if (!filter_data) {
+	ExpressionType comparison_type = ExpressionType::INVALID;
+	Value constant;
+	if (!filter_data || !TryGetTopNBoundary(*filter_data, comparison_type, constant)) {
 		return false;
 	}
-	ExpressionType comparison_type;
-	Value constant;
-	{
-		lock_guard<mutex> l(filter_data->lock);
-		if (!filter_data->initialized) {
-			return false;
-		}
-		comparison_type = filter_data->comparison_type;
-		constant = filter_data->constant;
-	}
-
-	// LCOV_EXCL_START
 	auto casted_constant = constant.DefaultTryCastAs(column_filter.column_type);
-	// LCOV_EXCL_STOP
 	if (!casted_constant) {
 		return false;
 	}

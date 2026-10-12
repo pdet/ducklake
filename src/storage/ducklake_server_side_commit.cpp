@@ -394,14 +394,10 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 		f.row_group_count = OptIdx(row, 16);
 		f.overwrites_existing_delete = OptBoolFalse(row, 12);
 		if (!row.IsNull(13)) {
-			// LCOV_EXCL_START
 			f.overwritten_delete_file.delete_file_id = DataFileIndex(AsIdx(row, 13));
-			// LCOV_EXCL_STOP
 		}
 		if (!row.IsNull(14)) {
-			// LCOV_EXCL_START
 			f.overwritten_delete_file.path = row.GetValue<string>(14);
-			// LCOV_EXCL_STOP
 		}
 		grouped[key].push_back(std::move(f));
 	}

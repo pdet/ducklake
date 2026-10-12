@@ -32,14 +32,14 @@ SELECT count(*) FROM ducklake.with_null WHERE s IS NULL
 ----
 2
 
-# FIXME: SET NOT NULL fails on nested columns without NULLs because they have no column stats, see https://github.com/pdet/ducklake_internal/issues/116
-mode skip
-
 statement ok
 CREATE TABLE ducklake.nested(s STRUCT(a INTEGER), l INTEGER[], m MAP(INTEGER, INTEGER))
 
 statement ok
 INSERT INTO ducklake.nested VALUES ({'a': 1}, [1], MAP {1: 2})
+
+# FIXME: SET NOT NULL fails on nested columns without NULLs because they have no column stats, see https://github.com/pdet/ducklake_internal/issues/116
+mode skip
 
 statement ok
 ALTER TABLE ducklake.nested ALTER s SET NOT NULL
@@ -57,14 +57,16 @@ NOT NULL constraint failed
 
 mode unskip
 
+statement ok
+CREATE TABLE ducklake.empty(i INTEGER)
+
 # FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
 mode skip
 
 statement ok
-CREATE TABLE ducklake.empty(i INTEGER)
-
-statement ok
 ALTER TABLE ducklake.empty ALTER i SET NOT NULL
+
+mode unskip
 
 statement ok
 BEGIN
@@ -72,11 +74,19 @@ BEGIN
 statement ok
 CREATE TABLE ducklake.local_empty(i INTEGER)
 
+# FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
+mode skip
+
 statement ok
 ALTER TABLE ducklake.local_empty ALTER i SET NOT NULL
 
+mode unskip
+
 statement ok
 COMMIT
+
+# FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
+mode skip
 
 statement error
 INSERT INTO ducklake.empty VALUES (NULL)

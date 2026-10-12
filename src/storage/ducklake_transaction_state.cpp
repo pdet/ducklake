@@ -944,9 +944,10 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	}
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
+		// no schema visible at the commit snapshot
 		// LCOV_EXCL_START
-		return; // no schema visible at the commit snapshot
-		        // LCOV_EXCL_STOP
+		return;
+		// LCOV_EXCL_STOP
 	}
 	auto current_stats = context.get_table_stats(table_id);
 	if (!current_stats) {
@@ -989,9 +990,7 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			parquet_gross_rows += static_cast<idx_t>(row.GetValue<int64_t>(1));
 		}
 		if (row.IsNull(3)) {
-			// LCOV_EXCL_START
 			continue; // file without column stats
-			          // LCOV_EXCL_STOP
 		}
 		FieldIndex field_idx(static_cast<idx_t>(row.GetValue<int64_t>(3)));
 		auto type_it = type_by_field.find(field_idx);

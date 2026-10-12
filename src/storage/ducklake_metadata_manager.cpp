@@ -4938,12 +4938,10 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 			return fs.CanonicalizePath(normalized);
 		}
 		// key remote paths by authority and path so scheme aliases and query strings match
-		// LCOV_EXCL_START
 		auto path_start = parsed.GetScheme().size();
 		auto query_start = normalized.find('?', path_start);
 		auto path_end = query_start == string::npos ? normalized.size() : query_start;
 		return normalized.substr(path_start, path_end - path_start);
-		// LCOV_EXCL_STOP
 	};
 	unordered_set<string> known_files;
 	for (auto &row : *known_files_res) {
