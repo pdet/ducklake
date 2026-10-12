@@ -39,6 +39,7 @@ public:
 
 	DuckLakeTableEntry &table;
 	vector<DuckLakeDataFile> written_files;
+	vector<string> empty_files;
 	idx_t total_insert_count;
 	case_insensitive_set_t not_null_fields;
 	//! Total rows flushed (used by flush_inlined_data)
@@ -109,6 +110,8 @@ public:
 	optional_idx partition_id;
 	//! The encryption key used for writing the Parquet files
 	string encryption_key;
+	//! Whether the rows to insert depend on the rows of the table, like the NOT MATCHED rows of a MERGE
+	bool reads_table = false;
 
 public:
 	// // Source interface
@@ -124,15 +127,17 @@ public:
 	                                               const string &encryption_key);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
 	static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                                 PhysicalOperator &plan, const ColumnList &columns,
-	                                                 const Identifier &table_name, optional_ptr<DuckLakeSort> sort_data,
-	                                                 bool sort_on_insert, idx_t data_inlining_row_limit);
+	                                                 PhysicalOperator &plan, SchemaCatalogEntry &schema,
+	                                                 const ColumnList &columns, const Identifier &table_name,
+	                                                 optional_ptr<DuckLakeSort> sort_data, bool sort_on_insert,
+	                                                 idx_t data_inlining_row_limit);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	//! Makes the copy write sorted input in order, even when it rotates files
 	static void PreserveSortedOrder(PhysicalCopyToFile &physical_copy);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
+	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);
 	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
 	                            optional_idx partition_id, bool set_snapshot_id = false);
 

@@ -12,6 +12,7 @@
 #include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
+struct DuckLakeAddedFields;
 
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
@@ -113,6 +114,9 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
 	std::function<void(idx_t)> set_committed_snapshot_id;
+	//! Keeps the oids of the entries created by the commit on the catalog.
+	std::function<void(const ducklake_entry_oids_t &)> set_entry_oids = [](const ducklake_entry_oids_t &) {
+	};
 	//! Publishes the options of newly created tables onto the catalog.
 	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
 	    [](const vector<DuckLakeConfigOption> &) {
@@ -179,11 +183,18 @@ public:
 	                            const DuckLakeCommitContext &context,
 	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
-	static bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
-	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
+	                           map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
 	string UpdateStatsForDroppedFiles(optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                                  const DuckLakeCommitContext &context,
 	                                  map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	//! The committed statistics of a table with those of the fields this commit adds
+	void InitializeGlobalStats(TableIndex table_id, const DuckLakeTableStats &current_stats,
+	                           DuckLakeNewGlobalStats &new_globals) const;
+	//! Writes the statistics of the older rows for the fields this commit adds
+	string WriteAddedFieldStats(const vector<DuckLakeAddedFields> &added_fields,
+	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
+	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
@@ -247,6 +258,10 @@ public:
 	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
 	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
+	//! The statistics written for the fields that this commit adds to existing tables
+	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> added_field_stats;
+	//! The tables whose stored size this commit reads back from their live data files
+	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
 };

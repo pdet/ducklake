@@ -138,11 +138,25 @@ const ColumnList &DuckLakeTableEntry::GetColumns() const {
 	return columns;
 }
 
+bool DuckLakeTableEntry::IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change) {
+	return !last_schema_change.IsValid() || schema_version >= last_schema_change.GetIndex();
+}
+
+bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx last_schema_change) const {
+	for (auto &inlined_table : inlined_data_tables) {
+		if (IsCurrentInlinedDataTable(inlined_table.schema_version, last_schema_change)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // ALTER TABLE RENAME/SET COMMENT/ADD COLUMN/DROP COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change)
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
                          parent.GetTableUUID(), parent.DataPath(), parent.field_data, parent.next_column_id,
                          parent.inlined_data_tables, local_change) {
+	oid = parent.oid;
 	if (parent.partition_data) {
 		partition_data = make_uniq<DuckLakePartition>(*parent.partition_data);
 	}
@@ -372,6 +386,7 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	auto function_info =
 	    DuckLakeFunctionInfo::Create(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
+	function_info->include_local_changes = !lookup_info.GetAtClause();
 	function.function_info = std::move(function_info);
 	if (!lookup_info.GetAtClause() && transaction.IsDeleted(*this)) {
 		throw BinderException("Table with name %s does not exist", name);
@@ -424,19 +439,6 @@ void DuckLakeTableEntry::SetSortData(unique_ptr<DuckLakeSort> sort_data_p) {
 	sort_data = std::move(sort_data_p);
 }
 
-vector<string> DuckLakeTableEntry::GetPartitionSQLExpressions() const {
-	vector<string> result;
-	if (!partition_data) {
-		return result;
-	}
-	for (auto &field : partition_data->fields) {
-		auto &col = GetColumnByFieldId(field.field_id);
-		auto col_name = SQLIdentifier::ToString(col.GetName().GetIdentifierName());
-		result.push_back(DuckLakePartitionUtils::GetPartitionSQLExpression(field.transform, col_name, col.GetType()));
-	}
-	return result;
-}
-
 const string &DuckLakeTableEntry::DataPath() const {
 	return data_path;
 }
@@ -444,6 +446,19 @@ const string &DuckLakeTableEntry::DataPath() const {
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &context) {
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	return GetTableStats(transaction);
+}
+
+bool DuckLakeTableEntry::ChangedColumnType() {
+	reference<CatalogEntry> entry = *this;
+	while (true) {
+		if (entry.get().Cast<DuckLakeTableEntry>().local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE) {
+			return true;
+		}
+		if (!entry.get().HasChild()) {
+			return false;
+		}
+		entry = entry.get().Child();
+	}
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
@@ -464,7 +479,8 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 }
 
 vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
-                                                                          DuckLakeSnapshot snapshot) const {
+                                                                          DuckLakeSnapshot snapshot,
+                                                                          bool include_local_changes) const {
 	// another attach can drop superseded inlined tables without bumping the schema version
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
@@ -478,7 +494,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLa
 	}
 	vector<DuckLakeInlinedTableInfo> result;
 	for (auto &inlined_table : inlined_data_tables) {
-		if (transaction.InlinedTableFlushed(inlined_table.table_name)) {
+		if (include_local_changes && transaction.InlinedTableFlushed(inlined_table.table_name)) {
 			continue;
 		}
 		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
@@ -690,11 +706,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
-	// check if there is an existing constraint
-	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
-	if (existing_idx.IsValid()) {
-		throw CatalogException("Cannot SET NOT NULL on column %s - it already has a NOT NULL constraint",
-		                       col.GetName());
+	if (table_info.FindNotNullConstraint(col.Logical()).IsValid()) {
+		return nullptr;
 	}
 
 	if (transaction.HasTransactionLocalInserts(GetTableId())) {
@@ -718,7 +731,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	// Unknown stats or previously deleted NULLs require checking the live rows.
 	auto &col_stats = column_stats->second;
-	if (!col_stats.has_null_count || col_stats.null_count > 0) {
+	if (!col_stats.has_null_count || col_stats.null_count > 0 || !FileStatsShowNulls(col.Type())) {
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 
@@ -739,10 +752,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumn(info.column_path[0]);
 	auto &field_id = GetFieldId(col.Physical());
 
-	// find the existing index
 	auto existing_idx = table_info.FindNotNullConstraint(col.Logical());
 	if (!existing_idx.IsValid()) {
-		throw CatalogException("Cannot DROP NULL on column %s - it has no NOT NULL constraint defined", col.GetName());
+		return nullptr;
 	}
 	table_info.constraints.erase_at(existing_idx.GetIndex());
 
@@ -806,6 +818,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
+		if (!transaction.GetMetadataManager().InlinedTableFits(new_table.columns.LogicalColumnCount())) {
+			throw NotImplementedException(
+			    "Cannot add column \"%s\" to a table with rows inlined in this transaction, the "
+			    "inlined data table would exceed the column limit of the metadata catalog",
+			    info.new_column.Name().GetIdentifierName());
+		}
 		LogicalIndex new_col_idx(new_table.columns.LogicalColumnCount() - 1);
 		auto &new_col = new_table.GetColumn(new_col_idx);
 		auto &field_id = new_table.GetFieldData().GetByRootIndex(new_col.Physical());
@@ -896,6 +914,23 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::RemoveColumn(field_id.GetFieldIndex()),
 	                                     std::move(change_info));
+}
+
+static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
+	info.initial_default = col_data.initial_default;
+	if (col_data.default_value) {
+		Value literal_value;
+		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
+			info.default_value = std::move(literal_value);
+			info.default_value_type = "literal";
+		} else {
+			info.default_value = col_data.default_value->ToString();
+			info.default_value_type = "expression";
+		}
+	} else {
+		info.default_value = Value(LogicalTypeId::VARCHAR);
+		info.default_value_type = "literal";
+	}
 }
 
 bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target) {
@@ -1005,8 +1040,13 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	result.DropField(source_id);
 
 	// re-create with the new type
-	DuckLakeColumnData column_data;
-	column_data.id = source_id.GetFieldIndex();
+	auto column_data = source_id.GetColumnData().Copy();
+	if (column_data.initial_default.IsNull()) {
+		column_data.initial_default = Value(target);
+	} else {
+		// the catalog stores the default as text and casts it to the type of the column
+		column_data.initial_default = Value(column_data.initial_default.ToString()).DefaultCastAs(target);
+	}
 	DuckLakeNewColumn new_col;
 	if (!parent_idx.IsValid()) {
 		// root column - get the info from the table directly
@@ -1015,6 +1055,12 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 		// nested column - generate the info here
 		new_col.column_info.id = column_data.id;
 		new_col.column_info.name = source_id.Name();
+		ExtractDefaultValue(column_data, new_col.column_info);
+	}
+	// read the literal default back as the catalog would after the commit
+	const auto &literal_default = new_col.column_info.default_value;
+	if (new_col.column_info.default_value_type == "literal" && !literal_default.IsNull()) {
+		column_data.default_value = DuckLakeUtil::LiteralDefaultExpression(Value(literal_default.ToString()), target);
 	}
 	new_col.column_info.type = DuckLakeTypes::ToString(target);
 	new_col.parent_idx = parent_idx;
@@ -1041,28 +1087,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
 	col.SetType(info.target_type);
+	auto new_default = new_field_id->GetDefault();
+	if (new_default) {
+		col.SetDefaultValue(std::move(new_default));
+	}
 	table_info.columns.SetAllowDuplicates(false);
 
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_field_id));
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::CHANGE_COLUMN_TYPE, std::move(change_info),
 	                                     std::move(new_field_ids));
-}
-
-static void ExtractDefaultValue(const DuckLakeColumnData &col_data, DuckLakeColumnInfo &info) {
-	info.initial_default = col_data.initial_default;
-	if (col_data.default_value) {
-		Value literal_value;
-		if (DuckLakeUtil::TryGetLiteralValue(*col_data.default_value, literal_value)) {
-			info.default_value = std::move(literal_value);
-			info.default_value_type = "literal";
-		} else {
-			info.default_value = col_data.default_value->ToString();
-			info.default_value_type = "expression";
-		}
-	} else {
-		info.default_value = Value(LogicalTypeId::VARCHAR);
-		info.default_value_type = "literal";
-	}
 }
 
 void AddNewColumns(const DuckLakeFieldId &field_id, vector<DuckLakeNewColumn> &new_fields, FieldIndex parent_idx) {
@@ -1125,6 +1158,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		if (!ColumnExists(info.column_path.front())) {
 			return nullptr;
 		}
+	}
+	auto path_id = TryGetFieldId(vector<Identifier> {info.column_path[0]});
+	for (idx_t depth = 1; path_id && depth < info.column_path.size(); depth++) {
+		if (!path_id->Type().IsNested()) {
+			throw CatalogException("Cannot drop field from column %s - not a nested type", info.column_path[0]);
+		}
+		path_id = path_id->GetChildByName(info.column_path[depth].GetIdentifierName());
 	}
 	optional_ptr<const DuckLakeFieldId> removed_id_ptr;
 	if (info.if_column_exists) {
@@ -1507,6 +1547,66 @@ void DuckLakeTableEntry::ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &
 	throw NotImplementedException("Cannot give column \"%s\" a %s field (\"%s\") - it is listed in the "
 	                              "'skip_stats_columns' option, and statistics cannot be skipped for that type",
 	                              parent_id.Name(), unsupported->Type().ToString(), unsupported->Name());
+}
+
+static void CollectNewFields(const DuckLakeFieldId &field_id, const DuckLakeFieldData &previous,
+                             set<FieldIndex> &result) {
+	if (!previous.GetByFieldIndex(field_id.GetFieldIndex())) {
+		result.insert(field_id.GetFieldIndex());
+		return;
+	}
+	for (auto &child : field_id.Children()) {
+		CollectNewFields(*child, previous, result);
+	}
+}
+
+set<FieldIndex> DuckLakeTableEntry::GetNewFields(const DuckLakeTableEntry &previous) const {
+	duckdb::set<FieldIndex> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectNewFields(*field_id, previous.GetFieldData(), result);
+	}
+	return result;
+}
+
+static void CollectAddedFieldStats(const DuckLakeFieldId &field_id, bool top_level, bool repeated,
+                                   const set<FieldIndex> &added_fields, idx_t count,
+                                   map<FieldIndex, DuckLakeColumnStats> &result) {
+	if (!added_fields.count(field_id.GetFieldIndex())) {
+		// the elements of a list, array or map do not have one value per row
+		bool child_repeated = repeated || field_id.Type().id() != LogicalTypeId::STRUCT;
+		for (auto &child : field_id.Children()) {
+			CollectAddedFieldStats(*child, false, child_repeated, added_fields, count, result);
+		}
+		return;
+	}
+	auto &initial_default = field_id.GetColumnData().initial_default;
+	if (top_level && !initial_default.IsNull() && !DuckLakeColumnStats(field_id.Type()).extra_stats) {
+		// every older row reads the default of an added column
+		result.emplace(field_id.GetFieldIndex(),
+		               DuckLakeColumnStats::FromConstant(field_id.Type(), initial_default, count));
+		return;
+	}
+	// older rows read NULL, or a default whose statistics are left unknown
+	vector<DuckLakeMissingField> missing_fields;
+	DuckLakeMissingField::Collect(field_id, initial_default.IsNull(), repeated, missing_fields);
+	for (auto &missing : missing_fields) {
+		missing.AddStats(count, result);
+	}
+}
+
+map<FieldIndex, DuckLakeColumnStats> DuckLakeTableEntry::GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+                                                                            idx_t count) const {
+	map<FieldIndex, DuckLakeColumnStats> result;
+	for (auto &field_id : field_data->GetFieldIds()) {
+		CollectAddedFieldStats(*field_id, true, false, added_fields, count, result);
+	}
+	auto skipped_fields = GetSkippedStatsFields();
+	for (auto &entry : result) {
+		if (skipped_fields.count(entry.first.index)) {
+			entry.second.ClearBounds();
+		}
+	}
+	return result;
 }
 
 unordered_set<idx_t> DuckLakeTableEntry::GetSkippedStatsFields() const {

@@ -53,14 +53,7 @@ public:
 	bool ordered_input = false;
 
 public:
-	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
-		auto &child = planner.CreatePlan(*children[0]);
-		if (ordered_input) {
-			DuckLakeInsert::PreserveSortedOrder(child.Cast<PhysicalCopyToFile>());
-		}
-		return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
-		                                        partition_id, std::move(partition_values), row_id_start, child, type);
-	}
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override;
 
 	string GetName() const override {
 		return "DUCKLAKE_COMPACTION";
@@ -94,13 +87,15 @@ public:
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
 	                                                      bool bind_to_latest_schema = false);
+	//! Sort the scan of a schema version of the table by the sort of its latest version
 	static unique_ptr<LogicalOperator> InsertSort(Binder &binder, unique_ptr<LogicalOperator> &plan,
-	                                              DuckLakeTableEntry &table, optional_ptr<DuckLakeSort> sort_data);
+	                                              DuckLakeTableEntry &table, const DuckLakeTableEntry &latest_table,
+	                                              optional_ptr<DuckLakeSort> sort_data);
 	static vector<OrderByNode> ParseSortOrders(const DuckLakeSort &sort_data);
 	//! Bind ORDER BY expressions against a column list + table name (works before a table entry exists).
-	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, const ColumnList &columns,
-	                                               const Identifier &table_name, TableIndex table_index,
-	                                               const vector<OrderByNode> &pre_bound_orders);
+	static vector<BoundOrderByNode> BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
+	                                               const ColumnList &columns, const Identifier &table_name,
+	                                               TableIndex table_index, const vector<OrderByNode> &pre_bound_orders);
 	static DuckLakeTableEntry &GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                                               const DuckLakeTableEntry &table);
 	static unique_ptr<LogicalOperator>

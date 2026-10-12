@@ -94,6 +94,16 @@ struct DuckLakeInlinedTableInfo {
 	idx_t schema_version;
 };
 
+//! The schema versions of the creation and the last schema change of a table
+struct DuckLakeTableSchemaVersions {
+	optional_idx creation;
+	optional_idx last_change;
+
+	bool ChangedSinceCreation() const {
+		return creation.IsValid() && last_change.IsValid() && creation.GetIndex() != last_change.GetIndex();
+	}
+};
+
 struct DuckLakeTableInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
@@ -395,6 +405,8 @@ struct DuckLakeFileColumnStats {
 	string max;
 	bool has_min = false;
 	bool has_max = false;
+	bool contains_nan = false;
+	bool has_contains_nan = false;
 };
 
 struct DuckLakeFileListEntry {
@@ -426,6 +438,8 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx snapshot_id;
+	//! Whether the data file itself was deleted at snapshot_id
+	bool file_deleted = false;
 	//! The start of the snapshot range for filtering
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering

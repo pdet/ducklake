@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -60,15 +61,8 @@ string DuckLakeInitializer::GetAttachOptions() {
 
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
 	// attach the metadata database
-	const string attach_query =
-	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
-	auto result = metadata_manager.AttachMetadata(attach_query);
-	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
-	                     catalog.MetadataPath() + "\"");
-	// explicitly load all secrets - work-around to secret initialization bug
-	transaction.Query("FROM duckdb_secrets()");
+	AttachMetadata(transaction);
 
 	bool has_explicit_schema = !options.metadata_schema.empty();
 	if (options.metadata_schema.empty()) {
@@ -89,18 +83,25 @@ void DuckLakeInitializer::Initialize() {
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
 	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
-		LoadExistingDuckLake(transaction);
+		LoadExistingDuckLakeWithRetries(transaction);
 	} else {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
 			                            "new DuckLake is explicitly disabled",
 			                            options.metadata_path);
 		}
-		InitializeNewDuckLake(transaction, has_explicit_schema);
+		try {
+			InitializeNewDuckLake(transaction, has_explicit_schema);
+		} catch (std::exception &ex) {
+			// another attach may have created the same DuckLake at the same time
+			ErrorData error(ex);
+			RestartMetadataTransaction(transaction);
+			if (!DuckLakeIsInitialized(transaction)) {
+				error.Throw();
+			}
+			LoadExistingDuckLakeWithRetries(transaction);
+		}
 	}
-	// note: re-fetch the metadata manager here - InitializeNewDuckLake/LoadExistingDuckLake may have
-	// swapped it out via SetVersionedMetadataManager, so the `metadata_manager` reference taken at the
-	// top of Initialize() would now dangle.
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
@@ -109,6 +110,75 @@ void DuckLakeInitializer::Initialize() {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
 	}
+}
+
+static bool PermanentLoadError(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::INVALID_INPUT:
+	case ExceptionType::INVALID_CONFIGURATION:
+	case ExceptionType::NOT_IMPLEMENTED:
+	case ExceptionType::BINDER:
+		return true;
+	default:
+		return false;
+	}
+}
+
+void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction) {
+	// wait for a migration of another attach, whose errors we cannot tell from a real failure
+	static constexpr idx_t MAX_WAIT_MS = 3000;
+	auto retry_config = DuckLakeRetryConfig::FromContext(context);
+	ErrorData first_error;
+	idx_t waited_ms = 0;
+	for (idx_t attempt = 0;; attempt++) {
+		try {
+			LoadExistingDuckLake(transaction);
+			return;
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (PermanentLoadError(error)) {
+				error.Throw();
+			}
+			if (attempt == 0) {
+				first_error = error;
+			}
+		}
+		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
+			first_error.Throw();
+		}
+		auto wait_ms = retry_config.WaitMs(attempt, MAX_WAIT_MS - waited_ms);
+#ifndef DUCKDB_NO_THREADS
+		ThreadUtil::SleepMs(wait_ms, context);
+#endif
+		waited_ms += wait_ms;
+		RestartMetadataTransaction(transaction);
+	}
+}
+
+void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transaction) {
+	transaction.Rollback();
+	AttachMetadata(transaction);
+}
+
+void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
+	const string attach_query =
+	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
+	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
+	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
+	                     catalog.MetadataPath() + "\"");
+}
+
+bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.MetadataExists()) {
+		return false;
+	}
+	for (auto &tag : metadata_manager.LoadDuckLake().tags) {
+		if (tag.key == "version") {
+			return true;
+		}
+	}
+	return false;
 }
 
 void DuckLakeInitializer::InitializeDataPath() {
@@ -152,7 +222,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	}
 }
 
-void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
+void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction, bool skip_dev_migration) {
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
@@ -203,9 +273,13 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				if (options.automatic_migration) {
 					// an explicitly requested migration fails loudly
 					metadata_manager.MigrateV10(true);
-				} else if (options.access_mode != AccessMode::READ_ONLY) {
-					// a plain attach is best-effort and never fails the attach
+				} else if (options.access_mode != AccessMode::READ_ONLY && !skip_dev_migration) {
 					metadata_manager.MigrateV10Dev();
+					if (ValidChecker::IsInvalidated(transaction.GetConnection().context->ActiveTransaction())) {
+						RestartMetadataTransaction(transaction);
+						LoadExistingDuckLake(transaction, true);
+						return;
+					}
 				}
 			}
 			if (catalog_version >= target_version) {

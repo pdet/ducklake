@@ -1,4 +1,5 @@
 #include "common/ducklake_util.hpp"
+#include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "common/ducklake_types.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -557,6 +558,14 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 	}
 }
 
+void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
+	ExtensionOption option;
+	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
+		return;
+	}
+	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
+}
+
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
 
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
@@ -714,6 +723,15 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	}
 	result = std::move(*value);
 	return true;
+}
+
+unique_ptr<ParsedExpression> DuckLakeUtil::LiteralDefaultExpression(const Value &text, const LogicalType &type) {
+	// keep the text when the column type would print it differently, as for a rounded value or a time zone
+	auto typed_value = text.DefaultTryCastAs(type);
+	if (typed_value && typed_value->ToString() == text.ToString()) {
+		return ConstantExpression::FromValue(*typed_value);
+	}
+	return ConstantExpression::FromValue(text);
 }
 
 bool DuckLakeUtil::TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result) {

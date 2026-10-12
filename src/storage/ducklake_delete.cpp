@@ -68,6 +68,18 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
 
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
+	// the delete file columns never hold NULL, so they are written as required
+	vector<BaseStatistics> not_null_stats;
+	vector<optional_ptr<BaseStatistics>> column_stats;
+	for (const auto &type : types_to_write) {
+		not_null_stats.push_back(BaseStatistics::CreateEmpty(type));
+		not_null_stats.back().SetHasNoNull();
+	}
+	for (auto &stats : not_null_stats) {
+		column_stats.push_back(&stats);
+	}
+	CopyToPropagateStatsInput stats_input {input.context, *function_data, column_stats};
+	copy_fun.function.copy_to_propagate_statistics(stats_input);
 	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// set up stats to get them from function
@@ -190,6 +202,10 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 	map<idx_t, set<idx_t>> deltas;
 	for (auto &entry : input.positions) {
 		deltas[NumericCast<idx_t>(entry.snapshot_id)].insert(NumericCast<idx_t>(entry.position));
+	}
+	if (deltas.size() > 1 && !input.transaction.GetCatalog().SupportsV1_1Metadata()) {
+		// DuckLake 1.0 reads one deletion vector per file, so the snapshots go into a parquet delete file
+		return WriteDeleteFileInternal(context, input);
 	}
 	// one cumulative deletion vector per snapshot
 	vector<set<idx_t>> cumulative;
@@ -320,7 +336,6 @@ public:
 			file_row_id_chunk.SetChildCardinality(count);
 			deleted_row_collection->Append(append_state, file_row_id_chunk);
 		}
-		total_deleted_count += local_entry.size();
 		local_entry.clear();
 	}
 
@@ -396,13 +411,11 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 	if (delete_count != data_file_info.row_count) {
 		return false;
 	}
-	// ALL rows in this file are deleted - drop the file
-	if (delete_file.data_file_id.IsValid()) {
-		transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
-		                     data_file_info.row_count, data_file_info.file.file_size_bytes);
-	} else {
-		transaction.DropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
+	if (!delete_file.data_file_id.IsValid()) {
+		return transaction.TryDropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}
+	transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
+	                     data_file_info.row_count, data_file_info.file.file_size_bytes);
 	return true;
 }
 
@@ -482,6 +495,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
 		                              "DuckLake. Eliminate duplicate matches prior to running the UPDATE");
 	}
+	global_state.total_deleted_count += sorted_deletes.size();
 
 	if (data_file_info.data_type == DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA) {
 		// deletes from transaction-local inlined data are directly deleted from the inlined data
@@ -525,11 +539,9 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		// deletes already exist for this file
 		auto &existing_deletes = existing_delete_data->deleted_rows;
 
-		// we check if we need to write the snapshot information into our deletion file
-		// that basically happens if the file already has embedded snapshots
-		// or if it's a delete file from a different transaction (committed delete file)
-		bool write_with_snapshots =
-		    existing_delete_data->HasEmbeddedSnapshots() || data_file_info.delete_file_id.IsValid();
+		bool write_with_snapshots = existing_delete_data->HasEmbeddedSnapshots() ||
+		                            data_file_info.delete_file_id.IsValid() ||
+		                            data_file_info.delete_file_begin_snapshot.IsValid();
 
 		if (write_with_snapshots) {
 			FlushDeleteWithSnapshots(transaction, context, global_state, filename, data_file_info,

@@ -41,6 +41,8 @@ class DuckLakeUtil {
 public:
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! The expression of a literal default stored as text, for a column of the given type
+	static unique_ptr<ParsedExpression> LiteralDefaultExpression(const Value &text, const LogicalType &type);
 	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type
 	static bool TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result);
 	static string ParseQuotedValue(const string &input, idx_t &pos);
@@ -94,6 +96,8 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+	//! Sets a session extension setting without checking the configuration lock
+	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);

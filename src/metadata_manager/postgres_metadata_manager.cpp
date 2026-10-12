@@ -95,6 +95,10 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
 		return string();
 	}
+	if (type.id() == LogicalTypeId::FLOAT) {
+		// a bare number is NUMERIC, which compares with REAL bounds as DOUBLE PRECISION
+		return "CAST(" + value.ToString() + " AS " + GetPostgresStatsType(type) + ")";
+	}
 	if (type.IsNumeric()) {
 		return value.ToString();
 	}
@@ -221,6 +225,24 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+	// the server error follows the failed query, which can contain any text
+	auto server_error_start = message.rfind("\": ");
+	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
+	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
+		auto start = end;
+		while (start > 0 &&
+		       (StringUtil::CharacterIsAlphaNumeric(server_error[start - 1]) || server_error[start - 1] == '_')) {
+			start--;
+		}
+		if (StringUtil::StartsWith(server_error.substr(start, end - start), "ducklake_")) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format(
@@ -267,15 +289,20 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 				rewrite = false;
 				break;
 			}
-			DuckLakeColumnInfo column;
-			column.type = column_type->second;
-			auto storage_type_name = GetColumnType(column);
-			auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
-			auto type = DuckLakeTypes::FromString(column.type);
+			auto type = DuckLakeTypes::FromString(column_type->second);
 			auto native_type = type.HasAlias() ? LogicalType(type.id()) : type;
 			// DuckLake 0.3 stored values with the native type of their DuckLake type, other columns are kept
 			auto &stored_type = probe->GetTypes()[i];
-			bool convert = stored_type != storage_type && stored_type == native_type;
+			string storage_type_name;
+			bool convert = false;
+			// nested columns are stored as VARCHAR in every version
+			if (!DuckLakeTypes::IsNested(type)) {
+				DuckLakeColumnInfo column;
+				column.type = column_type->second;
+				storage_type_name = GetColumnType(column);
+				auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
+				convert = stored_type != storage_type && stored_type == native_type;
+			}
 			auto column_name = SQLIdentifier::ToString(name);
 			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());
@@ -305,6 +332,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	auto &ducklake_catalog = transaction.GetCatalog();
 	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
+	// casts of float bounds to text keep their exact value
+	query = "SET LOCAL extra_float_digits = 3;" + query;
 	auto result = transaction.GetConnection().Query(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
 	return std::move(result);
