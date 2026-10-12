@@ -105,9 +105,9 @@ SELECT count(*), count(DISTINCT rowid), max(rowid) < 1000000000000000000, sum(v)
 10	10	true	15
 
 query I
-SELECT list(rowid ORDER BY id) FROM ducklake.mixed WHERE id < 5
+SELECT list(rowid ORDER BY id) = getvariable('committed_row_ids') FROM ducklake.mixed WHERE id < 5
 ----
-[0, 1, 2, 3, 4]
+true
 
 # a partitioned table
 statement ok
@@ -136,7 +136,7 @@ SELECT count(*), count(DISTINCT rowid), max(rowid) < 1000000000000000000, sum(v)
 ----
 8	8	true	2
 
-# a MERGE update of rows inserted in the same transaction plans its insert as before
+# a MERGE update of rows inserted in the same transaction
 statement ok
 CREATE TABLE ducklake.m (id BIGINT, v INTEGER)
 
