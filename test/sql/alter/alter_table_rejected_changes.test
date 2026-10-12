@@ -22,7 +22,7 @@ CREATE TABLE ducklake.b(i INTEGER)
 statement error
 ALTER TABLE ducklake.a RENAME TO b
 ----
-since "b" already exists
+Could not rename "a" to "b": another entry with this name already exists!
 
 statement error
 ALTER TABLE ducklake.a SET PARTITIONED BY (i::VARCHAR)
