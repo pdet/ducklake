@@ -306,6 +306,10 @@ SinkFinalizeType DuckLakeInsert::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
+	if (reads_table) {
+		// a concurrent insert could have produced rows that would have changed what we inserted
+		transaction.MarkDeleteAttempted(global_state.table.GetTableId());
+	}
 
 	return SinkFinalizeType::READY;
 }
