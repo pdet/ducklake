@@ -26,7 +26,7 @@ statement ok
 INSERT INTO ducklake.f VALUES (0.5);
 
 query III
-SELECT s.contains_null, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'f'
+SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'f'
 ----
 true	0.2	0.5
 
