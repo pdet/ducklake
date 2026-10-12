@@ -79,3 +79,29 @@ statement error
 ALTER TABLE ducklake.nested_null ALTER s SET NOT NULL
 ----
 the column has NULL values
+
+# the rows inserted by another transaction since the snapshot are not checked, so the commit conflicts
+statement ok
+CREATE TABLE ducklake.concurrent(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.concurrent ALTER i SET NOT NULL
+
+statement ok con2
+INSERT INTO ducklake.concurrent VALUES (NULL)
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.concurrent WHERE i IS NULL
+----
+1
+
+statement ok
+INSERT INTO ducklake.concurrent VALUES (NULL)

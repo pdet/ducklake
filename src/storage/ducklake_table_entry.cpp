@@ -712,14 +712,12 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	// the stats only rule out NULL values when they count no NULL in the committed rows
 	bool stats_show_no_nulls = false;
-	if (!transaction.HasTransactionLocalInserts(GetTableId()) && FileStatsShowNulls(col.Type())) {
-		auto stats = GetTableStats(transaction);
-		if (stats) {
-			auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
-			if (column_stats != stats->column_stats.end()) {
-				auto &col_stats = column_stats->second;
-				stats_show_no_nulls = col_stats.has_null_count && col_stats.null_count == 0;
-			}
+	auto stats = GetTableStats(transaction);
+	if (stats && FileStatsShowNulls(col.Type())) {
+		auto column_stats = stats->column_stats.find(field_id.GetFieldIndex());
+		if (column_stats != stats->column_stats.end()) {
+			auto &col_stats = column_stats->second;
+			stats_show_no_nulls = col_stats.has_null_count && col_stats.null_count == 0;
 		}
 	}
 	if (!stats_show_no_nulls) {
