@@ -2533,7 +2533,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string data_file_source = "{METADATA_CATALOG}.ducklake_data_file data";
 	string delete_file_filter;
 	string file_filter_clause = " AND data.end_snapshot IS NULL";
-	string partition_value_filter;
+	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
 
 	map<idx_t, set<idx_t>> inlined_deletions;
 

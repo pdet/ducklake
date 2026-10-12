@@ -876,6 +876,11 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		if (!ducklake_catalog.AutoCompactEnabled(cur_table)) {
 			continue;
 		}
+		// a table without rows has no data files to compact
+		auto table_stats = ducklake_catalog.GetTableStats(transaction, cur_table.GetTableId());
+		if (!table_stats || (!table_stats->record_count_unknown && table_stats->record_count == 0)) {
+			continue;
+		}
 		auto delete_threshold = GetDeleteThreshold(cur_table, ducklake_catalog, input);
 		GenerateCompaction(context, transaction, ducklake_catalog, input, cur_table, type, delete_threshold, max_files,
 		                   merge_options, compactions);
