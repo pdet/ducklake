@@ -299,8 +299,7 @@
     {
       "reason": "FIXME: View Columns",
       "paths": [
-        "test/sql/storage/wal/wal_view_storage.test",
-        "test/sql/catalog/view/test_view_sql.test"
+        "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
     {
