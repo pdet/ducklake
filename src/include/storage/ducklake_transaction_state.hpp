@@ -81,7 +81,7 @@ struct DuckLakeCommitContext {
 	    [](const vector<DuckLakeInlinedFileDeletionInfo> &) {
 		    return string();
 	    };
-	//! Whether an earlier commit found values of a column at the snapshot, values once found are not checked again
+	//! Whether an earlier commit found values of a column at the snapshot
 	std::function<bool(TableIndex, FieldIndex, idx_t)> column_holds_values = [](TableIndex, FieldIndex, idx_t) {
 		return false;
 	};

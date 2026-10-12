@@ -1373,10 +1373,12 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
-	// deleted rows can leave a column without values, also one a concurrent commit found values of
+	// deleted rows may be the values a commit found, also a concurrent one
 	auto forget_columns_with_values = [&]() {
 		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_from);
 		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_inlined);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.altered_tables);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.dropped_tables);
 	};
 	forget_columns_with_values();
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
