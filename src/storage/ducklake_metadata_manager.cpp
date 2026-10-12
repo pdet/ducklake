@@ -4671,8 +4671,15 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 		}
 	}
 
+	auto changed_specs = GetChangedSpecs(existing_partitions, new_partitions);
+	for (auto &partition : new_partitions) {
+		if (partition.replaces_equal_spec) {
+			// a bucket column changed type, so the last spec replaces the current one even with the same fields
+			changed_specs[partition.table_id.index] = new_partitions[last_partition_index[partition.table_id.index]];
+		}
+	}
 	set<TableIndex> altered_tables;
-	for (auto &new_partition : GetChangedSpecs(existing_partitions, new_partitions)) {
+	for (auto &new_partition : changed_specs) {
 		altered_tables.insert(new_partition.second.table_id);
 		append_partition(new_partition.second, "NULL");
 	}

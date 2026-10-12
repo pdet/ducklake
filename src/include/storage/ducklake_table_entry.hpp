@@ -72,6 +72,10 @@ public:
 	optional_ptr<const DuckLakePartition> GetPartitionData() const {
 		return partition_data.get();
 	}
+	//! Whether this entry starts a new partition spec with the same fields
+	bool StartsPartitionSpec() const {
+		return starts_partition_spec;
+	}
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
 	}
@@ -252,6 +256,7 @@ private:
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	LocalChange local_change;
 	unique_ptr<DuckLakePartition> partition_data;
+	bool starts_partition_spec = false;
 	unique_ptr<DuckLakeSort> sort_data;
 	map<string, string> table_options;
 	// only set for REMOVED_COLUMN

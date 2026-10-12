@@ -183,6 +183,27 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 	                    make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 }
 
+static bool HashesAsBigint(const LogicalType &type) {
+	return type.IsSigned() && type.InternalType() != PhysicalType::INT128;
+}
+
+bool DuckLakePartitionUtils::BucketChangesWithType(const DuckLakePartition &partition, FieldIndex field_id,
+                                                   const LogicalType &source_type, const LogicalType &target_type) {
+	// murmur3_32 hashes signed integers as a BIGINT and floating point values as a DOUBLE
+	if (HashesAsBigint(source_type) && HashesAsBigint(target_type)) {
+		return false;
+	}
+	if (source_type.IsFloating() && target_type.IsFloating()) {
+		return false;
+	}
+	for (auto &field : partition.fields) {
+		if (field.field_id == field_id && field.transform.type == DuckLakeTransformType::BUCKET) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_ptr<Expression> column_expr) {
 	auto bigint_const = [](int64_t val) {
 		return make_uniq<BoundConstantExpression>(Value::BIGINT(val));
