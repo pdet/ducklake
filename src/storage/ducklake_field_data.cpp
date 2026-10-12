@@ -288,9 +288,8 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldD
                                                             const ColumnDefinition &new_col, bool add_column) {
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
-	if (new_default && new_default->GetExpressionType() != ExpressionType::VALUE_CONSTANT && add_column) {
-		throw NotImplementedException("We cannot add a column with a non-literal default value. Add the column and "
-		                              "then explicitly set the default for new values using \"ALTER ... SET DEFAULT\"");
+	if (add_column) {
+		ExtractInitialValue(new_default, new_col.Type(), true);
 	}
 	return RebuildRootFields(field_data, field_index, [&](const DuckLakeFieldId &field_id) {
 		return DuckLakeFieldId::SetDefault(field_id, new_default);

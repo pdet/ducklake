@@ -3798,21 +3798,6 @@ ORDER BY data.data_file_id;
 	                          table_id.index);
 }
 
-bool DuckLakeMetadataManager::IsColumnCreatedWithTable(const string &table_name, const string &column_name) {
-	auto result = Query(StringUtil::Format(R"(
-SELECT TRUE
-FROM {METADATA_CATALOG}.ducklake_table t
-INNER JOIN {METADATA_CATALOG}.ducklake_column c
-  ON c.table_id = t.table_id
- WHERE c.column_name = %s AND
- t.table_name = %s AND c.begin_snapshot = t.begin_snapshot AND c.end_snapshot IS NULL;
-)",
-	                                       SQLString(column_name), SQLString(table_name)));
-	result->ThrowIfError("Failed to get schema information from DuckLake: ");
-	// We are only interested if this returns any rows or not
-	return result->Fetch() != nullptr;
-}
-
 string DuckLakeMetadataManager::GetPath(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	lock_guard<mutex> guard(paths_lock);
 	// get the path from the list of cached paths

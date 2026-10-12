@@ -66,6 +66,8 @@ public:
 	}
 	//! Whether the transaction changed the type of a column of this table
 	bool ChangedColumnType();
+	//! Whether an ADD COLUMN of this transaction added the field
+	bool AddedColumn(FieldIndex field_index);
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}

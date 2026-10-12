@@ -461,6 +461,23 @@ bool DuckLakeTableEntry::ChangedColumnType() {
 	}
 }
 
+bool DuckLakeTableEntry::AddedColumn(FieldIndex field_index) {
+	reference<CatalogEntry> entry = *this;
+	while (true) {
+		auto &table = entry.get().Cast<DuckLakeTableEntry>();
+		if (table.local_change.type == LocalChangeType::ADD_COLUMN) {
+			auto &added_column = table.GetColumn(LogicalIndex(table.columns.LogicalColumnCount() - 1));
+			if (table.GetFieldId(added_column.Physical()).GetFieldIndex() == field_index) {
+				return true;
+			}
+		}
+		if (!entry.get().HasChild()) {
+			return false;
+		}
+		entry = entry.get().Child();
+	}
+}
+
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
 	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
 }
@@ -1241,8 +1258,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_path[0]));
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
-	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(
-	    table_info.GetTableName().GetIdentifierName(), col.GetName().GetIdentifierName());
+	// ADD COLUMN with an expression default arrives as ADD COLUMN, UPDATE and SET DEFAULT
+	bool new_column = AddedColumn(field_id.GetFieldIndex());
 
 	return make_uniq<DuckLakeTableEntry>(*this, table_info,
 	                                     SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
