@@ -870,7 +870,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	} else {
 		tables = DuckLakeBaseMetadataFunction::GetTablesInScope(context, ducklake_catalog, schema, string());
 	}
-	// one query finds the tables with live data files, the others have nothing to compact
+	// tables without live data files have nothing to compact
 	bool skip_tables_without_files = tables.size() > 1;
 	unordered_set<idx_t> tables_with_files;
 	if (skip_tables_without_files) {
