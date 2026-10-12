@@ -1886,13 +1886,44 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 //! Fold a single constant through the bucket() transform, returning the resulting partition_value
 //! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
 //! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
+//! Whether a value equals values with another bucket, as a NaN or a zero inside a nested value does
+static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
+	if (value.IsNull()) {
+		return false;
+	}
+	switch (value.type().InternalType()) {
+	case PhysicalType::FLOAT:
+	case PhysicalType::DOUBLE: {
+		// murmur3_32 hashes the bits of a NaN and the text of a nested value, which keeps the sign of a zero
+		auto number = value.GetValue<double>();
+		return Value::IsNan(number) || (nested && number == 0);
+	}
+	case PhysicalType::STRUCT:
+		for (auto &child : StructValue::GetChildren(value)) {
+			if (EqualsValuesInOtherBuckets(child, true)) {
+				return true;
+			}
+		}
+		return false;
+	case PhysicalType::LIST:
+		for (auto &child : ListValue::GetChildren(value)) {
+			if (EqualsValuesInOtherBuckets(child, true)) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return false;
+	}
+}
+
 static optional_idx FoldBucketValue(ClientContext &context, const Value &constant, const LogicalType &col_type,
                                     idx_t bucket_count, string &out_partition_value) {
 	if (constant.IsNull()) {
 		return optional_idx();
 	}
 	auto cast = constant.DefaultTryCastAs(col_type);
-	if (!cast) {
+	if (!cast || EqualsValuesInOtherBuckets(*cast, false)) {
 		return optional_idx();
 	}
 	auto const_expr = make_uniq<BoundConstantExpression>(std::move(*cast));
@@ -1939,20 +1970,27 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 		if (op_expr.GetChildren().size() < 2 || !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 			return false;
 		}
+		vector<string> partition_values;
 		for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
 			auto &child = *op_expr.GetChildren()[i];
 			if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 				continue;
 			}
-			string partition_value;
-			if (!FoldBucketValue(context, child.Cast<BoundConstantExpression>().GetValue(), col_type, bucket_count,
-			                     partition_value)
-			         .IsValid()) {
+			auto &constant = child.Cast<BoundConstantExpression>().GetValue();
+			if (constant.IsNull()) {
 				continue;
 			}
-			out.push_back(std::move(partition_value));
+			string partition_value;
+			if (!FoldBucketValue(context, constant, col_type, bucket_count, partition_value).IsValid()) {
+				return false;
+			}
+			partition_values.push_back(std::move(partition_value));
 		}
-		return !out.empty();
+		if (partition_values.empty()) {
+			return false;
+		}
+		out.insert(out.end(), partition_values.begin(), partition_values.end());
+		return true;
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		// Only AND conjunctions give a valid (tighter) prune. A child equality on this column suffices;
