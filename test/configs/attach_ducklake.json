@@ -421,12 +421,6 @@
       ]
     },
     {
-      "reason": "FIXME: stats() min/max is NULL for a NaN-only column (native storage reports nan)",
-      "paths": [
-        "test/sql/storage/nan_min_statistics.test"
-      ]
-    },
-    {
       "reason": "DuckLake detects transaction conflicts at COMMIT, these tests expect them at the statement",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
@@ -490,12 +484,6 @@
       "reason": "FIXME: DuckTransaction::Get called on non-DuckDB transaction",
       "paths": [
         "test/sql/function/timestamp/test_icu_makedate.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Macros are currently not taken in for recursion",
-      "paths": [
-        "test/sql/catalog/function/test_recursive_macro.test"
       ]
     },
     {

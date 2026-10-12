@@ -2185,11 +2185,7 @@ void DuckLakeTransactionState::CheckFileConflicts(const TransactionChangeInforma
 				files_against_inlined_deletes.insert(DataFileIndex(file_entry.first));
 			}
 		}
-		for (auto &compaction : table_changes.compactions) {
-			for (auto &source : compaction.source_files) {
-				compacted_files.insert(source.file.id);
-			}
-		}
+		compacted_files.insert(table_changes.compacted_files.begin(), table_changes.compacted_files.end());
 	}
 	for (auto &file : dropped_files) {
 		deleted_from_files.insert(file.second);

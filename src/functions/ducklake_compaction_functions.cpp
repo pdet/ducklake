@@ -107,6 +107,9 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
 	}
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	if (gstate.state == SinkFinalizeType::NO_OUTPUT_POSSIBLE) {
+		return SourceResultType::FINISHED;
+	}
 	auto files_created = gstate.written_files.size();
 
 	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
@@ -168,7 +171,13 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	compaction_entry.type = type;
 
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
-	transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry));
+	if (!transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry))) {
+		auto &fs = FileSystem::GetFileSystem(context);
+		for (auto &file : global_state.written_files) {
+			fs.TryRemoveFile(file.file_name);
+		}
+		return SinkFinalizeType::NO_OUTPUT_POSSIBLE;
+	}
 	return SinkFinalizeType::READY;
 }
 
@@ -269,6 +278,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
+	auto files_compacted_in_transaction = transaction.GetCompactedFiles(table_id);
 
 	// Resolve, per schema_version (cached), whether a file written under it can be rewritten under the latest schema.
 	auto latest_entry = catalog.GetEntryById(transaction, snapshot, table_id);
@@ -312,6 +322,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		     type == CompactionType::MERGE_ADJACENT_TABLES) ||
 		    candidate.file.end_snapshot.IsValid()) {
 			// Merge Adjacent Tables doesn't perform the merge if any deletes are present
+			continue;
+		}
+		if (files_compacted_in_transaction.count(candidate.file.id)) {
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
