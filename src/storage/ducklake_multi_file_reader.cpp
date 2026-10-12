@@ -116,6 +116,10 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 		if (!column_stats.has_max) {
 			return false;
 		}
+		// the max leaves out NaN, which orders above every other value
+		if (column_filter.column_type.IsFloating() && !(column_stats.has_contains_nan && !column_stats.contains_nan)) {
+			return false;
+		}
 		auto file_max = TryCastStatsBound(column_stats.max, column_filter.column_type);
 		if (!file_max) {
 			return false;
@@ -413,6 +417,10 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 			throw InternalException("No transaction local data");
 		}
 		auto columns = DuckLakeMultiFileReader::ColumnsFromFieldData(read_info.table.GetFieldData(), true);
+		if (transaction_local_data->HasPreservedRowIds()) {
+			// expose the preserved row ids as a row id column, so file row numbers stay positions
+			columns.push_back(*row_id_column);
+		}
 		return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, transaction_local_data, std::move(columns));
 	}
 	idx_t schema_version;

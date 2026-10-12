@@ -4,6 +4,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "common/ducklake_util.hpp"
@@ -2049,6 +2050,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		    filter_result.required_ctes.emplace(column_field_index, CTERequirement(column_field_index, {})).first;
 		entry->second.referenced_stats.insert("min_value");
 		entry->second.referenced_stats.insert("max_value");
+		entry->second.referenced_stats.insert("contains_nan");
 	}
 	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix);
 	// one join per column serves both the filter conditions and the runtime stats below
@@ -2058,9 +2060,9 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	string order_by_clause;
 	for (auto &column_field_index : runtime_filter_stats_columns) {
 		auto cte_name = StatsCteName(column_field_index);
-		stats_select_list +=
-		    StringUtil::Format(", %s AS %s_min_value, %s AS %s_max_value", StatsColumn(cte_name, "min_value"), cte_name,
-		                       StatsColumn(cte_name, "max_value"), cte_name);
+		stats_select_list += StringUtil::Format(
+		    ", %s AS %s_min_value, %s AS %s_max_value, %s AS %s_contains_nan", StatsColumn(cte_name, "min_value"),
+		    cte_name, StatsColumn(cte_name, "max_value"), cte_name, StatsColumn(cte_name, "contains_nan"), cte_name);
 	}
 
 	for (const auto &dynamic_filter : dynamic_filters) {
@@ -2183,6 +2185,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			DuckLakeFileColumnStats column_stats;
 			column_stats.has_min = TryReadValue(row, col_idx++, column_stats.min);
 			column_stats.has_max = TryReadValue(row, col_idx++, column_stats.max);
+			column_stats.has_contains_nan = TryReadValue(row, col_idx++, column_stats.contains_nan);
 			file_entry.column_min_max.emplace(column_field_index, std::move(column_stats));
 		}
 
@@ -4957,6 +4960,10 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 }
 
 vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup(const string &filter) {
+	// files of open transactions, collected before the metadata read and again after the listing
+	auto &transaction_manager = transaction.manager.Cast<DuckLakeTransactionManager>();
+	vector<string> written_files;
+	transaction_manager.GetWrittenFiles(written_files);
 	auto known_files_res = Query(GetKnownFilesForCleanupQuery());
 	known_files_res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 
@@ -4987,6 +4994,10 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 	SubstituteCatalogPlaceholders(query);
 	auto res = transaction.ExecuteRaw(query);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
+	transaction_manager.GetWrittenFiles(written_files);
+	for (auto &path : written_files) {
+		known_files.insert(canonical_path(path));
+	}
 
 	vector<DuckLakeFileForCleanup> result;
 	for (auto &row : *res) {
