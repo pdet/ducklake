@@ -435,14 +435,22 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE: {
-		// we only create stats if we know there are no NaN values
-		// FIXME: we can just set Max to NaN instead
-		if (has_contains_nan && !contains_nan) {
+		if (!has_contains_nan) {
+			// we only create stats if we know whether there are NaN values
+			auto stats = NumericStats::CreateEmpty(type);
+			SetValidity(stats);
+			return stats.ToUnique();
+		}
+		if (!contains_nan) {
 			return CreateNumericStats();
 		}
-		auto stats = NumericStats::CreateEmpty(type);
-		SetValidity(stats);
-		return stats.ToUnique();
+		// NaN is greater than every other value, so it is the max
+		auto stats = has_min ? CreateNumericStats() : NumericStats::CreateUnknown(type).ToUnique();
+		if (stats) {
+			NumericStats::SetMax(*stats, Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type));
+			SetValidity(*stats);
+		}
+		return stats;
 	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();

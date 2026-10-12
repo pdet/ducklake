@@ -421,12 +421,6 @@
       ]
     },
     {
-      "reason": "FIXME: stats() min/max is NULL for a NaN-only column (native storage reports nan)",
-      "paths": [
-        "test/sql/storage/nan_min_statistics.test"
-      ]
-    },
-    {
       "reason": "FIXME: Immediate transaction mode not respected",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
