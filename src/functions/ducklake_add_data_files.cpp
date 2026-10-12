@@ -152,11 +152,11 @@ public:
 		}
 		auto partition_data = table.GetPartitionData();
 		if (partition_data) {
-			auto key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*partition_data, table.GetFieldData());
+			partition_key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*partition_data, table.GetFieldData());
 			for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
 				auto &partition_field = partition_data->fields[field_idx];
 				if (partition_field.transform.type == DuckLakeTransformType::IDENTITY) {
-					identity_hive_keys.emplace(partition_field.field_id.index, key_names[field_idx]);
+					identity_hive_keys.emplace(partition_field.field_id.index, partition_key_names[field_idx]);
 				}
 			}
 		}
@@ -204,7 +204,8 @@ private:
 	unordered_set<idx_t> skipped_fields;
 	//! The root columns of the table that do not allow NULL values, by field index
 	unordered_map<idx_t, string> not_null_columns;
-	//! The hive keys of the identity partitions by field index, renamed when an earlier transform has their name
+	vector<string> partition_key_names;
+	//! The hive keys of the identity partitions by field index
 	unordered_map<idx_t, string> identity_hive_keys;
 	bool has_variant_columns = false;
 };
@@ -896,7 +897,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	file_metadata.hive_partition_values.emplace_back(
 	    HivePartition {target_field_id, field_id.Type(), hive_value, transform, partition_key_index});
 
-	// return the map - the source name is the hive key that the value is read from
+	// the reader takes the value of the hive key in the source name
 	auto result = make_uniq<DuckLakeNameMapEntry>();
 	result->source_name = hive_key;
 	result->target_field_id = target_field_id;
@@ -1102,7 +1103,6 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 	}
 
 	const auto &field_data = table.GetFieldData();
-	auto key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*partition_data, field_data);
 	for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
 		auto &partition_field = partition_data->fields[field_idx];
 		if (partition_field.transform.type == DuckLakeTransformType::IDENTITY) {
@@ -1110,7 +1110,7 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 			continue;
 		}
 		auto field_id = field_data.GetByFieldIndex(partition_field.field_id);
-		auto &partition_key_name = key_names[field_idx];
+		auto &partition_key_name = partition_key_names[field_idx];
 		auto hive_entry = hive_partitions.find(partition_key_name);
 		if (hive_entry == hive_partitions.end()) {
 			// key not found in the file path
