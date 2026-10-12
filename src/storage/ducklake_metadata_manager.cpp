@@ -3887,7 +3887,7 @@ string DuckLakeMetadataManager::GetPathSeparator(const string &path) {
 		return catalog.Separator();
 	}
 	// if catalog is not loaded, use the file system
-	return GetFileSystem().PathSeparator(path);
+	return DuckLakeUtil::PathSeparator(GetFileSystem(), path);
 }
 
 string DuckLakeMetadataManager::StorePath(string path) {
