@@ -59,6 +59,12 @@
       ]
     },
     {
+      "reason": "on_init ends with USE memory, which a DuckLake opened as the main database does not have",
+      "paths": [
+        "test/sql/attach/ducklake_main_database.test"
+      ]
+    },
+    {
       "reason": "Test only for SQLite as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_sqlite.test",
