@@ -5436,6 +5436,17 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 	return result;
 }
 
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
+	auto result =
+	    Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE end_snapshot IS NULL");
+	result->ThrowIfError("Failed to get the tables with data files from DuckLake: ");
+	unordered_set<idx_t> table_ids;
+	for (auto &row : *result) {
+		table_ids.insert(row.GetValue<idx_t>(0));
+	}
+	return table_ids;
+}
+
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
 	vector<DuckLakeTableSizeInfo> table_sizes;
 	auto result = Query(snapshot, R"(

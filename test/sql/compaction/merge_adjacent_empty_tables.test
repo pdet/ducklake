@@ -1,5 +1,5 @@
 # name: test/sql/compaction/merge_adjacent_empty_tables.test
-# description: Merging adjacent files reads the file list only of the tables that have rows
+# description: Merging adjacent files reads the file list only of the tables with live data files
 # group: [compaction]
 
 require ducklake
@@ -28,7 +28,7 @@ INSERT INTO ducklake.t VALUES (1, 2);
 statement ok
 CREATE TABLE ducklake.empty (x VARCHAR);
 
-# a table whose rows were all deleted has no live files
+# deleting the rows of its only file drops the file
 statement ok
 CREATE TABLE ducklake.emptied (x VARCHAR);
 
@@ -63,7 +63,24 @@ SELECT p, v FROM ducklake.t ORDER BY v
 1	1
 1	2
 
-# the options are checked also when no table has files to rewrite
+# a table with a delete file is rewritten by a call for the whole catalog
+statement ok
+DELETE FROM ducklake.t WHERE v = 1;
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0)
+----
+1
+
+query II
+SELECT p, v FROM ducklake.t
+----
+1	2
+
+# the options are checked also when no table has live data files
+statement ok
+DROP TABLE ducklake.t;
+
 statement error
 CALL ducklake_rewrite_data_files('ducklake', delete_threshold => -1);
 ----

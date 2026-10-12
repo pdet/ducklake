@@ -874,11 +874,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	bool skip_tables_without_files = tables.size() > 1;
 	unordered_set<idx_t> tables_with_files;
 	if (skip_tables_without_files) {
-		for (auto &table_size : transaction.GetMetadataManager().GetTableSizes(transaction.GetSnapshot())) {
-			if (table_size.file_count > 0) {
-				tables_with_files.insert(table_size.table_id.index);
-			}
-		}
+		tables_with_files = transaction.GetMetadataManager().GetTablesWithLiveDataFiles();
 	}
 	vector<unique_ptr<LogicalOperator>> compactions;
 	for (auto &table_ref : tables) {

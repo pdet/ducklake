@@ -529,6 +529,8 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
+	//! The tables with data files that compaction can select, which are the files that are not dropped
+	unordered_set<idx_t> GetTablesWithLiveDataFiles();
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool IsColumnCreatedWithTable(const string &table_name, const string &column_name);
