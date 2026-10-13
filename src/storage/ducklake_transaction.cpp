@@ -1241,7 +1241,8 @@ DuckLakeGlobalStatsInfo DuckLakeTransaction::ConvertNewGlobalStats(TableIndex ta
 		}
 		col_stats.min_is_exact = column_stats.EffectiveMinIsExact();
 		col_stats.max_is_exact = column_stats.EffectiveMaxIsExact();
-		if (column_stats.extra_stats) {
+		// extra statistics cannot be stored as unknown, so unknown ones are left out
+		if (column_stats.extra_stats && !column_stats.ExtraStatsUnknown()) {
 			col_stats.has_extra_stats = column_stats.extra_stats->TrySerialize(col_stats.extra_stats);
 		} else {
 			col_stats.has_extra_stats = false;
