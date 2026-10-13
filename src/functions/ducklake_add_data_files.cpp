@@ -82,8 +82,12 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	//! The type the Parquet reader reads the column as
+	string duckdb_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
+	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
+	LogicalType bounds_type;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -253,7 +257,8 @@ SELECT
         "scale" := x."scale",
         "precision" := x."precision",
         field_id := x.field_id,
-        logical_type := x.logical_type
+        logical_type := x.logical_type,
+        duckdb_type := x.duckdb_type
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
@@ -265,7 +270,7 @@ FROM parquet_full_metadata(%s)
 	using ParquetStatsRow = VectorStructType<int64_t, string_t, string_t, int64_t, int64_t, int64_t, ParquetBBoxRow,
 	                                         VectorListType<string_t>, bool, bool>;
 	using ParquetSchemaRow =
-	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t>;
+	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t, string_t>;
 	for (auto &row : *result) {
 		auto &chunk = row.GetChunk();
 		auto row_idx = row.GetRowInChunk();
@@ -335,6 +340,7 @@ FROM parquet_full_metadata(%s)
 			column->precision = GetOptionalIndex(schema_entry.GetChildValue<5>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<6>());
 			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<7>());
+			column->duckdb_type = GetStringOrEmpty(schema_entry.GetChildValue<8>());
 
 			if (child_count == 0) {
 				column->column_id = next_column_id++;
@@ -408,6 +414,9 @@ FROM parquet_full_metadata(%s)
 				stats.max = stats_max.GetValue().GetString();
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
+			}
+			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
+				stats.CastBoundsFrom(column.bounds_type);
 			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
@@ -816,6 +825,13 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		file_metadata.variant_columns.emplace_back(field_id.GetFieldIndex(), column);
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
+	auto &field_type = field_id.Type();
+	if (!field_id.HasChildren() && !column.skip_bounds && column.duckdb_type != field_type.ToString()) {
+		auto file_type = UnboundType::TryParseAndDefaultBind(column.duckdb_type);
+		if (file_type != field_type && !DuckLakeColumnStats::BoundsSurviveTypePromotion(file_type, field_type)) {
+			column.bounds_type = std::move(file_type);
+		}
+	}
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
