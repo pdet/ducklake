@@ -826,6 +826,12 @@
       ]
     },
     {
+      "reason": "DuckLake keeps no min/max statistics for UHUGEINT columns, so stats() has no bounds for them.",
+      "paths": [
+        "test/sql/optimizer/unsigned_divide_statistics.test"
+      ]
+    },
+    {
       "reason": "FIXME: GEOMETRY columns lose their CRS, so typeof returns GEOMETRY instead of GEOMETRY('OGC:CRS84') (pdet/ducklake_internal#74)",
       "paths": [
         "test/sql/types/geo/geometry_crs_persist.test"
