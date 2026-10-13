@@ -1502,6 +1502,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
 			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields);
+			if (table.StartsPartitionSpec()) {
+				auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+				partition_key.replaces_equal_spec = true;
+				result.new_partition_keys.push_back(std::move(partition_key));
+			}
 			for (auto &new_field : changed_fields.new_fields) {
 				auto field_index = new_field.column_info.id;
 				bool retyped = std::find(changed_fields.dropped_fields.begin(), changed_fields.dropped_fields.end(),
