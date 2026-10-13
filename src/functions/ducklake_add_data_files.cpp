@@ -148,7 +148,6 @@ public:
 			if (not_null_fields.count(field_id->Name())) {
 				not_null_columns.emplace(field_id->GetFieldIndex().index, field_id->Name());
 			}
-			has_variant_columns |= field_id->Type().id() == LogicalTypeId::VARIANT;
 		}
 		auto partition_data = table.GetPartitionData();
 		if (partition_data) {
@@ -188,7 +187,6 @@ private:
 	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
-	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
 	void WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column);
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
@@ -208,7 +206,6 @@ private:
 	vector<string> partition_key_names;
 	//! The hive keys of the identity partitions by field index
 	unordered_map<idx_t, string> identity_hive_keys;
-	bool has_variant_columns = false;
 };
 
 static string GetStringOrEmpty(const VectorIterator<string_t>::ValueEntry &entry) {
@@ -336,6 +333,7 @@ FROM parquet_full_metadata(%s)
 			if (!duckdb_type.empty()) {
 				column->duckdb_type = DuckLakeTypes::FromDuckDBString(duckdb_type, context);
 			}
+			column->is_variant = column_stack.empty() && column->duckdb_type.id() == LogicalTypeId::VARIANT;
 
 			if (child_count == 0) {
 				column->column_id = next_column_id++;
@@ -369,9 +367,6 @@ FROM parquet_full_metadata(%s)
 			}
 		}
 
-		if (has_variant_columns) {
-			MarkVariantColumns(file, filepath);
-		}
 		DetermineMapping(file);
 
 		for (auto stats_entry : stats_iter[row_idx].GetChildValues()) {
@@ -455,9 +450,8 @@ class DuckLakeParquetTypeChecker {
 public:
 	DuckLakeParquetTypeChecker(DuckLakeTableEntry &table, ParquetFileMetadata &file_metadata, const LogicalType &type,
 	                           ParquetColumn &column_p, const string &prefix_p)
-	    : table(table), file_metadata(file_metadata),
-	      source_type(column_p.is_variant ? LogicalType::VARIANT() : column_p.duckdb_type), type(type),
-	      column(column_p), prefix(prefix_p) {
+	    : table(table), file_metadata(file_metadata), source_type(column_p.duckdb_type), type(type), column(column_p),
+	      prefix(prefix_p) {
 	}
 
 	DuckLakeTableEntry &table;
@@ -625,6 +619,11 @@ void DuckLakeParquetTypeChecker::CheckDecimal() {
 }
 
 void DuckLakeParquetTypeChecker::CheckMatchingType() {
+	if (source_type.id() == LogicalTypeId::VARIANT && !column.is_variant) {
+		failures.push_back(StringUtil::Format(
+		    "Expected type \"%s\" but found a nested VARIANT column, which DuckLake does not add", type));
+		Fail();
+	}
 	if (type.IsJSONType()) {
 		if (!source_type.IsJSONType()) {
 			failures.push_back(StringUtil::Format("Expected type \"JSON\" but found type \"%s\"", source_type));
@@ -704,6 +703,15 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	}
 }
 
+//! The reader reads a repeated group of a single column without a LIST annotation as that column
+static void CollapseRepeatedGroup(unique_ptr<ParquetColumn> &element) {
+	if (element->repeated && element->converted_type.empty() && element->child_columns.size() == 1) {
+		auto child = std::move(element->child_columns[0]);
+		child->name = element->name;
+		element = std::move(child);
+	}
+}
+
 //! A repeated column without a LIST annotation is the only element of its own list
 void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column) {
 	auto element = make_uniq<ParquetColumn>();
@@ -711,8 +719,10 @@ void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadat
 	element->name = column.name;
 	element->converted_type = column.converted_type;
 	element->field_id = column.field_id;
-	element->duckdb_type = ListType::GetChildType(column.duckdb_type);
+	element->repeated = column.repeated;
 	element->child_columns = std::move(column.child_columns);
+	CollapseRepeatedGroup(element);
+	element->duckdb_type = ListType::GetChildType(column.duckdb_type);
 	if (element->column_id != DConstants::INVALID_INDEX) {
 		file_metadata.column_id_map.find(element->column_id)->second = *element;
 	}
@@ -761,6 +771,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		case LogicalTypeId::LIST:
 			if (wrapped || column.child_columns[0]->name == "array") {
 				// With legacy avro list layout, we just access directly
+				CollapseRepeatedGroup(column.child_columns[0]);
 				column.child_columns[0]->duckdb_type = ListType::GetChildType(column.duckdb_type);
 				map_entry->child_entries.push_back(
 				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix, true));
@@ -1061,17 +1072,6 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		file.hive_partition_values.emplace_back(HivePartition {partition_field.field_id, partition_key_type, hive_value,
 		                                                       partition_field.transform,
 		                                                       optional_idx(partition_field.partition_key_index)});
-	}
-}
-
-void DuckLakeFileProcessor::MarkVariantColumns(ParquetFileMetadata &file, const string &filepath) {
-	// the schema of the file does not show the VARIANT annotation, so ask the reader for its types
-	DuckLakeFileData file_data;
-	file_data.path = filepath;
-	ParquetFileScanner scanner(context, file_data);
-	auto &types = scanner.GetTypes();
-	for (idx_t i = 0; i < types.size() && i < file.columns.size(); i++) {
-		file.columns[i]->is_variant = types[i].id() == LogicalTypeId::VARIANT;
 	}
 }
 
