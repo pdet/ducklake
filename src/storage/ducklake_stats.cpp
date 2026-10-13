@@ -361,7 +361,8 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	if (!has_min && !has_max) {
 		return NumericStats::CreateUnknown(type).ToUnique();
 	}
-	auto stats = NumericStats::CreateEmpty(type);
+	// a missing bound leaves its side of the range unknown
+	auto stats = NumericStats::CreateUnknown(type);
 	if (has_min) {
 		auto min_value = TryCastStatsBound(min, type);
 		if (!min_value) {
