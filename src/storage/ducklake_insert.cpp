@@ -11,6 +11,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
@@ -377,16 +378,14 @@ static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
 }
 
 string DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const string &name) {
-	case_insensitive_set_t column_names;
+	vector<string> names;
 	for (idx_t c_idx = 0; c_idx < field_data.GetColumnCount(); c_idx++) {
-		column_names.insert(field_data.GetByRootIndex(PhysicalIndex(c_idx)).Name());
+		names.push_back(field_data.GetByRootIndex(PhysicalIndex(c_idx)).Name());
 	}
 	// the reader finds internal columns by field id, so their name in the file only has to be unique
-	auto result = name;
-	for (idx_t suffix = 1; column_names.count(result); suffix++) {
-		result = name + "_" + to_string(suffix);
-	}
-	return result;
+	names.push_back(name);
+	QueryResult::DeduplicateColumns(names);
+	return names.back();
 }
 
 static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns) {
