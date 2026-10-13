@@ -358,24 +358,18 @@ void DuckLakeColumnStats::SetValidity(BaseStatistics &stats) const {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
-	if (!has_min && !has_max) {
+	if (!has_min || !has_max) {
+		// an empty statistics object would keep the empty range for a missing bound
 		return NumericStats::CreateUnknown(type).ToUnique();
 	}
+	auto min_value = TryCastStatsBound(min, type);
+	auto max_value = TryCastStatsBound(max, type);
+	if (!min_value || !max_value) {
+		return nullptr;
+	}
 	auto stats = NumericStats::CreateEmpty(type);
-	if (has_min) {
-		auto min_value = TryCastStatsBound(min, type);
-		if (!min_value) {
-			return nullptr;
-		}
-		NumericStats::SetMin(stats, *min_value);
-	}
-	if (has_max) {
-		auto max_value = TryCastStatsBound(max, type);
-		if (!max_value) {
-			return nullptr;
-		}
-		NumericStats::SetMax(stats, *max_value);
-	}
+	NumericStats::SetMin(stats, *min_value);
+	NumericStats::SetMax(stats, *max_value);
 	SetValidity(stats);
 	return stats.ToUnique();
 }
@@ -419,10 +413,12 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::SMALLINT:
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UTINYINT:
 	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
 	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
