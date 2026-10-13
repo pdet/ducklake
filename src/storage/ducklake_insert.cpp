@@ -597,11 +597,9 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (copy_input.partition_data) {
 		// we are partitioning - generate partition expressions (if any)
 		GeneratePartitionExpressions(context, copy_input, result);
-		if (!per_thread_output) {
-			// a partitioned copy does not keep the order of its input
-			for (auto &order : copy_input.sort_orders) {
-				copy.order_columns.push_back(order.Copy());
-			}
+		// a partitioned copy does not keep the order of its input
+		for (auto &order : copy_input.sort_orders) {
+			copy.order_columns.push_back(order.Copy());
 		}
 	}
 	return result;
@@ -690,13 +688,12 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 		return nullptr;
 	}
 	DuckLakeInsert::ResolveSortOrders(orders, table_index, plan.GetTypes());
-	bool volatile_keys = false;
+	// a copy evaluates its sort keys again, so it only gets the keys before the first volatile one
 	for (auto &order : orders) {
-		volatile_keys = volatile_keys || order.expression->IsVolatile();
-	}
-	// a copy evaluates its sort keys again, which a volatile key must not be
-	for (idx_t i = 0; i < orders.size() && !volatile_keys; i++) {
-		sort_orders.push_back(orders[i].Copy());
+		if (order.expression->IsVolatile()) {
+			break;
+		}
+		sort_orders.push_back(order.Copy());
 	}
 
 	auto projection_map = PhysicalJoin::FillProjectionMap(plan, {});

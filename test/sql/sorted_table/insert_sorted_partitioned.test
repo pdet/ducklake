@@ -105,7 +105,7 @@ SELECT list(key ORDER BY file_row_number)[1:4] FROM lake.f WHERE p = 19
 ----
 [0, 20, 40, 60]
 
-# with per thread output a partitioned copy writes the rows as they come
+# with per thread output the partitioned copy also sorts each partition
 statement ok
 CREATE TABLE lake.o(p INTEGER, id INTEGER);
 
@@ -122,11 +122,11 @@ statement ok
 INSERT INTO lake.o SELECT i % 20, i FROM range(1000) r(i);
 
 query II
-SELECT count(*), sum(id) FROM lake.o
+SELECT count(DISTINCT filename), count(DISTINCT filename) FILTER (WHERE k < prev) FROM (SELECT filename, k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM (SELECT filename, file_row_number, id AS k FROM lake.o))
 ----
-1000	499500
+20	0
 
-# a volatile sort key is not evaluated again by the copy
+# the copy sorts by the keys before a volatile key, which it does not evaluate again
 statement ok
 CREATE TABLE lake.s (p INTEGER, k INTEGER);
 
@@ -134,15 +134,15 @@ statement ok
 ALTER TABLE lake.s SET PARTITIONED BY (p);
 
 statement ok
-ALTER TABLE lake.s SET SORTED BY (random());
+ALTER TABLE lake.s SET SORTED BY (k, random());
 
 statement ok
 INSERT INTO lake.s SELECT i % 4, i FROM range(1000) r(i);
 
 query II
-SELECT count(*), count(DISTINCT filename) FROM lake.s
+SELECT count(DISTINCT filename), count(DISTINCT filename) FILTER (WHERE k < prev) FROM (SELECT filename, k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM (SELECT filename, file_row_number, k AS k FROM lake.s))
 ----
-1000	4
+4	0
 
 # a flush sorts each partition with the collation of the sort key
 statement ok
