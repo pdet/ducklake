@@ -1235,6 +1235,7 @@ void RenameField(const DuckLakeFieldId &field_id, const DuckLakeFieldId &parent_
 	renamed_field.column_info.id = field_id.GetFieldIndex();
 	renamed_field.column_info.name = std::move(new_name);
 	renamed_field.column_info.type = DuckLakeTypes::ToString(field_id.Type());
+	ExtractDefaultValue(field_id.GetColumnData(), renamed_field.column_info);
 	renamed_field.parent_idx = parent_id.GetFieldIndex().index;
 	change_info.new_fields.push_back(std::move(renamed_field));
 }
