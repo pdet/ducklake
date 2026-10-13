@@ -686,6 +686,10 @@ void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeD
 				// If a file already exists we remove it
 				auto &fs = FileSystem::GetFileSystem(context);
 				for (auto &old_file : existing_entry->second) {
+					// the committed delete file that the old file replaced is the one this commit replaces
+					if (old_file.overwritten_delete_file.delete_file_id.IsValid()) {
+						file.overwritten_delete_file = old_file.overwritten_delete_file;
+					}
 					fs.RemoveFile(old_file.file_name);
 				}
 				existing_entry->second.clear();
