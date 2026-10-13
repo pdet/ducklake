@@ -1008,7 +1008,14 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 		auto &source_field = *source_children[source_idx];
 		result.DropField(source_field);
 	}
-	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), target, std::move(children));
+	// the catalog keeps the fields in the order of their ids, so the fields are not reordered
+	std::sort(children.begin(), children.end(),
+	          [](const unique_ptr<DuckLakeFieldId> &left, const unique_ptr<DuckLakeFieldId> &right) {
+		          return left->GetFieldIndex().index < right->GetFieldIndex().index;
+	          });
+	auto new_type = GetNewNestedType(target, children);
+	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), std::move(new_type),
+	                                  std::move(children));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFieldId &source_id,
@@ -1086,7 +1093,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-	col.SetType(info.target_type);
+	col.SetType(new_field_id->Type());
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
 		col.SetDefaultValue(std::move(new_default));
