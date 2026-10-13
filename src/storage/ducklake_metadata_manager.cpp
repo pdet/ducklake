@@ -2792,7 +2792,6 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query, const
 	auto metadata_path = SQLString::ToString(ducklake_catalog.MetadataPath());
 	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
 
-	// placeholders are only replaced outside of literals, which can hold user values
 	query = DuckLakeUtil::ReplacePlaceholders(query, {{"{METADATA_CATALOG_NAME_LITERAL}", catalog_literal},
 	                                                  {"{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier},
 	                                                  {"{METADATA_SCHEMA_NAME_LITERAL}", schema_literal},
