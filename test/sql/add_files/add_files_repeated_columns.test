@@ -96,6 +96,19 @@ SELECT tags[1].key, len(tags) FROM dl.single_child
 service_name	8
 service_name	8
 
+# nested repeated groups of one column
+statement ok
+CREATE TABLE dl.nested_groups (a INTEGER[][])
+
+statement ok
+CALL ducklake_add_data_files('dl', 'nested_groups', 'data/parquet/nested_repeated_groups.parquet')
+
+query I
+SELECT a FROM dl.nested_groups ORDER BY a
+----
+[[1, 2], [3]]
+[[4]]
+
 # the element type still has to match
 statement ok
 CREATE TABLE dl.wrong_element (intArray VARCHAR[])

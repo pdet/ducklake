@@ -76,6 +76,8 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 struct ParquetColumn {
 	idx_t column_id;
 	string name;
+	//! The name in the Parquet schema, which the mapping can rename
+	string parquet_name;
 	string converted_type;
 	optional_idx field_id;
 	string logical_type;
@@ -325,6 +327,7 @@ FROM parquet_full_metadata(%s)
 
 			auto column = make_uniq<ParquetColumn>();
 			column->name = schema_entry.GetChildValue<0>().GetValue().GetString();
+			column->parquet_name = column->name;
 			column->converted_type = GetStringOrEmpty(schema_entry.GetChildValue<2>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<3>());
 			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<4>());
@@ -716,7 +719,8 @@ static void CollapseRepeatedGroup(unique_ptr<ParquetColumn> &element) {
 void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column) {
 	auto element = make_uniq<ParquetColumn>();
 	element->column_id = column.column_id;
-	element->name = column.name;
+	element->name = column.parquet_name;
+	element->parquet_name = column.parquet_name;
 	element->converted_type = column.converted_type;
 	element->field_id = column.field_id;
 	element->repeated = column.repeated;
@@ -771,7 +775,9 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		case LogicalTypeId::LIST:
 			if (wrapped || column.child_columns[0]->name == "array") {
 				// With legacy avro list layout, we just access directly
-				CollapseRepeatedGroup(column.child_columns[0]);
+				if (!wrapped) {
+					CollapseRepeatedGroup(column.child_columns[0]);
+				}
 				column.child_columns[0]->duckdb_type = ListType::GetChildType(column.duckdb_type);
 				map_entry->child_entries.push_back(
 				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix, true));
