@@ -862,10 +862,6 @@ Connection &DuckLakeTransaction::GetConnection() {
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
 			DuckLakeUtil::SetExtensionSetting(*connection->context, "pg_experimental_filter_pushdown",
 			                                  Value::BOOLEAN(false));
-		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
-			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
-			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
-			                                  Value::BOOLEAN(true));
 		}
 		BeginMetadataTransaction();
 	} else if (metadata_transaction_released) {
