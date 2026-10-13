@@ -94,12 +94,6 @@
       ]
     },
     {
-      "reason": "mode skip in the test itself",
-      "paths": [
-        "test/sql/general/prepared_statement.test"
-      ]
-    },
-    {
       "reason": "require spatial",
       "paths": [
         "test/sql/sorted_table/merge_adjacent_sorted_spatial_hilbert.test"
