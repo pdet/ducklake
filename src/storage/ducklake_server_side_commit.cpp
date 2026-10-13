@@ -741,7 +741,7 @@ bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_i
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
-	sql = DuckLakeUtil::ReplaceSkippingQuotes(
+	sql = DuckLakeUtil::ReplacePlaceholders(
 	    sql, {{"{METADATA_CATALOG}", schema_id},
 	          {"{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())"},
 	          {"{METADATA_SCHEMA_NAME_LITERAL}", SQLString::ToString(metadata_schema_name)}});

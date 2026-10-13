@@ -2793,12 +2793,12 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query, const
 	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
 
 	// placeholders are only replaced outside of literals, which can hold user values
-	query = DuckLakeUtil::ReplaceSkippingQuotes(query, {{"{METADATA_CATALOG_NAME_LITERAL}", catalog_literal},
-	                                                    {"{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier},
-	                                                    {"{METADATA_SCHEMA_NAME_LITERAL}", schema_literal},
-	                                                    {"{METADATA_CATALOG}", metadata_catalog},
-	                                                    {"{METADATA_PATH}", metadata_path},
-	                                                    {"{DATA_PATH}", data_path}});
+	query = DuckLakeUtil::ReplacePlaceholders(query, {{"{METADATA_CATALOG_NAME_LITERAL}", catalog_literal},
+	                                                  {"{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier},
+	                                                  {"{METADATA_SCHEMA_NAME_LITERAL}", schema_literal},
+	                                                  {"{METADATA_CATALOG}", metadata_catalog},
+	                                                  {"{METADATA_PATH}", metadata_path},
+	                                                  {"{DATA_PATH}", data_path}});
 }
 
 static vector<pair<string, string>> SnapshotReplacements(const DuckLakeSnapshot &snapshot) {
@@ -2809,7 +2809,7 @@ static vector<pair<string, string>> SnapshotReplacements(const DuckLakeSnapshot 
 }
 
 void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query) {
-	query = DuckLakeUtil::ReplaceSkippingQuotes(query, SnapshotReplacements(snapshot));
+	query = DuckLakeUtil::ReplacePlaceholders(query, SnapshotReplacements(snapshot));
 }
 
 void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
@@ -2818,7 +2818,7 @@ void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot
 	replacements.emplace_back("{AUTHOR}", commit_info.author.ToSQLString());
 	replacements.emplace_back("{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
 	replacements.emplace_back("{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
-	query = DuckLakeUtil::ReplaceSkippingQuotes(query, replacements);
+	query = DuckLakeUtil::ReplacePlaceholders(query, replacements);
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {

@@ -1,0 +1,29 @@
+# name: benchmark/micro/write/insert_inlined_large_batch.benchmark
+# description: Commit of 5000 inlined string rows in one transaction, so the metadata commit batch is large
+# group: [write]
+
+name Insert Inlined Large Batch
+group micro
+subgroup write
+
+require ducklake
+
+argument work commit_batch_work
+
+argument warm_table lake.main.ins_0
+
+include benchmark/micro/fixtures/commit.benchmark.in
+
+run
+BEGIN;
+CALL lake.set_option('data_inlining_row_limit', 10000, table_name => 'ins_0');
+INSERT INTO lake.main.ins_0 SELECT i, 'value ' || i || ' with ''quotes'' and {braces}' FROM range(5000) t(i);
+COMMIT;
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset doubles the rows, and a data file means the INSERT was not inlined
+result_query II
+SELECT (SELECT count(*) FROM lake.main.ins_0), (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+----
+5000	0
