@@ -690,8 +690,13 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 		return nullptr;
 	}
 	DuckLakeInsert::ResolveSortOrders(orders, table_index, plan.GetTypes());
+	bool volatile_keys = false;
 	for (auto &order : orders) {
-		sort_orders.push_back(order.Copy());
+		volatile_keys = volatile_keys || order.expression->IsVolatile();
+	}
+	// a copy evaluates its sort keys again, which a volatile key must not be
+	for (idx_t i = 0; i < orders.size() && !volatile_keys; i++) {
+		sort_orders.push_back(orders[i].Copy());
 	}
 
 	auto projection_map = PhysicalJoin::FillProjectionMap(plan, {});

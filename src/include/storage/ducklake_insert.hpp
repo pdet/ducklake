@@ -135,7 +135,7 @@ public:
 	                                                 idx_t data_inlining_row_limit);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
-	//! Points the column references of sort keys bound to the table index at the positions of the columns
+	//! Binds the column references of sort keys to the positions of the columns
 	static void ResolveSortOrders(vector<BoundOrderByNode> &orders, TableIndex table_index,
 	                              const vector<LogicalType> &types);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
