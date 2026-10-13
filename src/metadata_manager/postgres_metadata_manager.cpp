@@ -235,8 +235,7 @@ bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
 	// nested values are stored as text, which cannot hold a NUL byte
 	for (auto &column : chunk.data) {
 		auto &type = column.GetType();
-		if (DuckLakeTypes::IsNested(type) &&
-		    TypeVisitor::Contains(type, [](const LogicalType &t) { return t.id() == LogicalTypeId::VARCHAR; }) &&
+		if (DuckLakeTypes::IsNested(type) && TypeVisitor::Contains(type, LogicalTypeId::VARCHAR) &&
 		    ContainsNulByte(column, 0, chunk.size())) {
 			return false;
 		}
