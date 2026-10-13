@@ -213,6 +213,10 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
+	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
+		return true;
+	}
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {
