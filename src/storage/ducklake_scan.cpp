@@ -128,6 +128,12 @@ virtual_column_map_t DuckLakeVirtualColumns(ClientContext &context, optional_ptr
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
 	auto result = file_list.GetTable().GetVirtualColumns();
+	if (file_list.IsChangeScan()) {
+		result.insert(make_pair(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_CHANGE_SNAPSHOT_ID,
+		                        TableColumn("_ducklake_change_snapshot_id", LogicalType::BIGINT)));
+		result.insert(make_pair(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_CHANGE_ROW_ID,
+		                        TableColumn("_ducklake_change_rowid", LogicalType::BIGINT)));
+	}
 	bind_data.virtual_columns = result;
 	return result;
 }

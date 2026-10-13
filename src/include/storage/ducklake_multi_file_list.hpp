@@ -52,6 +52,8 @@ public:
 	//! Whether filters can prune files by their stats
 	bool SupportsFilterPushdown() const;
 	bool IsDeleteScan() const;
+	//! Whether this is a scan of the data change feed
+	bool IsChangeScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
 	static DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file);
 	static DuckLakeFileData GetDeleteData(const DuckLakeDeleteFile &delete_file);
