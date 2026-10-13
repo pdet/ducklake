@@ -508,6 +508,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		if (s_ele.logical_type ==
 		    "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIME;
+		} else if (s_ele.logical_type ==
+		           "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, NANOS=NanoSeconds()))") {
+			return LogicalType::TIME_NS;
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, "
 		                                 "MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIMESTAMP;
@@ -517,6 +520,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
 		                                 "NANOS=NanoSeconds()))") {
 			return LogicalType::TIMESTAMP_NS;
+		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
+		                                 "NANOS=NanoSeconds()))") {
+			return LogicalType::TIMESTAMP_TZ_NS;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
 			return LogicalType::TIMESTAMP_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimeType(isAdjustedToUTC=1")) {
@@ -525,8 +531,12 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
 			return LogicalType::SQLNULL;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry") ||
+		           StringUtil::StartsWith(s_ele.logical_type, "Geography")) {
 			return LogicalType::GEOMETRY();
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Float16Type()") &&
+		           s_ele.type == "FIXED_LEN_BYTE_ARRAY") {
+			return LogicalType::FLOAT;
 		}
 	}
 	if (!s_ele.converted_type.empty()) {
