@@ -859,6 +859,15 @@ WHERE {SNAPSHOT_ID} >= %s
 	                          col_names.end_snapshot);
 }
 
+string DuckLakeMetadataManager::GetStoredInlinedRowCountSql(const string &inlined_table_name,
+                                                            const DuckLakeInlinedColNames &col_names) {
+	return StringUtil::Format(R"(
+SELECT COUNT(*)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= %s)",
+	                          inlined_table_name, col_names.begin_snapshot);
+}
+
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
 	auto result = Query(snapshot, GetNetInlinedRowCountSql(inlined_table_name, InlinedColNames()));
 	CheckInlinedDataReadError(*result, inlined_table_name);
