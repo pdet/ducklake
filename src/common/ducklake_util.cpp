@@ -623,6 +623,9 @@ static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Valu
 	if (row_group_size_bytes == 0) {
 		throw NotImplementedException("Row group size bytes cannot be 0");
 	}
+	if (row_group_size_bytes == NumericLimits<idx_t>::Maximum()) {
+		throw InvalidInputException("Row group size bytes must be a finite size, not \"%s\"", val.ToString());
+	}
 	return to_string(row_group_size_bytes);
 }
 
