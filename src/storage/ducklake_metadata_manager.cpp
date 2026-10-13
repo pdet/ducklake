@@ -2542,7 +2542,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string data_file_source = "{METADATA_CATALOG}.ducklake_data_file data";
 	string delete_file_filter;
 	string file_filter_clause = " AND data.end_snapshot IS NULL";
-	string partition_value_filter;
+	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
 
 	map<idx_t, set<idx_t>> inlined_deletions;
 
@@ -5453,6 +5453,17 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 		                             snapshot.snapshot_id, snapshot.schema_version, table_id.index);
 	}
 	return result;
+}
+
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
+	auto result =
+	    Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE end_snapshot IS NULL");
+	result->ThrowIfError("Failed to get the tables with data files from DuckLake: ");
+	unordered_set<idx_t> table_ids;
+	for (auto &row : *result) {
+		table_ids.insert(row.GetValue<idx_t>(0));
+	}
+	return table_ids;
 }
 
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
