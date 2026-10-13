@@ -42,6 +42,33 @@ SELECT min(id), max(id), count(*) FROM lake.t
 ----
 51	69	19
 
+# live inlined rows next to a deleted one
+statement ok
+CREATE TABLE lake.m (id INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 100, table_name => 'm')
+
+statement ok
+INSERT INTO lake.m SELECT i FROM range(1, 201) t(i)
+
+statement ok
+INSERT INTO lake.m SELECT i FROM range(201, 251) t(i)
+
+statement ok
+DELETE FROM lake.m WHERE id IN (1, 250)
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'm', delete_threshold => 0.0)
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'm')
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.m
+----
+2	249	248
+
 # with only live inlined rows the rewrite still computes exact statistics
 statement ok
 CREATE TABLE lake.l (id INTEGER)
