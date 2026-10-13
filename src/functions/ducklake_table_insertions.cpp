@@ -38,7 +38,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto virtual_columns = table.GetVirtualColumns();
 	vector<Identifier> output_names {virtual_columns.at(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID).name,
 	                                 virtual_columns.at(COLUMN_IDENTIFIER_ROW_ID).name};
-	for (auto &column_name : function_info.column_names) {
+	for (const auto &column_name : function_info.column_names) {
 		output_names.emplace_back(column_name);
 	}
 	QueryResult::DeduplicateColumns(output_names);
