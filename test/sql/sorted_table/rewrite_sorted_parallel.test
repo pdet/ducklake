@@ -40,8 +40,10 @@ CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
 statement ok
 CREATE TEMPORARY TABLE rewritten AS
 SELECT filename, file_row_number, k
-FROM read_parquet('{DATA_PATH}/rewrite_sorted_parallel/**/*.parquet', filename => true, file_row_number => true)
-WHERE filename IN (SELECT data_file FROM ducklake_list_files('ducklake', 't'))
+FROM read_parquet('{DATA_PATH}/rewrite_sorted_parallel/**/*.parquet', filename => true, file_row_number => true,
+	union_by_name => true)
+WHERE regexp_replace(filename, '\\', '/', 'g') IN (
+	SELECT regexp_replace(data_file, '\\', '/', 'g') FROM ducklake_list_files('ducklake', 't'))
 
 query II
 SELECT count(*), count(DISTINCT filename) FROM rewritten
