@@ -1098,7 +1098,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-	col.SetType(new_field_id->Type());
+	// the field id type keeps the field order of the catalog but drops collations
+	col.SetType(info.target_type.IsNested() ? new_field_id->Type() : info.target_type);
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
 		col.SetDefaultValue(std::move(new_default));
