@@ -104,9 +104,10 @@ OperatorResultType DuckLakeInlineData::Execute(ExecutionContext &context, DataCh
 	// we have a new batch of rows
 	// add the count to the global count and check if we are still inlining rows
 	auto &metadata_manager = DuckLakeTransaction::Get(context.client, catalog).GetMetadataManager();
-	auto new_phase = gstate.AddRows(state, input.size(), metadata_manager.CanInlineValues(input));
+	// a chunk over the limit is not inlined, so its values need no check
+	bool can_inline = input.size() > inline_row_limit || metadata_manager.CanInlineValues(input);
+	auto new_phase = gstate.AddRows(state, input.size(), can_inline);
 	if (new_phase != InlinePhase::INLINING_ROWS) {
-		// we stopped inlining, start emitting rows from the `inlined_data` if we have it
 		if (state.inlined_data) {
 			// start a scan
 			state.inlined_data->InitializeScan(state.emit_scan);

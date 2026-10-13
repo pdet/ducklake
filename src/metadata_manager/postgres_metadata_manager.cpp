@@ -6,6 +6,7 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "common/ducklake_types.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 
@@ -194,69 +195,49 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
-static bool ContainsNulByte(Vector &vector, const SelectionVector &sel, idx_t count) {
-	auto &type = vector.GetType();
-	if (type.id() == LogicalTypeId::VARCHAR) {
-		UnifiedVectorFormat format;
-		vector.ToUnifiedFormat(format);
-		auto strings = UnifiedVectorFormat::GetData<string_t>(format);
-		for (idx_t i = 0; i < count; i++) {
-			auto idx = format.sel->get_index(sel.get_index(i));
-			if (format.validity.RowIsValid(idx) && memchr(strings[idx].GetData(), '\0', strings[idx].GetSize())) {
-				return true;
-			}
-		}
-		return false;
-	}
-	if (type.id() != LogicalTypeId::STRUCT && type.id() != LogicalTypeId::LIST && type.id() != LogicalTypeId::MAP) {
-		return false;
-	}
+static bool ContainsNulByte(Vector &vector, idx_t offset, idx_t count) {
 	vector.Flatten();
-	UnifiedVectorFormat format;
-	vector.ToUnifiedFormat(format);
-	if (type.id() == LogicalTypeId::STRUCT) {
-		SelectionVector valid_sel(count);
-		idx_t valid_count = 0;
-		for (idx_t i = 0; i < count; i++) {
-			if (format.validity.RowIsValid(sel.get_index(i))) {
-				valid_sel.set_index(valid_count++, sel.get_index(i));
-			}
-		}
-		for (auto &child : StructVector::GetEntries(vector)) {
-			if (ContainsNulByte(child, valid_sel, valid_count)) {
+	auto &validity = FlatVector::Validity(vector);
+	switch (vector.GetType().id()) {
+	case LogicalTypeId::VARCHAR: {
+		auto strings = FlatVector::GetData<string_t>(vector);
+		for (idx_t i = offset; i < offset + count; i++) {
+			if (validity.RowIsValid(i) && memchr(strings[i].GetData(), '\0', strings[i].GetSize())) {
 				return true;
 			}
 		}
 		return false;
 	}
-	// only the child rows that a list refers to
-	auto entries = UnifiedVectorFormat::GetData<list_entry_t>(format);
-	idx_t child_count = 0;
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		if (format.validity.RowIsValid(idx)) {
-			child_count += entries[idx].length;
+	case LogicalTypeId::STRUCT:
+		for (auto &child : StructVector::GetEntries(vector)) {
+			if (ContainsNulByte(child, offset, count)) {
+				return true;
+			}
 		}
+		return false;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP: {
+		auto entries = FlatVector::GetData<list_entry_t>(vector);
+		auto &child = ListVector::GetChildMutable(vector);
+		for (idx_t i = offset; i < offset + count; i++) {
+			if (validity.RowIsValid(i) && ContainsNulByte(child, entries[i].offset, entries[i].length)) {
+				return true;
+			}
+		}
+		return false;
 	}
-	SelectionVector child_sel(child_count);
-	idx_t child_idx = 0;
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		if (!format.validity.RowIsValid(idx)) {
-			continue;
-		}
-		for (idx_t k = 0; k < entries[idx].length; k++) {
-			child_sel.set_index(child_idx++, entries[idx].offset + k);
-		}
+	default:
+		return false;
 	}
-	return ContainsNulByte(ListVector::GetChildMutable(vector), child_sel, child_count);
 }
 
 bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
 	// nested values are stored as text, which cannot hold a NUL byte
 	for (auto &column : chunk.data) {
-		if (DuckLakeTypes::IsNested(column.GetType()) &&
-		    ContainsNulByte(column, *FlatVector::IncrementalSelectionVector(), chunk.size())) {
+		auto &type = column.GetType();
+		if (DuckLakeTypes::IsNested(type) &&
+		    TypeVisitor::Contains(type, [](const LogicalType &t) { return t.id() == LogicalTypeId::VARCHAR; }) &&
+		    ContainsNulByte(column, 0, chunk.size())) {
 			return false;
 		}
 	}
