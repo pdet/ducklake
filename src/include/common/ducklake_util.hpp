@@ -70,6 +70,8 @@ public:
 	//! Replace occurrences of `from` with `to`, skipping content inside
 	//! single-quoted string literals and double-quoted identifiers.
 	static string ReplaceSkippingQuotes(const string &sql, const string &from, const string &to);
+	//! Replace each `first` with its `second` in a single pass, skipping quoted content as above
+	static string ReplaceSkippingQuotes(const string &sql, const vector<pair<string, string>> &replacements);
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns);
