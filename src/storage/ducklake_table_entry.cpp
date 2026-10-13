@@ -1031,8 +1031,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	}
 	auto &source_type = source_id.Type();
 	if (source_type == target) {
-		// type is unchanged - return field id directly
-		return source_id.Copy();
+		// equal types can still differ in their collation
+		return make_uniq<DuckLakeFieldId>(source_id.GetColumnData().Copy(), source_id.Name(), target);
 	}
 	// primitive type promotion
 	// only widening type promotions are allowed
@@ -1098,8 +1098,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-	// the field id type keeps the field order of the catalog but drops collations
-	col.SetType(info.target_type.IsNested() ? new_field_id->Type() : info.target_type);
+	col.SetType(new_field_id->Type());
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
 		col.SetDefaultValue(std::move(new_default));
