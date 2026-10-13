@@ -1,4 +1,5 @@
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_inline_data.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -302,10 +303,10 @@ void LocalTableChanges::AddNewInlinedDeletes(TableIndex table_id, const string &
 	}
 }
 
-void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, TableIndex table_id,
+void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, DuckLakeTableEntry &table,
                                                    set<idx_t> new_deletes) {
 	lock_guard<mutex> guard(lock);
-	auto table_changes = Find(table_id);
+	auto table_changes = Find(table.GetTableId());
 	if (!table_changes) {
 		throw InternalException("DeleteFromLocalInlinedData called but no transaction-local data exists for table");
 	}
@@ -343,6 +344,25 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, Table
 	// override the existing collection and row_ids
 	inlined_data.data = std::move(new_data);
 	inlined_data.row_ids = std::move(new_row_ids);
+	inlined_data.outdated_stats_table = table;
+}
+
+void LocalTableChanges::SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table) {
+	lock_guard<mutex> guard(lock);
+	auto table_changes = Find(table_id);
+	if (table_changes && table_changes->new_inlined_data && table_changes->new_inlined_data->outdated_stats_table) {
+		table_changes->new_inlined_data->outdated_stats_table = table;
+	}
+}
+
+void LocalTableChanges::RecomputeOutdatedStats() {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		auto &inlined_data = entry.second.new_inlined_data;
+		if (inlined_data && inlined_data->outdated_stats_table) {
+			DuckLakeInlineData::RecomputeColumnStats(*inlined_data->outdated_stats_table, *inlined_data);
+		}
+	}
 }
 
 static void RemoveFieldStats(map<FieldIndex, DuckLakeColumnStats> &column_stats, const DuckLakeFieldId &field_id) {
@@ -1371,6 +1391,7 @@ void DuckLakeTransaction::FlushChanges() {
 	if (!ChangesMade()) {
 		return;
 	}
+	state->local_changes.RecomputeOutdatedStats();
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
@@ -1781,9 +1802,9 @@ void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string
 	state->local_changes.AddNewInlinedDeletes(table_id, table_name, std::move(new_deletes));
 }
 
-void DuckLakeTransaction::DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes) {
+void DuckLakeTransaction::DeleteFromLocalInlinedData(DuckLakeTableEntry &table, set<idx_t> new_deletes) {
 	auto context_ref = context.lock();
-	state->local_changes.DeleteFromLocalInlinedData(*context_ref, table_id, std::move(new_deletes));
+	state->local_changes.DeleteFromLocalInlinedData(*context_ref, table, std::move(new_deletes));
 }
 
 void DuckLakeTransaction::AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
@@ -2114,6 +2135,7 @@ static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
+	state->local_changes.SetOutdatedStatsTable(table.GetTableId(), new_table);
 	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_table.GetLocalChange().type) {
