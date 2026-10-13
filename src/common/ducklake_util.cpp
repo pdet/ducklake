@@ -556,6 +556,11 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		auto setting_index = option.setting_index.GetIndex();
+		// these change the types read from the metadata and data files
+		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
+			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
+			continue;
+		}
 		if (!from.config.user_settings.IsSet(setting_index)) {
 			continue;
 		}
