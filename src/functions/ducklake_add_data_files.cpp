@@ -534,8 +534,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
 			return LogicalType::SQLNULL;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry") ||
-		           StringUtil::StartsWith(s_ele.logical_type, "Geography")) {
+		} else if ((StringUtil::StartsWith(s_ele.logical_type, "Geometry") ||
+		            StringUtil::StartsWith(s_ele.logical_type, "Geography")) &&
+		           s_ele.type == "BYTE_ARRAY") {
 			return LogicalType::GEOMETRY();
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "Float16Type()") &&
 		           s_ele.type == "FIXED_LEN_BYTE_ARRAY" && s_ele.type_length.IsValid() &&

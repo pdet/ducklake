@@ -108,3 +108,12 @@ statement error
 CALL ducklake_add_data_files('dl', 'float16_one_byte', 'data/parquet/float16_one_byte.parquet')
 ----
 found type BLOB
+
+# a GEOGRAPHY annotation on a column that is not BYTE_ARRAY is not read as GEOMETRY
+statement ok
+CREATE TABLE dl.geography_float (g GEOMETRY)
+
+statement error
+CALL ducklake_add_data_files('dl', 'geography_float', 'data/parquet/geography_float.parquet')
+----
+Expected type "GEOMETRY" but found type "FLOAT"
