@@ -42,6 +42,17 @@ SELECT min(c), max(c) FROM lake.t
 ----
 1970-01-01 00:00:00+00	infinity
 
+# the null count stays known
+query II
+SELECT (stats(c)).has_null, (stats(c)).has_no_null FROM lake.t LIMIT 1
+----
+false	true
+
+query II
+EXPLAIN SELECT count(*) FROM lake.t WHERE c IS NULL
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
 statement ok
 CREATE TABLE lake.n (c TIMESTAMP)
 
