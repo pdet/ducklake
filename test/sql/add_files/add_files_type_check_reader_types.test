@@ -110,3 +110,12 @@ statement error
 CALL ducklake_add_data_files('dl', 'geometry_float', 'data/parquet/geometry_float.parquet')
 ----
 Expected type "GEOMETRY" but found type "FLOAT"
+
+# the statistics of GEOGRAPHY columns carry no geometry types
+statement ok
+CREATE TABLE dl.geography (g GEOMETRY)
+
+statement error
+CALL ducklake_add_data_files('dl', 'geography', 'data/parquet/geography.parquet')
+----
+found a GEOGRAPHY column
