@@ -99,3 +99,12 @@ statement error
 CALL ducklake_add_data_files('dl', 'tstz_ns_as_tstz', '{DATA_PATH}/reader_types_tstz_ns.parquet')
 ----
 found type TIMESTAMPTZ_NS
+
+# a FLOAT16 annotation on a column that is not two bytes wide is read as BLOB
+statement ok
+CREATE TABLE dl.float16_one_byte (f FLOAT)
+
+statement error
+CALL ducklake_add_data_files('dl', 'float16_one_byte', 'data/parquet/float16_one_byte.parquet')
+----
+found type BLOB
