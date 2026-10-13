@@ -334,7 +334,7 @@ FROM parquet_full_metadata(%s)
 			column->repeated = GetStringOrEmpty(schema_entry.GetChildValue<5>()) == "REPEATED";
 			auto duckdb_type = GetStringOrEmpty(schema_entry.GetChildValue<6>());
 			if (!duckdb_type.empty()) {
-				column->duckdb_type = DuckLakeTypes::FromDuckDBString(duckdb_type);
+				column->duckdb_type = DuckLakeTypes::FromDuckDBString(duckdb_type, context);
 			}
 
 			if (child_count == 0) {
@@ -634,17 +634,19 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	}
 
 	if (type.id() == LogicalTypeId::GEOMETRY) {
-		if (source_type.id() != LogicalTypeId::GEOMETRY) {
-			failures.push_back(StringUtil::Format(
-			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
-			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
-			    source_type));
-			Fail();
-		}
 		if (StringUtil::StartsWith(column.logical_type, "Geography")) {
 			// files of GEOGRAPHY columns carry no geometry types, which DuckLake would read as no geometries
 			failures.push_back("Expected type \"GEOMETRY\" but found a GEOGRAPHY column, which DuckLake does not "
 			                   "support yet");
+			Fail();
+		}
+		// the reader also reads the BLOB columns of GeoParquet v1 files as GEOMETRY
+		if (source_type.id() != LogicalTypeId::GEOMETRY || !StringUtil::StartsWith(column.logical_type, "Geometry")) {
+			auto found_type = source_type.id() == LogicalTypeId::GEOMETRY ? LogicalType::BLOB : source_type;
+			failures.push_back(StringUtil::Format(
+			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
+			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
+			    found_type));
 			Fail();
 		}
 		return;

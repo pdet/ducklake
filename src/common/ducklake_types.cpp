@@ -88,14 +88,22 @@ bool DuckLakeTypes::IsNested(const LogicalType &type) {
 	return type.IsNested() && type.id() != LogicalTypeId::VARIANT;
 }
 
-LogicalType DuckLakeTypes::FromDuckDBString(const string &type) {
-	return TypeVisitor::VisitReplace(UnboundType::TryParseAndDefaultBind(type), [](const LogicalType &child) {
+static LogicalType BindDuckLakeTypes(const LogicalType &type) {
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &child) {
 		if (child.id() != LogicalTypeId::UNBOUND) {
 			return child;
 		}
 		auto &type_expr = UnboundType::GetTypeExpression(child)->Cast<TypeExpression>();
 		return DuckLakeTypes::FromString(type_expr.GetTypeName().GetIdentifierName());
 	});
+}
+
+LogicalType DuckLakeTypes::FromDuckDBString(const string &type) {
+	return BindDuckLakeTypes(UnboundType::TryParseAndDefaultBind(type));
+}
+
+LogicalType DuckLakeTypes::FromDuckDBString(const string &type, ClientContext &context) {
+	return BindDuckLakeTypes(TransformStringToLogicalType(type, context));
 }
 
 LogicalType DuckLakeTypes::FromString(const string &type) {
