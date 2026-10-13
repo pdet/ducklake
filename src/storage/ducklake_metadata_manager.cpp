@@ -111,6 +111,10 @@ bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
 	return true;
 }
 
+bool DuckLakeMetadataManager::CanInlineValues(DataChunk &chunk) {
+	return true;
+}
+
 bool DuckLakeInlinedColNames::ConflictsWith(const string &name) const {
 	return StringUtil::CIEquals(name, row_id) || StringUtil::CIEquals(name, begin_snapshot) ||
 	       StringUtil::CIEquals(name, end_snapshot) || StringUtil::CIEquals(name, "_ducklake_internal_snapshot_id") ||

@@ -21,6 +21,7 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
+	bool CanInlineValues(DataChunk &chunk) override;
 	bool SupportsAppender() const override {
 		return false;
 	}

@@ -6,6 +6,8 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "common/ducklake_types.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 
 namespace duckdb {
 
@@ -190,6 +192,47 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	default:
 		return true;
 	}
+}
+
+static bool ContainsNulByte(Vector &vector, idx_t count) {
+	switch (vector.GetType().id()) {
+	case LogicalTypeId::VARCHAR: {
+		UnifiedVectorFormat format;
+		vector.ToUnifiedFormat(format);
+		auto strings = UnifiedVectorFormat::GetData<string_t>(format);
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = format.sel->get_index(i);
+			if (format.validity.RowIsValid(idx) && memchr(strings[idx].GetData(), '\0', strings[idx].GetSize())) {
+				return true;
+			}
+		}
+		return false;
+	}
+	case LogicalTypeId::STRUCT:
+		vector.Flatten();
+		for (auto &child : StructVector::GetEntries(vector)) {
+			if (ContainsNulByte(child, count)) {
+				return true;
+			}
+		}
+		return false;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		vector.Flatten();
+		return ContainsNulByte(ListVector::GetChildMutable(vector), ListVector::GetListSize(vector));
+	default:
+		return false;
+	}
+}
+
+bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
+	// nested values are stored as text, which cannot hold a NUL byte
+	for (auto &column : chunk.data) {
+		if (DuckLakeTypes::IsNested(column.GetType()) && ContainsNulByte(column, chunk.size())) {
+			return false;
+		}
+	}
+	return true;
 }
 
 string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {

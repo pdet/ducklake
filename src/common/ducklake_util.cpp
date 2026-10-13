@@ -190,7 +190,6 @@ string ToByteaHexLiteral(const string &raw_bytes) {
 }
 
 string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
-	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToString();
 	}
