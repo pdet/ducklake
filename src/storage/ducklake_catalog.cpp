@@ -1286,9 +1286,9 @@ idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, const Identifier
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	auto obstacle = transaction.GetMetadataManager().GetInliningObstacle(columns);
 	if (!obstacle.empty()) {
-		DUCKDB_LOG_WARNING(context, StringUtil::Format("DuckLake writes the rows of table \"%s\" to files instead of "
-		                                               "inlining them, because %s",
-		                                               table_name.GetIdentifierName(), obstacle));
+		DUCKDB_LOG_WARNING(context,
+		                   "DuckLake writes the rows of table %s to files instead of inlining them, because %s",
+		                   table_name, obstacle);
 		return 0;
 	}
 	return limit;

@@ -140,7 +140,7 @@ bool DuckLakeMetadataManager::InlinedTableFits(idx_t column_count) const {
 
 string DuckLakeMetadataManager::GetInliningObstacle(const ColumnList &columns) {
 	if (!InlinedTableFits(columns.LogicalColumnCount())) {
-		return StringUtil::Format("it has more columns than an inlined data table can hold");
+		return "it has more columns than an inlined data table can hold";
 	}
 	for (auto &col : columns.Logical()) {
 		auto obstacle = GetInliningObstacle(col.Name().GetIdentifierName(), col.Type());
@@ -149,10 +149,6 @@ string DuckLakeMetadataManager::GetInliningObstacle(const ColumnList &columns) {
 		}
 	}
 	return string();
-}
-
-bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
-	return GetInliningObstacle(columns).empty();
 }
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {

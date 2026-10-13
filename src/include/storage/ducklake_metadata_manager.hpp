@@ -254,8 +254,6 @@ public:
 		return NumericLimits<idx_t>::Maximum();
 	}
 
-	//! Check whether a table with the given columns can be inlined
-	bool CanInlineColumns(const ColumnList &columns);
 	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
 	string GetInliningObstacle(const ColumnList &columns);
 	//! Whether the inlined data table of a table with this many columns fits the backend
