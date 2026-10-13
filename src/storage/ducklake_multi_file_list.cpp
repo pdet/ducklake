@@ -720,10 +720,6 @@ bool DuckLakeMultiFileList::IsDeleteScan() const {
 	return read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS;
 }
 
-bool DuckLakeMultiFileList::IsChangeScan() const {
-	return read_info.scan_type == DuckLakeScanType::SCAN_INSERTIONS || IsDeleteScan();
-}
-
 const DuckLakeDeleteScanEntry &DuckLakeMultiFileList::GetDeleteScanEntry(idx_t file_idx) {
 	return delete_scans[file_idx];
 }

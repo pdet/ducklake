@@ -276,7 +276,7 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 	optional_idx deletion_scan_file_row_number_col;
 	if (file_list.Cast<DuckLakeMultiFileList>().IsDeleteScan()) {
 		for (idx_t out_idx = 0; out_idx < global_column_ids.size(); out_idx++) {
-			if (ResolveVirtualColumn(global_column_ids[out_idx].GetPrimaryIndex()) == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+			if (global_column_ids[out_idx].GetPrimaryIndex() == COLUMN_IDENTIFIER_SNAPSHOT_ID) {
 				deletion_scan_snapshot_col = out_idx;
 				deletion_scan_file_row_number_col = global_column_ids.size();
 			}
@@ -593,21 +593,9 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 	                                      multi_file_list, bind_data, virtual_columns);
 }
 
-column_t DuckLakeMultiFileReader::ResolveVirtualColumn(column_t column_id) {
-	switch (column_id) {
-	case COLUMN_IDENTIFIER_CHANGE_SNAPSHOT_ID:
-		return COLUMN_IDENTIFIER_SNAPSHOT_ID;
-	case COLUMN_IDENTIFIER_CHANGE_ROW_ID:
-		return COLUMN_IDENTIFIER_ROW_ID;
-	default:
-		return column_id;
-	}
-}
-
 MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExpression(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
-    const idx_t column_id_p, const LogicalType &type, MultiFileLocalIndex local_idx) {
-	auto column_id = ResolveVirtualColumn(column_id_p);
+    const idx_t column_id, const LogicalType &type, MultiFileLocalIndex local_idx) {
 	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file

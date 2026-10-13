@@ -58,9 +58,26 @@ SELECT * FROM ducklake_table_changes('lake', 'main', 'u', 5, 7) ORDER BY ALL
 7	1	update_postimage	0	20
 7	1	update_preimage	0	2
 
-# the change columns are also available on the insertions and deletions
-query III
-SELECT _ducklake_change_snapshot_id, _ducklake_change_rowid, v FROM ducklake_table_deletions('lake', 'main', 'u', 5, 7) ORDER BY ALL
+# the insertions and deletions show the column of the table under another name
+query IIII
+SELECT snapshot_id, rowid, snapshot_id_1, v FROM ducklake_table_deletions('lake', 'main', 'u', 5, 7) ORDER BY ALL
 ----
-6	0	1
-7	1	2
+6	0	0	1
+7	1	0	2
+
+statement ok
+CREATE TABLE lake.w (rowid_1 INTEGER, rowid BIGINT, v INTEGER);
+
+statement ok
+INSERT INTO lake.w VALUES (7, 0, 1), (8, 0, 2);
+
+statement ok
+UPDATE lake.w SET v = v + 10;
+
+query IIIIII
+SELECT * FROM ducklake_table_changes('lake', 'main', 'w', 10, 10) ORDER BY ALL
+----
+10	0	update_postimage	7	0	11
+10	0	update_preimage	7	0	1
+10	1	update_postimage	8	0	12
+10	1	update_preimage	8	0	2

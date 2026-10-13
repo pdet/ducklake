@@ -37,11 +37,6 @@ struct DuckLakeMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
 struct DuckLakeMultiFileReader : public MultiFileReader {
 public:
 	static constexpr column_t COLUMN_IDENTIFIER_SNAPSHOT_ID = UINT64_C(10000000000000000000);
-	//! The snapshot id and row id of the data change feed, under names no column of a table can have
-	static constexpr column_t COLUMN_IDENTIFIER_CHANGE_SNAPSHOT_ID = UINT64_C(10000000000000000001);
-	static constexpr column_t COLUMN_IDENTIFIER_CHANGE_ROW_ID = UINT64_C(10000000000000000002);
-	//! The virtual column an alias of the data change feed reads
-	static column_t ResolveVirtualColumn(column_t column_id);
 
 public:
 	explicit DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info);
