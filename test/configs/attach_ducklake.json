@@ -826,7 +826,7 @@
       ]
     },
     {
-      "reason": "DuckLake keeps no min/max statistics for UHUGEINT columns, so stats() has no bounds for them.",
+      "reason": "DuckLake does not give the optimizer the min/max statistics of UHUGEINT columns, so stats() has no bounds for them.",
       "paths": [
         "test/sql/optimizer/unsigned_divide_statistics.test"
       ]
