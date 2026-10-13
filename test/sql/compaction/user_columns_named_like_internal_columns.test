@@ -52,7 +52,7 @@ SELECT id, _ducklake_internal_row_id FROM lake.t ORDER BY id
 8	1008
 9	1009
 
-# merging files writes snapshot ids, and a column with the first fallback name
+# merging files writes snapshot ids, and the name of the internal row id skips a suffix that a column has
 statement ok
 CREATE TABLE lake.s (id INTEGER, _ducklake_internal_snapshot_id BIGINT, _ducklake_internal_row_id BIGINT, _ducklake_internal_row_id_1 BIGINT)
 
@@ -91,3 +91,24 @@ query IIII
 SELECT * FROM lake.s
 ----
 1	100	10	11
+
+# names differ from internal ones only in case
+statement ok
+CREATE TABLE lake.u (id INTEGER, "_DuckLake_Internal_Row_Id" BIGINT)
+
+statement ok
+INSERT INTO lake.u SELECT i, i FROM range(10) r(i)
+
+statement ok
+DELETE FROM lake.u WHERE id < 5
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'u', delete_threshold => 0.1)
+
+statement ok
+DELETE FROM lake.u WHERE id = 5
+
+query II
+SELECT count(*), sum("_DuckLake_Internal_Row_Id") FROM lake.u
+----
+4	30

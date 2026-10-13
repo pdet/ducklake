@@ -379,8 +379,8 @@ static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
 
 string DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const string &name) {
 	vector<string> names;
-	for (idx_t c_idx = 0; c_idx < field_data.GetColumnCount(); c_idx++) {
-		names.push_back(field_data.GetByRootIndex(PhysicalIndex(c_idx)).Name());
+	for (auto &field_id : field_data.GetFieldIds()) {
+		names.push_back(field_id->Name());
 	}
 	// the reader finds internal columns by field id, so their name in the file only has to be unique
 	names.push_back(name);

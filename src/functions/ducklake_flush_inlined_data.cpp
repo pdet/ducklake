@@ -115,7 +115,7 @@ static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadat
 }
 
 //! Partitioned writes can reorder rows, so positions come from the written file
-static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, DuckLakeTableEntry &table,
+static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, const DuckLakeTableEntry &table,
                                                        const DuckLakeDataFile &file, const string &encryption_key,
                                                        const DeletedRowVersions &deleted_rows) {
 	DuckLakeFileData file_data;
