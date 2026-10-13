@@ -1312,7 +1312,7 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 	for (idx_t batch_start = 0; batch_start < table_checks.size() && !columns.empty();
 	     batch_start += TABLES_PER_QUERY) {
 		vector<DuckLakeInlinedValueCheck> checks;
-		auto batch_end = MinValue(batch_start + TABLES_PER_QUERY, table_checks.size());
+		auto batch_end = MinValue<idx_t>(batch_start + TABLES_PER_QUERY, table_checks.size());
 		for (idx_t table_idx = batch_start; table_idx < batch_end; table_idx++) {
 			for (auto &check : table_checks[table_idx]) {
 				if (columns.count(check.column_id)) {
