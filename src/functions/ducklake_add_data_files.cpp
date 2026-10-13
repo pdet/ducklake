@@ -78,6 +78,7 @@ struct ParquetColumn {
 	string name;
 	string converted_type;
 	optional_idx field_id;
+	string logical_type;
 	bool repeated = false;
 	//! The type that the Parquet reader reads the column as
 	LogicalType duckdb_type;
@@ -250,6 +251,7 @@ SELECT
         num_children := x.num_children,
         converted_type := x.converted_type,
         field_id := x.field_id,
+        logical_type := x.logical_type,
         repetition_type := x.repetition_type,
         duckdb_type := x.duckdb_type
     )) AS parquet_schema
@@ -262,7 +264,7 @@ FROM parquet_full_metadata(%s)
 	using ParquetBBoxRow = VectorStructType<double, double, double, double, double, double, double, double>;
 	using ParquetStatsRow = VectorStructType<int64_t, string_t, string_t, int64_t, int64_t, int64_t, ParquetBBoxRow,
 	                                         VectorListType<string_t>, bool, bool>;
-	using ParquetSchemaRow = VectorStructType<string_t, int64_t, string_t, int64_t, string_t, string_t>;
+	using ParquetSchemaRow = VectorStructType<string_t, int64_t, string_t, int64_t, string_t, string_t, string_t>;
 	for (auto &row : *result) {
 		auto &chunk = row.GetChunk();
 		auto row_idx = row.GetRowInChunk();
@@ -328,8 +330,9 @@ FROM parquet_full_metadata(%s)
 			column->name = schema_entry.GetChildValue<0>().GetValue().GetString();
 			column->converted_type = GetStringOrEmpty(schema_entry.GetChildValue<2>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<3>());
-			column->repeated = GetStringOrEmpty(schema_entry.GetChildValue<4>()) == "REPEATED";
-			auto duckdb_type = GetStringOrEmpty(schema_entry.GetChildValue<5>());
+			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<4>());
+			column->repeated = GetStringOrEmpty(schema_entry.GetChildValue<5>()) == "REPEATED";
+			auto duckdb_type = GetStringOrEmpty(schema_entry.GetChildValue<6>());
 			if (!duckdb_type.empty()) {
 				column->duckdb_type = DuckLakeTypes::FromDuckDBString(duckdb_type);
 			}
@@ -472,6 +475,7 @@ private:
 	void CheckUnsignedInteger();
 	void CheckFloatingPoints();
 	void CheckTimestamp();
+	void CheckTimestampWithTimeZone();
 	void CheckDecimal();
 
 	//! Called when a check fails
@@ -596,6 +600,12 @@ void DuckLakeParquetTypeChecker::CheckTimestamp() {
 	}
 }
 
+void DuckLakeParquetTypeChecker::CheckTimestampWithTimeZone() {
+	if (!CheckTypes({LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS})) {
+		Fail();
+	}
+}
+
 void DuckLakeParquetTypeChecker::CheckDecimal() {
 	if (source_type.id() != LogicalTypeId::DECIMAL) {
 		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" but found type \"%s\"", source_type));
@@ -629,6 +639,12 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 			    "Expected type \"GEOMETRY\" but found type \"%s\". Is this a GeoParquet v1.*.* file? DuckLake only "
 			    "supports GEOMETRY types stored in native Parquet(V3) format, not GeoParquet(v1.*.*)",
 			    source_type));
+			Fail();
+		}
+		if (StringUtil::StartsWith(column.logical_type, "Geography")) {
+			// files of GEOGRAPHY columns carry no geometry types, which DuckLake would read as no geometries
+			failures.push_back("Expected type \"GEOMETRY\" but found a GEOGRAPHY column, which DuckLake does not "
+			                   "support yet");
 			Fail();
 		}
 		return;
@@ -666,6 +682,9 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::TIMESTAMP_NS:
 		CheckTimestamp();
 		break;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		CheckTimestampWithTimeZone();
+		break;
 	case LogicalTypeId::DECIMAL:
 		CheckDecimal();
 		break;
@@ -674,7 +693,6 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
 	default:
 		// by default just verify that the type matches exactly
 		if (!CheckType(type)) {
