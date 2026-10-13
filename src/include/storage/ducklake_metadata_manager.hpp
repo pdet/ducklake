@@ -46,6 +46,16 @@ struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
+//! A check whether the live rows of an inlined data table hold a value of a column
+struct DuckLakeInlinedValueCheck {
+	string table_name;
+	//! The rows up to this snapshot are flushed by the commit
+	idx_t flushed_up_to;
+	FieldIndex column_id;
+	//! The name of the column in the inlined data table, empty when any live row counts as a value
+	string column_name;
+};
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -456,6 +466,17 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
+	//! Selects the given columns that a live data file of the table records values of, or holds the default of
+	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the given columns that may hold values other than NULL in a live data file of the table
+	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                          const map<FieldIndex, idx_t> &null_default_columns);
+	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
+	//! whether they are top level columns
+	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
+	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
+	                                  const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids);

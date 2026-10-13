@@ -1406,6 +1406,14 @@ void DuckLakeTransaction::FlushChanges() {
 	state->local_changes.RecomputeOutdatedStats(*context.lock());
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
+	// deleted rows may be the values a commit found, also a concurrent one
+	auto forget_columns_with_values = [&]() {
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_from);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_inlined);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.altered_tables);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.dropped_tables);
+	};
+	forget_columns_with_values();
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
 		lock_guard<mutex> guard(snapshot_lock);
 		auto transaction_snapshot = snapshot ? *snapshot : DuckLakeSnapshot();
@@ -1418,6 +1426,7 @@ void DuckLakeTransaction::FlushChanges() {
 			RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		}
 	}
+	forget_columns_with_values();
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
@@ -1544,6 +1553,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
 	};
+	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);
+	};
+	context.set_column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		ducklake_catalog.SetColumnHoldsValues(table_id, column_id, snapshot_id);
+	};
 	auto get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
 		if (!entry) {
@@ -1607,6 +1622,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
+		ducklake_catalog.AdvanceColumnsWithValues(snapshot_id);
 	};
 	context.set_entry_oids = [&](const ducklake_entry_oids_t &oids) {
 		ducklake_catalog.SetEntryOids(oids);

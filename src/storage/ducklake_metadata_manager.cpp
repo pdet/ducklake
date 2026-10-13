@@ -4292,6 +4292,87 @@ string DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(const string &metadat
 	    metadata_table_name, id_name, GenerateIDList(ids));
 }
 
+string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table_id,
+                                                                const set<FieldIndex> &column_ids) {
+	// a live file written before a column with a default other than NULL holds the default
+	auto ids = GenerateIDList(column_ids);
+	auto sql = StringUtil::Format(R"(
+SELECT s.column_id
+FROM {METADATA_CATALOG}.ducklake_file_column_stats s
+JOIN {METADATA_CATALOG}.ducklake_data_file f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
+WHERE s.table_id = %d AND s.column_id IN (%s) AND (s.value_count IS NULL OR s.value_count > 0)
+UNION ALL
+SELECT c.column_id
+FROM {METADATA_CATALOG}.ducklake_column c
+JOIN {METADATA_CATALOG}.ducklake_data_file f
+    ON f.table_id = c.table_id AND f.end_snapshot IS NULL
+    AND COALESCE(f.partial_max, f.begin_snapshot) < c.begin_snapshot
+WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)",
+	                              table_id.index, ids, table_id.index, ids);
+	if (column_ids.size() == 1) {
+		return sql + "\nLIMIT 1";
+	}
+	return "SELECT DISTINCT column_id FROM (" + sql + ")";
+}
+
+string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+                                                            const map<FieldIndex, idx_t> &null_default_columns) {
+	// a file without statistics of a column holds values of it unless it was written before a NULL default column
+	vector<string> column_values;
+	for (auto &column_id : column_ids) {
+		auto added = null_default_columns.find(column_id);
+		auto values_from = added == null_default_columns.end() ? 0 : added->second;
+		column_values.push_back(StringUtil::Format("(%d, %d)", column_id.index, values_from));
+	}
+	return StringUtil::Format(R"(
+SELECT DISTINCT c.column_id
+FROM (VALUES %s) c(column_id, values_from)
+CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
+    ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
+WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
+    WHEN s.data_file_id IS NULL THEN COALESCE(f.partial_max, f.begin_snapshot) >= c.values_from
+    ELSE s.value_count IS NULL OR s.value_count > 0
+END)",
+	                          StringUtil::Join(column_values, ", "), table_id.index);
+}
+
+string DuckLakeMetadataManager::GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
+	return StringUtil::Format(R"(
+SELECT column_id, begin_snapshot, initial_default IS NULL, parent_column IS NULL
+FROM {METADATA_CATALOG}.ducklake_column
+WHERE table_id = %d AND column_id IN (%s))",
+	                          table_id.index, GenerateIDList(column_ids));
+}
+
+string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
+                                                    const DuckLakeInlinedColNames &col_names) {
+	// one row with the live values of every check, the checks of a table are counted in one scan
+	vector<string> tables;
+	vector<string> counts;
+	for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
+		auto &check = checks[check_idx];
+		auto counted = check.column_name.empty() ? string("*") : SQLIdentifier::ToString(check.column_name);
+		counts.push_back(StringUtil::Format("COUNT(%s) AS c%d", counted, check_idx));
+		if (check_idx + 1 < checks.size() && checks[check_idx + 1].table_name == check.table_name) {
+			continue;
+		}
+		auto rows = StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s WHERE %s IS NULL AND %s > %d",
+		                               SQLIdentifier(check.table_name), col_names.end_snapshot,
+		                               col_names.begin_snapshot, check.flushed_up_to);
+		if (counts.size() == 1) {
+			if (!check.column_name.empty()) {
+				rows += StringUtil::Format(" AND %s IS NOT NULL", counted);
+			}
+			rows += " LIMIT 1";
+		}
+		tables.push_back(
+		    StringUtil::Format("(SELECT %s FROM (%s) r) t%d", StringUtil::Join(counts, ", "), rows, tables.size()));
+		counts.clear();
+	}
+	return "SELECT * FROM " + StringUtil::Join(tables, ", ");
+}
+
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
