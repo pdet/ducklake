@@ -812,19 +812,20 @@ ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &contex
 	return result;
 }
 
-static idx_t GetStoredInlinedRowCount(const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
-                                      const DuckLakeCommitContext &context) {
-	idx_t total = 0;
+static void CountInlinedRows(const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
+                             const DuckLakeCommitContext &context, idx_t &stored_rows, idx_t &live_rows) {
+	stored_rows = 0;
+	live_rows = 0;
 	for (auto &inlined_table_name : inlined_table_names) {
-		auto sql = DuckLakeMetadataManager::GetStoredInlinedRowCountSql(
-		    SQLQuotedIdentifier::ToString(inlined_table_name), context.InlinedColNames());
+		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(SQLQuotedIdentifier::ToString(inlined_table_name),
+		                                                           context.InlinedColNames());
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
-		result->ThrowIfError("Failed to read the stored inlined row count from DuckLake: ");
+		result->ThrowIfError("Failed to read the inlined row counts from DuckLake: ");
 		for (auto &row : *result) {
-			total += row.GetValue<idx_t>(0);
+			stored_rows += row.GetValue<idx_t>(0);
+			live_rows += row.GetValue<idx_t>(1);
 		}
 	}
-	return total;
 }
 
 bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
@@ -1055,8 +1056,10 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	}
 	// deleted inlined rows stay stored, and flushing them later does not count them again
 	auto inlined_table_names = context.get_inlined_table_names(table_id);
-	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
-	if (GetStoredInlinedRowCount(inlined_table_names, snapshot, context) != net_inlined) {
+	idx_t stored_inlined;
+	idx_t net_inlined;
+	CountInlinedRows(inlined_table_names, snapshot, context, stored_inlined, net_inlined);
+	if (stored_inlined != net_inlined) {
 		return;
 	}
 

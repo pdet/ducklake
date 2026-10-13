@@ -859,13 +859,14 @@ WHERE {SNAPSHOT_ID} >= %s
 	                          col_names.end_snapshot);
 }
 
-string DuckLakeMetadataManager::GetStoredInlinedRowCountSql(const string &inlined_table_name,
-                                                            const DuckLakeInlinedColNames &col_names) {
+string DuckLakeMetadataManager::GetInlinedRowCountsSql(const string &inlined_table_name,
+                                                       const DuckLakeInlinedColNames &col_names) {
 	return StringUtil::Format(R"(
-SELECT COUNT(*)
+SELECT COUNT(*), COUNT(CASE WHEN {SNAPSHOT_ID} < %s OR %s IS NULL THEN 1 END)
 FROM {METADATA_CATALOG}.%s
 WHERE {SNAPSHOT_ID} >= %s)",
-	                          inlined_table_name, col_names.begin_snapshot);
+	                          col_names.end_snapshot, col_names.end_snapshot, inlined_table_name,
+	                          col_names.begin_snapshot);
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
