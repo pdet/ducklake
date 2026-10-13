@@ -233,8 +233,15 @@ void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path
 	}
 }
 
+string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
+	if (FileSystem::IsRemoteFile(path)) {
+		return "/";
+	}
+	return fs.PathSeparator(path);
+}
+
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
-	auto sep = fs.PathSeparator(a);
+	auto sep = PathSeparator(fs, a);
 	if (StringUtil::EndsWith(a, sep)) {
 		return a + b;
 	} else {
