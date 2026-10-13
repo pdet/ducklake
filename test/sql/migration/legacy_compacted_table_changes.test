@@ -1,5 +1,5 @@
 # name: test/sql/migration/legacy_compacted_table_changes.test
-# description: Snapshots of an old DuckLake with compacted_table changes can still be listed
+# description: snapshots() lists the compactions that older catalogs recorded as compacted_table
 # group: [migration]
 
 require ducklake
@@ -9,7 +9,14 @@ require parquet
 unzip data/old_ducklake/compacted_files.db.gz {TEST_DIR}/legacy_compacted_table_changes.db
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/legacy_compacted_table_changes.db' AS ducklake (DATA_PATH '{TEST_DIR}/legacy_compacted_table_changes_files', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/legacy_compacted_table_changes.db' AS ducklake (DATA_PATH '{TEST_DIR}/legacy_compacted_table_changes', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id BETWEEN 7 AND 9 ORDER BY snapshot_id
+----
+7	{flushed_inlined=[1]}
+8	{compacted_table=[1]}
+9	{inlined_insert=[1]}
 
 # snapshot 8 compacted table 1 with the legacy compacted_table change type
 query II
@@ -24,12 +31,7 @@ SELECT count(*) FROM ducklake.snapshots() WHERE snapshot_id = 8
 ----
 1
 
-# FIXME: the changes of snapshot 8 leave out the compaction, see https://github.com/pdet/ducklake_internal/issues/132
-mode skip
-
 query I
-SELECT len(changes) > 0 FROM ducklake.snapshots() WHERE snapshot_id = 8
+SELECT cardinality(changes) > 0 FROM ducklake.snapshots() WHERE snapshot_id = 8
 ----
 true
-
-mode unskip

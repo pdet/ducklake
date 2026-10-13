@@ -1,5 +1,5 @@
 # name: test/sql/alter/set_not_null_without_stats.test
-# description: SET NOT NULL on columns that have no column stats, such as nested columns and columns of empty tables
+# description: SET NOT NULL checks the rows when the stats cannot rule out NULL values
 # group: [alter]
 
 require ducklake
@@ -13,33 +13,42 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_not_null_without_stats')
 
+# a table without rows has no stats
 statement ok
-CREATE TABLE ducklake.with_null(s STRUCT(a INTEGER))
+CREATE TABLE ducklake.empty(i INTEGER)
 
 statement ok
-INSERT INTO ducklake.with_null VALUES ({'a': 1}), (NULL)
+ALTER TABLE ducklake.empty ALTER i SET NOT NULL
 
 statement error
-ALTER TABLE ducklake.with_null ALTER s SET NOT NULL
+INSERT INTO ducklake.empty VALUES (NULL)
 ----
-Cannot SET NOT NULL on
+NOT NULL constraint failed
+
+# a table created in the open transaction
+statement ok
+BEGIN
 
 statement ok
-INSERT INTO ducklake.with_null VALUES (NULL)
+CREATE TABLE ducklake.local_empty(i INTEGER)
 
-query I
-SELECT count(*) FROM ducklake.with_null WHERE s IS NULL
+statement ok
+ALTER TABLE ducklake.local_empty ALTER i SET NOT NULL
+
+statement ok
+COMMIT
+
+statement error
+INSERT INTO ducklake.local_empty VALUES (NULL)
 ----
-2
+NOT NULL constraint failed
 
+# nested columns only have stats for their fields
 statement ok
 CREATE TABLE ducklake.nested(s STRUCT(a INTEGER), l INTEGER[], m MAP(INTEGER, INTEGER))
 
 statement ok
-INSERT INTO ducklake.nested VALUES ({'a': 1}, [1], MAP {1: 2})
-
-# FIXME: SET NOT NULL fails on nested columns without NULLs because they have no column stats, see https://github.com/pdet/ducklake_internal/issues/116
-mode skip
+INSERT INTO ducklake.nested VALUES ({'a': NULL}, [NULL], MAP {1: NULL})
 
 statement ok
 ALTER TABLE ducklake.nested ALTER s SET NOT NULL
@@ -51,51 +60,48 @@ statement ok
 ALTER TABLE ducklake.nested ALTER m SET NOT NULL
 
 statement error
-INSERT INTO ducklake.nested VALUES (NULL, [2], MAP {3: 4})
+INSERT INTO ducklake.nested VALUES (NULL, [1], MAP {1: 2})
 ----
 NOT NULL constraint failed
 
-mode unskip
+query III
+SELECT * FROM ducklake.nested
+----
+{'a': NULL}	[NULL]	{1=NULL}
 
 statement ok
-CREATE TABLE ducklake.empty(i INTEGER)
-
-# FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
-mode skip
+CREATE TABLE ducklake.nested_null(s STRUCT(a INTEGER))
 
 statement ok
-ALTER TABLE ducklake.empty ALTER i SET NOT NULL
+INSERT INTO ducklake.nested_null VALUES ({'a': 1}), (NULL)
 
-mode unskip
+statement error
+ALTER TABLE ducklake.nested_null ALTER s SET NOT NULL
+----
+the column has NULL values
 
+# the rows inserted by another transaction since the snapshot are not checked, so the commit conflicts
 statement ok
+CREATE TABLE ducklake.concurrent(i INTEGER)
+
+statement ok con1
 BEGIN
 
-statement ok
-CREATE TABLE ducklake.local_empty(i INTEGER)
+statement ok con1
+ALTER TABLE ducklake.concurrent ALTER i SET NOT NULL
 
-# FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
-mode skip
+statement ok con2
+INSERT INTO ducklake.concurrent VALUES (NULL)
 
-statement ok
-ALTER TABLE ducklake.local_empty ALTER i SET NOT NULL
-
-mode unskip
-
-statement ok
+statement error con1
 COMMIT
-
-# FIXME: SET NOT NULL fails on tables without any rows because they have no stats, see https://github.com/pdet/ducklake_internal/issues/116
-mode skip
-
-statement error
-INSERT INTO ducklake.empty VALUES (NULL)
 ----
-NOT NULL constraint failed
+Transaction conflict
 
-statement error
-INSERT INTO ducklake.local_empty VALUES (NULL)
+query I
+SELECT count(*) FROM ducklake.concurrent WHERE i IS NULL
 ----
-NOT NULL constraint failed
+1
 
-mode unskip
+statement ok
+INSERT INTO ducklake.concurrent VALUES (NULL)
