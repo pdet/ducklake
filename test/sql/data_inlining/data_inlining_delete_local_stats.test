@@ -176,3 +176,50 @@ query IIII
 SELECT min(id), max(id), min(v), max(v) FROM d
 ----
 6	6	9	9
+
+# type changes after the delete, which leave the inlined rows in their old types
+statement ok
+CREATE TABLE s (id INTEGER, c STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO s VALUES (1, {'a': 1, 'b': 10}), (2, {'a': 2, 'b': 20})
+
+statement ok
+DELETE FROM s WHERE id = 1
+
+statement ok
+ALTER TABLE s ALTER c TYPE STRUCT(a INTEGER, z INTEGER)
+
+statement ok
+COMMIT
+
+query IIII
+SELECT id, c.a, c.z, (SELECT count(*) FROM s WHERE c.z IS NULL) FROM s
+----
+2	2	NULL	1
+
+statement ok
+CREATE TABLE r (id INTEGER, c STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO r VALUES (1, {'a': 1, 'b': 10}), (2, {'a': 2, 'b': 20})
+
+statement ok
+DELETE FROM r WHERE id = 1
+
+statement ok
+ALTER TABLE r ALTER c TYPE STRUCT(b INTEGER)
+
+statement ok
+COMMIT
+
+query III
+SELECT id, c.b, min(c.b) OVER () FROM r
+----
+2	20	20

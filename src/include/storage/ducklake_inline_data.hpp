@@ -49,7 +49,6 @@ public:
 	}
 	string GetName() const override;
 
-	//! Recompute the column stats of transaction-local inlined rows from their rows
 	static void RecomputeColumnStats(DuckLakeTableEntry &table, DuckLakeInlinedData &inlined_data);
 };
 
