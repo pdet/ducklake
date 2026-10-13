@@ -194,41 +194,69 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
-static bool ContainsNulByte(Vector &vector, idx_t count) {
-	switch (vector.GetType().id()) {
-	case LogicalTypeId::VARCHAR: {
+static bool ContainsNulByte(Vector &vector, const SelectionVector &sel, idx_t count) {
+	auto &type = vector.GetType();
+	if (type.id() == LogicalTypeId::VARCHAR) {
 		UnifiedVectorFormat format;
 		vector.ToUnifiedFormat(format);
 		auto strings = UnifiedVectorFormat::GetData<string_t>(format);
 		for (idx_t i = 0; i < count; i++) {
-			auto idx = format.sel->get_index(i);
+			auto idx = format.sel->get_index(sel.get_index(i));
 			if (format.validity.RowIsValid(idx) && memchr(strings[idx].GetData(), '\0', strings[idx].GetSize())) {
 				return true;
 			}
 		}
 		return false;
 	}
-	case LogicalTypeId::STRUCT:
-		vector.Flatten();
+	if (type.id() != LogicalTypeId::STRUCT && type.id() != LogicalTypeId::LIST && type.id() != LogicalTypeId::MAP) {
+		return false;
+	}
+	vector.Flatten();
+	UnifiedVectorFormat format;
+	vector.ToUnifiedFormat(format);
+	if (type.id() == LogicalTypeId::STRUCT) {
+		SelectionVector valid_sel(count);
+		idx_t valid_count = 0;
+		for (idx_t i = 0; i < count; i++) {
+			if (format.validity.RowIsValid(sel.get_index(i))) {
+				valid_sel.set_index(valid_count++, sel.get_index(i));
+			}
+		}
 		for (auto &child : StructVector::GetEntries(vector)) {
-			if (ContainsNulByte(child, count)) {
+			if (ContainsNulByte(child, valid_sel, valid_count)) {
 				return true;
 			}
 		}
 		return false;
-	case LogicalTypeId::LIST:
-	case LogicalTypeId::MAP:
-		vector.Flatten();
-		return ContainsNulByte(ListVector::GetChildMutable(vector), ListVector::GetListSize(vector));
-	default:
-		return false;
 	}
+	// only the child rows that a list refers to
+	auto entries = UnifiedVectorFormat::GetData<list_entry_t>(format);
+	idx_t child_count = 0;
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = sel.get_index(i);
+		if (format.validity.RowIsValid(idx)) {
+			child_count += entries[idx].length;
+		}
+	}
+	SelectionVector child_sel(child_count);
+	idx_t child_idx = 0;
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = sel.get_index(i);
+		if (!format.validity.RowIsValid(idx)) {
+			continue;
+		}
+		for (idx_t k = 0; k < entries[idx].length; k++) {
+			child_sel.set_index(child_idx++, entries[idx].offset + k);
+		}
+	}
+	return ContainsNulByte(ListVector::GetChildMutable(vector), child_sel, child_count);
 }
 
 bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
 	// nested values are stored as text, which cannot hold a NUL byte
 	for (auto &column : chunk.data) {
-		if (DuckLakeTypes::IsNested(column.GetType()) && ContainsNulByte(column, chunk.size())) {
+		if (DuckLakeTypes::IsNested(column.GetType()) &&
+		    ContainsNulByte(column, *FlatVector::IncrementalSelectionVector(), chunk.size())) {
 			return false;
 		}
 	}

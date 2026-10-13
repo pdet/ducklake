@@ -42,11 +42,9 @@ public:
 		lock_guard<mutex> guard(lock);
 		total_inlined_rows += new_rows;
 		if (!can_inline) {
-			// the metadata catalog cannot store these rows, so all rows go to files
 			inlining_stopped = true;
 		}
 		if (InliningStopped()) {
-			// no longer inlining rows
 			if (global_inlined_data) {
 				// if we have any global inlined data - add it to the local inlined data so we can emit it
 				AddToCollection(std::move(global_inlined_data), state.inlined_data);
@@ -108,7 +106,7 @@ OperatorResultType DuckLakeInlineData::Execute(ExecutionContext &context, DataCh
 	auto &metadata_manager = DuckLakeTransaction::Get(context.client, catalog).GetMetadataManager();
 	auto new_phase = gstate.AddRows(state, input.size(), metadata_manager.CanInlineValues(input));
 	if (new_phase != InlinePhase::INLINING_ROWS) {
-		// we have exceeded the limit - start emitting rows from the `inlined_data` if we have it
+		// we stopped inlining, start emitting rows from the `inlined_data` if we have it
 		if (state.inlined_data) {
 			// start a scan
 			state.inlined_data->InitializeScan(state.emit_scan);

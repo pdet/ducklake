@@ -76,3 +76,20 @@ SELECT v.b, v.a = 'p' || chr(0) OR v.a = 'r' || chr(0) FROM dl.s ORDER BY v.b
 2	false
 3	true
 4	false
+
+# a slice keeps the NUL byte in a list child that no row refers to, the row is still inlined
+statement ok
+CREATE TABLE dl.sliced (v VARCHAR[])
+
+statement ok
+INSERT INTO dl.sliced SELECT v[2:] FROM (SELECT [chr(0), 'ok'] AS v)
+
+query I
+SELECT v FROM dl.sliced
+----
+[ok]
+
+query I
+SELECT file_count FROM ducklake_table_info('dl') WHERE table_name = 'sliced'
+----
+0
