@@ -76,12 +76,11 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 struct ParquetColumn {
 	idx_t column_id;
 	string name;
-	string type;
 	string converted_type;
-	optional_idx scale;
-	optional_idx precision;
 	optional_idx field_id;
-	string logical_type;
+	bool repeated = false;
+	//! The type that the Parquet reader reads the column as
+	LogicalType duckdb_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
 	//! A root group that the Parquet reader reads as VARIANT
@@ -189,6 +188,7 @@ private:
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
 	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
+	void WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column);
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
@@ -247,13 +247,11 @@ SELECT
     )) AS parquet_metadata,
     list_transform(parquet_schema, lambda x: struct_pack(
         "name" := x."name",
-        "type" := x."type",
         num_children := x.num_children,
         converted_type := x.converted_type,
-        "scale" := x."scale",
-        "precision" := x."precision",
         field_id := x.field_id,
-        logical_type := x.logical_type
+        repetition_type := x.repetition_type,
+        duckdb_type := x.duckdb_type
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
@@ -264,8 +262,7 @@ FROM parquet_full_metadata(%s)
 	using ParquetBBoxRow = VectorStructType<double, double, double, double, double, double, double, double>;
 	using ParquetStatsRow = VectorStructType<int64_t, string_t, string_t, int64_t, int64_t, int64_t, ParquetBBoxRow,
 	                                         VectorListType<string_t>, bool, bool>;
-	using ParquetSchemaRow =
-	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t>;
+	using ParquetSchemaRow = VectorStructType<string_t, int64_t, string_t, int64_t, string_t, string_t>;
 	for (auto &row : *result) {
 		auto &chunk = row.GetChunk();
 		auto row_idx = row.GetRowInChunk();
@@ -314,7 +311,7 @@ FROM parquet_full_metadata(%s)
 		idx_t next_column_id = 0;
 		vector<ParquetColumn *> column_stack;
 		for (auto schema_entry : schema_iter[row_idx].GetChildValues()) {
-			auto num_children = schema_entry.GetChildValue<2>();
+			auto num_children = schema_entry.GetChildValue<1>();
 			idx_t child_count = num_children.IsValid() ? num_children.GetValue() : 0;
 
 			if (!saw_root) {
@@ -329,12 +326,13 @@ FROM parquet_full_metadata(%s)
 
 			auto column = make_uniq<ParquetColumn>();
 			column->name = schema_entry.GetChildValue<0>().GetValue().GetString();
-			column->type = GetStringOrEmpty(schema_entry.GetChildValue<1>());
-			column->converted_type = GetStringOrEmpty(schema_entry.GetChildValue<3>());
-			column->scale = GetOptionalIndex(schema_entry.GetChildValue<4>());
-			column->precision = GetOptionalIndex(schema_entry.GetChildValue<5>());
-			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<6>());
-			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<7>());
+			column->converted_type = GetStringOrEmpty(schema_entry.GetChildValue<2>());
+			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<3>());
+			column->repeated = GetStringOrEmpty(schema_entry.GetChildValue<4>()) == "REPEATED";
+			auto duckdb_type = GetStringOrEmpty(schema_entry.GetChildValue<5>());
+			if (!duckdb_type.empty()) {
+				column->duckdb_type = DuckLakeTypes::FromDuckDBString(duckdb_type);
+			}
 
 			if (child_count == 0) {
 				column->column_id = next_column_id++;
@@ -454,7 +452,8 @@ class DuckLakeParquetTypeChecker {
 public:
 	DuckLakeParquetTypeChecker(DuckLakeTableEntry &table, ParquetFileMetadata &file_metadata, const LogicalType &type,
 	                           ParquetColumn &column_p, const string &prefix_p)
-	    : table(table), file_metadata(file_metadata), source_type(DeriveLogicalType(column_p)), type(type),
+	    : table(table), file_metadata(file_metadata),
+	      source_type(column_p.is_variant ? LogicalType::VARIANT() : column_p.duckdb_type), type(type),
 	      column(column_p), prefix(prefix_p) {
 	}
 
@@ -483,116 +482,9 @@ private:
 	//! Verify type is equivalent to one of the accepted types
 	bool CheckTypes(const vector<LogicalType> &types);
 
-	static LogicalType DeriveLogicalType(const ParquetColumn &column);
-
 private:
 	vector<string> failures;
 };
-
-LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s_ele) {
-	// FIXME: this is more or less copied from DeriveLogicalType in DuckDB's Parquet reader
-	//  we should just emit DuckDB's type in parquet_schema and remove this method
-	if (s_ele.is_variant) {
-		return LogicalType::VARIANT();
-	}
-	if (!s_ele.child_columns.empty()) {
-		// nested types
-		if (s_ele.converted_type == "LIST") {
-			return LogicalTypeId::LIST;
-		} else if (s_ele.converted_type == "MAP") {
-			return LogicalTypeId::MAP;
-		}
-		return LogicalTypeId::STRUCT;
-	}
-	if (!s_ele.logical_type.empty()) {
-		if (s_ele.logical_type ==
-		    "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))") {
-			return LogicalType::TIME;
-		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, "
-		                                 "MICROS=MicroSeconds(), NANOS=<null>))") {
-			return LogicalType::TIMESTAMP;
-		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=MilliSeconds(), "
-		                                 "MICROS=<null>, NANOS=<null>))") {
-			return LogicalType::TIMESTAMP_MS;
-		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
-		                                 "NANOS=NanoSeconds()))") {
-			return LogicalType::TIMESTAMP_NS;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
-			return LogicalType::TIMESTAMP_TZ;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimeType(isAdjustedToUTC=1")) {
-			return LogicalType::TIME_TZ;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "UUIDType()")) {
-			return LogicalType::UUID;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
-			return LogicalType::SQLNULL;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
-			return LogicalType::GEOMETRY();
-		}
-	}
-	if (!s_ele.converted_type.empty()) {
-		// Legacy NULL type, does no longer exist, but files are still around of course
-		if (s_ele.converted_type == "INT_8") {
-			return LogicalType::TINYINT;
-		} else if (s_ele.converted_type == "INT_16") {
-			return LogicalType::SMALLINT;
-		} else if (s_ele.converted_type == "INT_32") {
-			return LogicalType::INTEGER;
-		} else if (s_ele.converted_type == "INT_64") {
-			return LogicalType::BIGINT;
-		} else if (s_ele.converted_type == "UINT_8") {
-			return LogicalType::UTINYINT;
-		} else if (s_ele.converted_type == "UINT_16") {
-			return LogicalType::USMALLINT;
-		} else if (s_ele.converted_type == "UINT_32") {
-			return LogicalType::UINTEGER;
-		} else if (s_ele.converted_type == "UINT_64") {
-			return LogicalType::UBIGINT;
-		} else if (s_ele.converted_type == "DATE") {
-			return LogicalType::DATE;
-		} else if (s_ele.converted_type == "TIMESTAMP_MICROS") {
-			return LogicalType::TIMESTAMP;
-		} else if (s_ele.converted_type == "TIMESTAMP_MILLIS") {
-			return LogicalType::TIMESTAMP;
-		} else if (s_ele.converted_type == "DECIMAL") {
-			if (!s_ele.scale.IsValid() || !s_ele.precision.IsValid()) {
-				throw InvalidInputException("DECIMAL requires valid precision/scale");
-			}
-			return LogicalType::DECIMAL(s_ele.precision.GetIndex(), s_ele.scale.GetIndex());
-		} else if (s_ele.converted_type == "UTF8") {
-			return LogicalType::VARCHAR;
-		} else if (s_ele.converted_type == "ENUM") {
-			return LogicalType::VARCHAR;
-		} else if (s_ele.converted_type == "TIME_MILLIS") {
-			return LogicalType::TIME;
-		} else if (s_ele.converted_type == "TIME_MICROS") {
-			return LogicalType::TIME;
-		} else if (s_ele.converted_type == "INTERVAL") {
-			return LogicalType::INTERVAL;
-		} else if (s_ele.converted_type == "JSON") {
-			return LogicalType::JSON();
-		}
-	}
-	// no converted type set
-	// use default type for each physical type
-	if (s_ele.type == "BOOLEAN") {
-		return LogicalType::BOOLEAN;
-	} else if (s_ele.type == "INT32") {
-		return LogicalType::INTEGER;
-	} else if (s_ele.type == "INT64") {
-		return LogicalType::BIGINT;
-	} else if (s_ele.type == "INT96") {
-		return LogicalType::TIMESTAMP;
-	} else if (s_ele.type == "FLOAT") {
-		return LogicalType::FLOAT;
-	} else if (s_ele.type == "DOUBLE") {
-		return LogicalType::DOUBLE;
-	} else if (s_ele.type == "BYTE_ARRAY") {
-		return LogicalType::BLOB;
-	} else if (s_ele.type == "FIXED_LEN_BYTE_ARRAY") {
-		return LogicalType::BLOB;
-	}
-	throw InvalidInputException("Unrecognized type %s for parquet file", s_ele.type);
-}
 
 static string FormatExpectedError(const vector<LogicalType> &expected) {
 	auto error = StringUtil::ToString(expected, ", ");
@@ -792,6 +684,23 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	}
 }
 
+//! A repeated column without a LIST annotation is the only element of its own list
+void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column) {
+	auto element = make_uniq<ParquetColumn>();
+	element->column_id = column.column_id;
+	element->name = column.name;
+	element->converted_type = column.converted_type;
+	element->field_id = column.field_id;
+	element->duckdb_type = ListType::GetChildType(column.duckdb_type);
+	element->child_columns = std::move(column.child_columns);
+	if (element->column_id != DConstants::INVALID_INDEX) {
+		file_metadata.column_id_map.find(element->column_id)->second = *element;
+	}
+	column.column_id = DConstants::INVALID_INDEX;
+	column.child_columns.clear();
+	column.child_columns.push_back(std::move(element));
+}
+
 unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMetadata &file_metadata,
                                                                   ParquetColumn &column,
                                                                   const DuckLakeFieldId &field_id, string prefix,
@@ -799,6 +708,10 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	// check if types of the columns are compatible
 	DuckLakeParquetTypeChecker type_checker(table, file_metadata, field_id.Type(), column, prefix);
 	type_checker.CheckMatchingType();
+	bool wrapped = field_id.Type().id() == LogicalTypeId::LIST && column.repeated && column.converted_type != "LIST";
+	if (wrapped) {
+		WrapRepeatedColumn(file_metadata, column);
+	}
 
 	if (!prefix.empty()) {
 		prefix += ".";
@@ -826,8 +739,9 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			    MapColumns(file_metadata, column.child_columns, field_id.Children(), prefix, repeated);
 			break;
 		case LogicalTypeId::LIST:
-			if (column.child_columns[0]->name == "array") {
+			if (wrapped || column.child_columns[0]->name == "array") {
 				// With legacy avro list layout, we just access directly
+				column.child_columns[0]->duckdb_type = ListType::GetChildType(column.duckdb_type);
 				map_entry->child_entries.push_back(
 				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix, true));
 			} else {
