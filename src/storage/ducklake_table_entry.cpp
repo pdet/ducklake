@@ -448,10 +448,11 @@ shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(ClientContext &
 	return GetTableStats(transaction);
 }
 
-bool DuckLakeTableEntry::ChangedColumnType() {
-	reference<CatalogEntry> entry = *this;
+template <class FUNC>
+static bool AnyLocalChange(DuckLakeTableEntry &table, FUNC &&matches) {
+	reference<CatalogEntry> entry = table;
 	while (true) {
-		if (entry.get().Cast<DuckLakeTableEntry>().local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE) {
+		if (matches(entry.get().Cast<DuckLakeTableEntry>())) {
 			return true;
 		}
 		if (!entry.get().HasChild()) {
@@ -459,6 +460,18 @@ bool DuckLakeTableEntry::ChangedColumnType() {
 		}
 		entry = entry.get().Child();
 	}
+}
+
+bool DuckLakeTableEntry::ChangedColumnType() {
+	return AnyLocalChange(*this, [](DuckLakeTableEntry &entry) {
+		return entry.local_change.type == LocalChangeType::CHANGE_COLUMN_TYPE;
+	});
+}
+
+bool DuckLakeTableEntry::AddedColumn(FieldIndex field_index) {
+	return AnyLocalChange(*this, [&](DuckLakeTableEntry &entry) {
+		return entry.local_change.type == LocalChangeType::ADD_COLUMN && entry.GetAddColumnInfo().id == field_index;
+	});
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
@@ -1275,8 +1288,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto &col = table_info.columns.GetColumnMutable(GetColumnIndex(info.column_path[0]));
 	auto &field_id = GetFieldId(col.Physical());
 	col.SetDefaultValue(std::move(info.expression));
-	bool new_column = !transaction.GetMetadataManager().IsColumnCreatedWithTable(
-	    table_info.GetTableName().GetIdentifierName(), col.GetName().GetIdentifierName());
+	// ADD COLUMN with an expression default arrives as ADD COLUMN, UPDATE and SET DEFAULT
+	bool new_column = AddedColumn(field_id.GetFieldIndex());
 
 	return make_uniq<DuckLakeTableEntry>(*this, table_info,
 	                                     SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
