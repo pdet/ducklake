@@ -57,3 +57,5 @@ benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark
 benchmark/micro/write/delete_commits_v10_history.benchmark
 benchmark/micro/maintenance/expire_one_snapshot.benchmark
 benchmark/micro/read/topn_float_many_files.benchmark
+benchmark/micro/write/insert_partitioned_sorted.benchmark
+benchmark/micro/maintenance/flush_partitioned_sorted.benchmark
