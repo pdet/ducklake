@@ -823,6 +823,13 @@
       "paths": [
         "test/sql/types/geo/geometry_crs_persist.test"
       ]
+    },
+    {
+      "reason": "FIXME: fails on DuckDB itself, a small GROUP BY runs out of memory at 3 or 4 threads with operator_memory_limit and no temp directory (pdet/ducklake_internal#180)",
+      "paths": [
+        "test/sql/settings/operator_memory_limit.test",
+        "test/sql/storage/test_eviction_queue_dead_nodes_underflow.test"
+      ]
     }
   ]
 }
