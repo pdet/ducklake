@@ -972,7 +972,9 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 	DuckLakeColumnData column_data;
 	column_data.id = source_id.GetFieldIndex();
 
-	vector<unique_ptr<DuckLakeFieldId>> children;
+	// the catalog keeps the existing fields in their order, and new fields after them
+	vector<unique_ptr<DuckLakeFieldId>> promoted_children(source_children.size());
+	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	// for each type in target_types, check if it is in source types
 	for (auto &target_child : LogicalType::GetNamedChildTypes(target)) {
 		auto target_name = target_child.first.GetIdentifierName();
@@ -990,16 +992,15 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 			new_col.column_info = ConvertColumn(target_name, target_type, *field_id);
 			new_col.parent_idx = column_data.id.index;
 			result.new_fields.push_back(std::move(new_col));
-			children.push_back(std::move(field_id));
+			new_children.push_back(std::move(field_id));
 			continue;
 		}
 		auto source_idx = entry->second;
 
 		// the name exists in both the source and target
 		// recursively perform type promotion
-		auto new_child_id = TypePromotion(*source_children[source_idx], target_type, result, column_data.id.index);
-
-		children.push_back(std::move(new_child_id));
+		promoted_children[source_idx] =
+		    TypePromotion(*source_children[source_idx], target_type, result, column_data.id.index);
 		// erase from the source map to indicate this field has been handled
 		source_type_map.erase(target_name);
 	}
@@ -1008,7 +1009,18 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::GetNestedEvolution(const DuckLak
 		auto &source_field = *source_children[source_idx];
 		result.DropField(source_field);
 	}
-	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), target, std::move(children));
+	vector<unique_ptr<DuckLakeFieldId>> children;
+	for (auto &child : promoted_children) {
+		if (child) {
+			children.push_back(std::move(child));
+		}
+	}
+	for (auto &child : new_children) {
+		children.push_back(std::move(child));
+	}
+	auto new_type = GetNewNestedType(target, children);
+	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), std::move(new_type),
+	                                  std::move(children));
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFieldId &source_id,
@@ -1019,8 +1031,8 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	}
 	auto &source_type = source_id.Type();
 	if (source_type == target) {
-		// type is unchanged - return field id directly
-		return source_id.Copy();
+		// equal types can still differ in their collation
+		return make_uniq<DuckLakeFieldId>(source_id.GetColumnData().Copy(), source_id.Name(), target);
 	}
 	// primitive type promotion
 	// only widening type promotions are allowed
@@ -1086,7 +1098,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
-	col.SetType(info.target_type);
+	col.SetType(new_field_id->Type());
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
 		col.SetDefaultValue(std::move(new_default));
