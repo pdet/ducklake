@@ -46,6 +46,18 @@ SELECT t FROM dl.tstz_ns WHERE t > TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456788
 ----
 2020-01-01 12:34:56.123456789+00
 
+# TIMESTAMPTZ columns accept TIMESTAMPTZ_NS files, like TIMESTAMP columns accept TIMESTAMP_NS files
+statement ok
+CREATE TABLE dl.tstz_ns_as_tstz (t TIMESTAMPTZ)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'tstz_ns_as_tstz', '{DATA_PATH}/reader_types_tstz_ns.parquet')
+
+query I
+SELECT t FROM dl.tstz_ns_as_tstz
+----
+2020-01-01 12:34:56.123457+00
+
 statement ok
 CREATE TABLE dl.float16 (f FLOAT)
 
@@ -80,14 +92,6 @@ statement error
 CALL ducklake_add_data_files('dl', 'float16_as_blob', 'data/parquet/float16.parquet')
 ----
 found type FLOAT
-
-statement ok
-CREATE TABLE dl.tstz_ns_as_tstz (t TIMESTAMPTZ)
-
-statement error
-CALL ducklake_add_data_files('dl', 'tstz_ns_as_tstz', '{DATA_PATH}/reader_types_tstz_ns.parquet')
-----
-found type TIMESTAMPTZ_NS
 
 # a FLOAT16 annotation on a column that is not two bytes wide is read as BLOB
 statement ok

@@ -476,6 +476,7 @@ private:
 	void CheckUnsignedInteger();
 	void CheckFloatingPoints();
 	void CheckTimestamp();
+	void CheckTimestampWithTimeZone();
 	void CheckDecimal();
 
 	//! Called when a check fails
@@ -717,6 +718,12 @@ void DuckLakeParquetTypeChecker::CheckTimestamp() {
 	}
 }
 
+void DuckLakeParquetTypeChecker::CheckTimestampWithTimeZone() {
+	if (!CheckTypes({LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS})) {
+		Fail();
+	}
+}
+
 void DuckLakeParquetTypeChecker::CheckDecimal() {
 	if (source_type.id() != LogicalTypeId::DECIMAL) {
 		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" but found type \"%s\"", source_type));
@@ -787,6 +794,9 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::TIMESTAMP_NS:
 		CheckTimestamp();
 		break;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		CheckTimestampWithTimeZone();
+		break;
 	case LogicalTypeId::DECIMAL:
 		CheckDecimal();
 		break;
@@ -795,7 +805,6 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
 	default:
 		// by default just verify that the type matches exactly
 		if (!CheckType(type)) {
