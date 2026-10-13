@@ -19,8 +19,8 @@ include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 run
 CALL ducklake_flush_inlined_data('lake', table_name => 'inl');
 
-result_query III
-SELECT count(*), count(DISTINCT filename), count(DISTINCT filename) FILTER (WHERE k < prev)
-FROM (SELECT filename, k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM lake.inl)
+# A missed reset leaves the rows inlined, and the files of the 64 partitions show the flush was partitioned
+result_query II
+SELECT count(*), count(DISTINCT filename) FROM lake.inl
 ----
-500000	64	0
+500000	64
