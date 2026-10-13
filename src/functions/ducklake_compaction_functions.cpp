@@ -538,9 +538,8 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 
 DuckLakeTableEntry &DuckLakeCompactor::GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
                                                            const DuckLakeTableEntry &table) {
-	auto schema_id = table.schema.Cast<DuckLakeSchemaEntry>().GetSchemaId();
-	auto latest_entry =
-	    transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, schema_id, table.name.GetIdentifierName());
+	// by id, since the table can have been renamed and its old name taken by another table
+	auto latest_entry = transaction.GetLocalEntryById(table.GetTableId());
 	if (!latest_entry) {
 		latest_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.GetTableId());
 		if (!latest_entry) {

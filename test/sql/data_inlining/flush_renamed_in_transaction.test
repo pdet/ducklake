@@ -25,10 +25,10 @@ BEGIN
 statement ok
 ALTER TABLE lake.t RENAME TO t2
 
-query I
-SELECT rows_flushed FROM ducklake_flush_inlined_data('lake')
+query TI
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('lake')
 ----
-2
+t2	2
 
 statement ok
 ROLLBACK
@@ -39,24 +39,31 @@ SELECT count(*) FROM ducklake_list_files('lake', 't')
 0
 
 statement ok
+INSERT INTO lake.t VALUES (3)
+
+statement ok
 BEGIN
 
 statement ok
 ALTER TABLE lake.t RENAME TO t2
 
-query I
-SELECT rows_flushed FROM ducklake_flush_inlined_data('lake', table_name => 't2')
+statement ok
+ALTER TABLE lake.t2 SET SORTED BY (i DESC)
+
+query TTI
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('lake', table_name => 't2')
 ----
-2
+main	t2	3
 
 statement ok
 COMMIT
 
 query I
-SELECT i FROM lake.t2 ORDER BY i
+SELECT i FROM lake.t2
 ----
-1
+3
 2
+1
 
 query I
 SELECT count(*) FROM ducklake_list_files('lake', 't2')

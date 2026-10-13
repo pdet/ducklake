@@ -70,8 +70,12 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
-	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
+	// the table can have been renamed since its rows were inlined
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &transaction = DuckLakeTransaction::Get(context.client, catalog);
+	auto &latest_table = DuckLakeCompactor::GetLatestTableEntry(catalog, transaction, table);
+	chunk.data[0].Append(Value(latest_table.schema.GetSchemaName()));
+	chunk.data[1].Append(Value(latest_table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
