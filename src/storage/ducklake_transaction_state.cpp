@@ -336,6 +336,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
 	}
+	// the rows checked for NULL values do not include rows inserted by others since the snapshot
+	for (auto &table_id : changes.tables_set_not_null) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "set not null on table", "inserted into it");
+		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "set not null on table", "inserted into it");
+	}
 	for (auto &view_id : changes.altered_views) {
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");

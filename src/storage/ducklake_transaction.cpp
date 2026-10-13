@@ -940,6 +940,9 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 			if (!IsTransactionLocal(table_id)) {
 				changes.altered_tables.insert(table_id);
 				changes.altered_tables_with_schema_version_changes.insert(table_id);
+				if (table.GetLocalChange().type == LocalChangeType::SET_NULL) {
+					changes.tables_set_not_null.insert(table_id);
+				}
 			}
 			break;
 		}
