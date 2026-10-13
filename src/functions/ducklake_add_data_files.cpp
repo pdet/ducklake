@@ -726,7 +726,6 @@ void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadat
 	element->repeated = column.repeated;
 	element->child_columns = std::move(column.child_columns);
 	CollapseRepeatedGroup(element);
-	element->duckdb_type = ListType::GetChildType(column.duckdb_type);
 	if (element->column_id != DConstants::INVALID_INDEX) {
 		file_metadata.column_id_map.find(element->column_id)->second = *element;
 	}
