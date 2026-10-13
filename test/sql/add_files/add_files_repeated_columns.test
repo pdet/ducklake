@@ -109,6 +109,32 @@ SELECT a FROM dl.nested_groups ORDER BY a
 [[1, 2], [3]]
 [[4]]
 
+# the element of a list is read under the name of its repeated group
+statement ok
+CREATE TABLE dl.list_bag (a INTEGER[])
+
+statement ok
+CALL ducklake_add_data_files('dl', 'list_bag', 'data/parquet/list_bag.parquet')
+
+query I
+SELECT a FROM dl.list_bag ORDER BY a
+----
+[1, 2]
+[3]
+
+# a two-level list of a repeated column named element
+statement ok
+CREATE TABLE dl.list_two_level (a INTEGER[])
+
+statement ok
+CALL ducklake_add_data_files('dl', 'list_two_level', 'data/parquet/list_two_level_element.parquet')
+
+query I
+SELECT a FROM dl.list_two_level ORDER BY a
+----
+[1, 2]
+[3]
+
 # the element type still has to match
 statement ok
 CREATE TABLE dl.wrong_element (intArray VARCHAR[])

@@ -772,25 +772,16 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			map_entry->child_entries =
 			    MapColumns(file_metadata, column.child_columns, field_id.Children(), prefix, repeated);
 			break;
-		case LogicalTypeId::LIST:
-			if (wrapped || column.child_columns[0]->name == "array") {
-				// With legacy avro list layout, we just access directly
-				if (!wrapped) {
-					CollapseRepeatedGroup(column.child_columns[0]);
-				}
-				column.child_columns[0]->duckdb_type = ListType::GetChildType(column.duckdb_type);
-				map_entry->child_entries.push_back(
-				    MapColumn(file_metadata, *column.child_columns[0], *field_children[0], prefix, true));
-			} else {
-				// for lists we don't need to do any name mapping - the child element always maps to each other
-				// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
-				// (2) Parquet has a different convention on how to name list children - rename them to "list" here
-				column.child_columns[0]->child_columns[0]->name = "list";
-				map_entry->child_entries.push_back(MapColumn(file_metadata, *column.child_columns[0]->child_columns[0],
-				                                             *field_children[0], prefix, true));
+		case LogicalTypeId::LIST: {
+			// the element is the repeated child, or its only column, as the reader reads them
+			auto &element = column.child_columns[0];
+			if (!wrapped) {
+				CollapseRepeatedGroup(element);
 			}
-
+			element->duckdb_type = ListType::GetChildType(column.duckdb_type);
+			map_entry->child_entries.push_back(MapColumn(file_metadata, *element, *field_children[0], prefix, true));
 			break;
+		}
 		case LogicalTypeId::MAP:
 			// for maps we don't need to do any name mapping - the child elements are always key/value
 			// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
