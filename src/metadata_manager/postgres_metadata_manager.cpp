@@ -345,11 +345,9 @@ void PostgresMetadataManager::ClearCache() {
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
-	auto remote_query = StringUtil::Format(R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
-	(SELECT MAX(value) FROM %s.ducklake_metadata WHERE key = 'version')
-	FROM %s.ducklake_snapshot WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM %s.ducklake_snapshot);)",
-	                                       schema, schema, schema);
+	auto remote_query = LatestSnapshotQuery();
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));
 }

@@ -417,7 +417,6 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const vector<pair<
 			continue;
 		}
 
-		// If not inside a quoted range, check for a match of any `from`
 		bool replaced = false;
 		for (auto &replacement : replacements) {
 			auto &from = replacement.first;
