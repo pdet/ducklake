@@ -40,10 +40,18 @@ CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0);
 statement ok
 COMMIT
 
-query III
-SELECT record_count, file_size_bytes = (SELECT sum(file_size_bytes) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL), (SELECT estimated_size FROM duckdb_tables() WHERE table_name = 't') FROM meta.ducklake_table_stats
+statement ok
+SET VARIABLE live_size = (SELECT sum(file_size_bytes) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL)
+
+query II
+SELECT record_count, file_size_bytes = getvariable('live_size') FROM meta.ducklake_table_stats
 ----
-3	true	3
+3	true
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE table_name = 't'
+----
+3
 
 query II
 SELECT min_value, max_value FROM meta.ducklake_table_column_stats
