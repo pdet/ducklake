@@ -17,11 +17,11 @@ include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 run
 BEGIN;
 INSERT INTO lake.t SELECT i, {'a': i, 'b': 'value_' || i, 'c': [i, i + 1]}::VARIANT FROM range(10000) t(i);
-SELECT count(*) AS inlined FROM lake.t;
+SELECT count(*) AS inlined, (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) AS files FROM lake.t;
 ROLLBACK;
 
-# The rows were inlined in the transaction and rolled back
-result_query II
-SELECT (SELECT inlined FROM __answer), (SELECT count(*) FROM lake.t)
+# The rows were inlined without data files in the transaction and rolled back
+result_query III
+SELECT (SELECT inlined FROM __answer), (SELECT files FROM __answer), (SELECT count(*) FROM lake.t)
 ----
-10000	0
+10000	0	0
