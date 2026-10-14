@@ -459,8 +459,8 @@ public:
 	//! Also drops the inlined data tables of the replaced tables that the new ones supersede, when they hold no rows
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
-	//! The statements that drop the current inlined data tables of the given tables that hold no rows
-	string DropEmptyCurrentInlinedTables(const vector<TableIndex> &table_ids);
+	//! The statements that drop the current inlined data table of a table when it holds no rows
+	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      vector<string> &inlined_tables, string &inlined_table_queries);
 	static string InlinedTableNameFor(idx_t table_id, idx_t schema_version);
