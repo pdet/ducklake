@@ -3449,12 +3449,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		for (auto &type : entry.data->data->Types()) {
 			needs_encoding |= DuckLakeUtil::GetInlinedStorageType(*this, type) != type;
 		}
-		if (needs_encoding) {
+		if (needs_encoding || InsertsInlinedRowsAfterBatch(entry.data->data->Count())) {
 			inlined_inserts.push_back(InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name));
 			continue;
 		}
-		// Build one cell list per row, then defer formatting to the shared helper.
-		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data);
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
