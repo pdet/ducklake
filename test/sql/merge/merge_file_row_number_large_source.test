@@ -103,3 +103,47 @@ SELECT a FROM lake.h ORDER BY a
 7
 8
 9
+
+# the source scans the target with a filter that prunes one of its two files
+statement ok
+CREATE TABLE lake.two_files (a INTEGER)
+
+statement ok
+INSERT INTO lake.two_files SELECT range FROM range(10)
+
+statement ok
+INSERT INTO lake.two_files SELECT range FROM range(100, 110)
+
+query I
+MERGE INTO lake.two_files AS t USING (SELECT file_row_number AS row_number FROM lake.two_files WHERE a >= 100) AS s
+ON t.file_row_number = s.row_number WHEN MATCHED THEN DELETE
+----
+20
+
+query I
+SELECT count(*) FROM lake.two_files
+----
+0
+
+# the first tables of two lakes have the same table id
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/merge_file_row_number_first.db' AS first_lake (DATA_PATH '{DATA_PATH}/merge_file_row_number_first', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/merge_file_row_number_second.db' AS second_lake (DATA_PATH '{DATA_PATH}/merge_file_row_number_second', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE first_lake.t AS SELECT range AS a FROM range(2)
+
+statement ok
+CREATE TABLE second_lake.t AS SELECT range AS a FROM range(100000)
+
+query I
+MERGE INTO first_lake.t AS t USING second_lake.t AS s ON t.file_row_number = s.file_row_number WHEN MATCHED THEN DELETE
+----
+2
+
+query II
+SELECT (SELECT count(*) FROM first_lake.t), (SELECT count(*) FROM second_lake.t)
+----
+0	100000
