@@ -66,8 +66,8 @@ struct DuckLakeCommitContext {
 		    return false;
 	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables =
-	    [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &)>
+	    write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &) {
 		    return string();
 	    };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
@@ -229,8 +229,6 @@ public:
 	                                       TableIndex table_id, optional_idx row_id_start);
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
-	//! Drop the inlined data table each of the tables had before a commit superseded it, if it holds no rows
-	static void DropEmptyReplacedInlinedTables(const DuckLakeCommitContext &context, const set<TableIndex> &table_ids);
 
 	void CleanupFiles();
 

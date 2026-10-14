@@ -1766,6 +1766,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			// remap the table in the commit state
 			commit_state.committed_tables.emplace(old_table_id, new_table_id);
+			if (local_change.type == LocalChangeType::RENAMED) {
+				commit_state.replaced_inlined_tables.insert(new_table_id);
+			}
 
 			// create an inlined data table entry with the latest columns
 			// (uses tables.front() to get the most up-to-date schema including any ALTER TABLE changes)
@@ -1826,7 +1829,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			}
 		}
 		if (!already_added) {
-			commit_state.superseded_inlined_tables.insert(committed_id);
+			commit_state.replaced_inlined_tables.insert(committed_id);
 			DuckLakeTableInfo table_entry;
 			table_entry.id = committed_id;
 			table_entry.schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
@@ -2189,7 +2192,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
-		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
+		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
+		                                              commit_state.replaced_inlined_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
@@ -2476,9 +2480,16 @@ void DuckLakeTransactionState::CheckFileConflicts(const TransactionChangeInforma
 	}
 }
 
-//! Drop the targets that hold no rows, and return the result of the first drop that failed
-static unique_ptr<QueryResult> DropEmptyInlinedTables(const DuckLakeCommitContext &context,
-                                                      const string &find_targets_sql, bool &dropped) {
+void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
+	// Superseded inlined tables.
+	string find_targets_sql = R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+WHERE idt.schema_version < (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+);)";
 	auto targets = context.query_metadata(find_targets_sql);
 	targets->ThrowIfError("Failed to identify superseded inlined-data tables in DuckLake: ");
 	// Collect candidates before issuing the per-table emptiness queries on the same connection.
@@ -2491,6 +2502,7 @@ static unique_ptr<QueryResult> DropEmptyInlinedTables(const DuckLakeCommitContex
 	for (auto &row : *targets) {
 		candidates.push_back({row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), row.GetValue<string>(2)});
 	}
+	bool dropped = false;
 	unique_ptr<QueryResult> failed_drop;
 	for (auto &candidate : candidates) {
 		auto count_result = context.query_metadata(
@@ -2516,21 +2528,6 @@ static unique_ptr<QueryResult> DropEmptyInlinedTables(const DuckLakeCommitContex
 		}
 		dropped = true;
 	}
-	return failed_drop;
-}
-
-void DuckLakeTransactionState::DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context) {
-	// Superseded inlined tables.
-	string find_targets_sql = R"(
-SELECT idt.table_id, idt.schema_version, idt.table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-WHERE idt.schema_version < (
-    SELECT MAX(idt2.schema_version)
-    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
-    WHERE idt2.table_id = idt.table_id
-);)";
-	bool dropped = false;
-	auto failed_drop = DropEmptyInlinedTables(context, find_targets_sql, dropped);
 	if (dropped) {
 		// We also need to invalidate the existing schema versions in our catalog
 		string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
@@ -2540,28 +2537,6 @@ WHERE idt.schema_version < (
 			context.invalidate_schema_cache(row.GetValue<idx_t>(0));
 		}
 	}
-	if (failed_drop) {
-		failed_drop->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
-	}
-}
-
-void DuckLakeTransactionState::DropEmptyReplacedInlinedTables(const DuckLakeCommitContext &context,
-                                                              const set<TableIndex> &table_ids) {
-	vector<string> ids;
-	for (auto &table_id : table_ids) {
-		ids.push_back(to_string(table_id.index));
-	}
-	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
-	auto find_targets_sql = StringUtil::Format(R"(
-SELECT table_id, schema_version, table_name FROM (
-    SELECT table_id, schema_version, table_name,
-           row_number() OVER (PARTITION BY table_id ORDER BY schema_version DESC) AS version_rank
-    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-    WHERE table_id IN (%s)
-) AS ranked WHERE version_rank = 2;)",
-	                                           StringUtil::Join(ids, ", "));
-	bool dropped = false;
-	auto failed_drop = DropEmptyInlinedTables(context, find_targets_sql, dropped);
 	if (failed_drop) {
 		failed_drop->ThrowIfError("Failed to drop superseded inlined-data tables in DuckLake: ");
 	}
@@ -2598,7 +2573,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
-	set<TableIndex> superseded_inlined_tables;
 	ducklake_entry_oids_t new_entry_oids;
 	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
 		bool can_retry;
@@ -2637,7 +2611,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.flush_cache_if_pending();
 			context.commit_connection();
 			new_entry_oids = std::move(commit_state.new_entry_oids);
-			superseded_inlined_tables = std::move(commit_state.superseded_inlined_tables);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
@@ -2690,13 +2663,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	for (auto &table_id : local_changes.GetCompactedTables()) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
 	}
-	if (!context.skip_drop_empty_inlined && (flushed_inlined || !superseded_inlined_tables.empty())) {
+	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {
-			if (flushed_inlined) {
-				DropEmptySupersededInlinedTables(context);
-			} else {
-				DropEmptyReplacedInlinedTables(context, superseded_inlined_tables);
-			}
+			DropEmptySupersededInlinedTables(context);
 		} catch (std::exception &ex) {
 			context.report_post_commit_error(ErrorData(ex).Message());
 		}

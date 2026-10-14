@@ -456,7 +456,11 @@ public:
 	                                           bool create_if_not_exists = false, bool include_local_changes = true);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const string &table_name);
-	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
+	//! Also drops the inlined data tables of the replaced tables that the new ones supersede, when they hold no rows
+	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
+	                                     const set<TableIndex> &replaced_tables);
+	//! The statements that drop the current inlined data tables of the given tables that hold no rows
+	string DropEmptyCurrentInlinedTables(const vector<TableIndex> &table_ids);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      vector<string> &inlined_tables, string &inlined_table_queries);
 	static string InlinedTableNameFor(idx_t table_id, idx_t schema_version);

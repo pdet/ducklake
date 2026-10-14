@@ -75,7 +75,7 @@ struct DuckLakeCommitState {
 	//! The oid of each entry that gets its id in this commit
 	ducklake_entry_oids_t new_entry_oids;
 	//! The existing tables that get a new inlined data table in this commit
-	set<TableIndex> superseded_inlined_tables;
+	set<TableIndex> replaced_inlined_tables;
 
 	void AddNewEntry(const CatalogEntry &entry, idx_t id) {
 		new_entry_oids.emplace(make_pair(entry.type, id), entry.oid);

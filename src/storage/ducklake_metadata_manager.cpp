@@ -3154,12 +3154,14 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 }
 
 string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
-                                                      const vector<DuckLakeTableInfo> &new_tables) {
+                                                      const vector<DuckLakeTableInfo> &new_tables,
+                                                      const set<TableIndex> &replaced_tables) {
 	auto &catalog = transaction.GetCatalog();
 	auto context_ref = transaction.context.lock();
 	auto &context = *context_ref;
 	vector<string> inlined_tables;
 	string inlined_table_queries;
+	vector<TableIndex> superseded_tables;
 	for (auto &table : new_tables) {
 		if (catalog.DataInliningRowLimit(context, table.schema_id, table.id) == 0 || IsTransactionLocal(table.id)) {
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
@@ -3183,8 +3185,59 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			continue;
 		}
 		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
+		if (replaced_tables.count(table.id)) {
+			superseded_tables.push_back(table.id);
+		}
 	}
-	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries;
+	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries +
+	       DropEmptyCurrentInlinedTables(superseded_tables);
+}
+
+string DuckLakeMetadataManager::DropEmptyCurrentInlinedTables(const vector<TableIndex> &table_ids) {
+	if (table_ids.empty()) {
+		return string();
+	}
+	auto ids = StringUtil::Join(table_ids, ", ", [](const TableIndex &table_id) { return to_string(table_id.index); });
+	auto query = StringUtil::Format(R"(
+SELECT idt.table_id, idt.schema_version, idt.table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+WHERE idt.table_id IN (%s) AND idt.schema_version = (
+    SELECT MAX(idt2.schema_version)
+    FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt2
+    WHERE idt2.table_id = idt.table_id
+);)",
+	                                ids);
+	auto current_tables = Query(query);
+	current_tables->ThrowIfError("Failed to read the current inlined data tables from DuckLake: ");
+	struct CurrentInlinedTable {
+		idx_t table_id;
+		idx_t schema_version;
+		string table_name;
+	};
+	vector<CurrentInlinedTable> candidates;
+	for (auto &row : *current_tables) {
+		candidates.push_back({row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), row.GetValue<string>(2)});
+	}
+	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
+	string result;
+	for (auto &candidate : candidates) {
+		auto count_query =
+		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name));
+		auto count_result = Query(count_query);
+		count_result->ThrowIfError("Failed to check emptiness of an inlined data table in DuckLake: ");
+		idx_t row_count = 0;
+		for (auto &row : *count_result) {
+			row_count = row.GetValue<idx_t>(0);
+		}
+		if (row_count != 0) {
+			continue;
+		}
+		result += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;\n"
+		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;\n",
+		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name));
+	}
+	return result;
 }
 
 string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros) {

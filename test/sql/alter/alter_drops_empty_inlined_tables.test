@@ -35,6 +35,24 @@ ALTER TABLE ducklake.r ADD COLUMN c{k} INTEGER
 
 endloop
 
+statement ok
+ALTER TABLE ducklake.p RENAME TO p_renamed
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.p_renamed ADD COLUMN c INTEGER
+
+statement ok
+ALTER TABLE ducklake.p_renamed RENAME TO p
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.p DROP COLUMN c
+
 # p keeps only its current inlined data table, r also keeps the one that holds its rows
 query II
 SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY ALL ORDER BY ALL
