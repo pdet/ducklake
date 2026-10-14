@@ -20,6 +20,12 @@ REGRESSED = re.compile(r"^(?:confirm|samples): (\S+): .*\| regression$", re.MULT
 COLOR = re.compile(r"\x1b\[[0-9;]*m")
 # Rendered benchmarks name a database that never exists, so a runner without its wrapper fails instead
 UNSET_DATABASE = "pg_database_not_set"
+# These retry fixtures' shared metadata attach is unsupported on SQLite.
+SQLITE_UNSUPPORTED = {
+    "benchmark/micro/write/delete_commits_retry.benchmark",
+    "benchmark/micro/write/delete_commits_inlined_retry.benchmark",
+    "benchmark/micro/write/delete_commits_rewrite_retry.benchmark",
+}
 
 sys.path.append(str(RUNNER.parent))
 from benchmark import EXTENSION_DIRECTORY_ENV, find_extension_directory  # noqa: E402
@@ -159,6 +165,13 @@ def main(argv=None):
         benchmarks = Path(known.benchmarks).read_text(encoding="utf-8").split()
     except OSError as error:
         raise SystemExit(f"Failed to read the benchmark list: {error}") from None
+    if known.catalog == "sqlite":
+        for benchmark in benchmarks:
+            if benchmark in SQLITE_UNSUPPORTED:
+                print(f"Skipping {benchmark}: SQLite cannot share an attached metadata catalog", flush=True)
+        benchmarks = [benchmark for benchmark in benchmarks if benchmark not in SQLITE_UNSUPPORTED]
+        if not benchmarks:
+            raise SystemExit("No benchmarks support the SQLite catalog in the supplied list")
     suite = Path(known.benchmarks).stem
     if known.catalog != "duckdb":
         suite += "_" + known.catalog
