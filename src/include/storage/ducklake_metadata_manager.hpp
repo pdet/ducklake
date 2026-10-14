@@ -319,6 +319,8 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
+	//! The column rows live at {SNAPSHOT_ID}
+	static string SnapshotColumnsQuery();
 	static string GlobalTableStatsQuery(bool include_exactness, optional_idx table_id = optional_idx());
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
@@ -338,7 +340,8 @@ public:
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
+	                        const string &columns_query = SnapshotColumnsQuery());
 	//! The global stats of every table of the snapshot
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
 	//! Get the record count of every table that has global stats
@@ -591,6 +594,7 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	virtual string GetSnapshotColumnsQuery() const;
 
 	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                             const string &metadata_table_prefix);

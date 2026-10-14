@@ -975,12 +975,12 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata(), GetSnapshotColumnsQuery());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-    const string &base_data_path, const string &separator, bool supports_v1_1_metadata) {
+    const string &base_data_path, const string &separator, bool supports_v1_1_metadata, const string &columns_query) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
@@ -1049,13 +1049,12 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
 	) AS column_tags, default_value_type
 FROM {METADATA_CATALOG}.ducklake_table tbl
-LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
+LEFT JOIN (%s) col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
-  AND (({SNAPSHOT_ID} >= col.begin_snapshot AND ({SNAPSHOT_ID} < col.end_snapshot OR col.end_snapshot IS NULL)) OR column_id IS NULL)
 ORDER BY table_id, parent_column NULLS FIRST, column_order
 )",
 	                                           ListAggregation(TAG_FIELDS), ListAggregation(INLINED_DATA_TABLES_FIELDS),
-	                                           ListAggregation(TAG_FIELDS)));
+	                                           ListAggregation(TAG_FIELDS), columns_query));
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
@@ -4650,6 +4649,15 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 	return LatestSnapshotQuery();
+}
+
+string DuckLakeMetadataManager::SnapshotColumnsQuery() {
+	return "SELECT * FROM {METADATA_CATALOG}.ducklake_column WHERE {SNAPSHOT_ID} >= begin_snapshot AND "
+	       "({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)";
+}
+
+string DuckLakeMetadataManager::GetSnapshotColumnsQuery() const {
+	return SnapshotColumnsQuery();
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
