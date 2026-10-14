@@ -2505,21 +2505,15 @@ WHERE idt.schema_version < (
 	bool dropped = false;
 	unique_ptr<QueryResult> failed_drop;
 	for (auto &candidate : candidates) {
-		auto count_result = context.query_metadata(
-		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
-		count_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
-		idx_t row_count = 0;
-		for (auto &row : *count_result) {
-			row_count = row.GetValue<idx_t>(0);
-		}
-		if (row_count != 0) {
+		auto rows_result =
+		    context.query_metadata(DuckLakeMetadataManager::InlinedTableHasRowsQuery(candidate.table_name));
+		rows_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
+		if (rows_result->begin() != rows_result->end()) {
 			continue;
 		}
 		// keep the registration if the drop fails
-		auto res = context.execute_in_transaction(StringUtil::Format(
-		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
-		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
-		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name)));
+		auto res = context.execute_in_transaction(DuckLakeMetadataManager::DropInlinedTableSql(
+		    candidate.table_id, candidate.schema_version, candidate.table_name));
 		if (res->HasError()) {
 			if (!failed_drop) {
 				failed_drop = std::move(res);

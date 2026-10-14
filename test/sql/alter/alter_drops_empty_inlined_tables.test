@@ -103,3 +103,58 @@ SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP 
 ----
 1	1
 2	2
+
+# a flush in the same transaction as the ALTER or RENAME still writes to the table it flushes
+statement ok
+CREATE TABLE ducklake.e (i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.s (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.s VALUES (1)
+
+foreach tbl e s
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+ALTER TABLE ducklake.${tbl} ADD COLUMN j INTEGER
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.${tbl} ADD COLUMN k INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+ALTER TABLE ducklake.${tbl} RENAME TO ${tbl}_renamed
+
+statement ok
+COMMIT
+
+endloop
+
+query III
+SELECT (SELECT count(*) FROM ducklake.e_renamed), (SELECT sum(i) FROM ducklake.s_renamed), (SELECT count(k) FROM ducklake.s_renamed)
+----
+0	1	0
