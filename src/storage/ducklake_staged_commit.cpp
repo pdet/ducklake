@@ -450,9 +450,6 @@ string DuckLakeStagedCommit::EmitNameMaps(const DuckLakeNameMapSet &name_maps) c
 string DuckLakeStagedCommit::EmitFlushedInlinedTables(const vector<FlushedInlinedTableInfo> &flushed) const {
 	string sql;
 	for (auto &entry : flushed) {
-		if (!entry.wrote_files) {
-			continue;
-		}
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu, %llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::FLUSHED_INLINED),
 		                          SQLString(entry.inlined_table.table_name), entry.inlined_table.schema_version,
