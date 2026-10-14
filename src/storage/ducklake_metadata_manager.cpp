@@ -3154,12 +3154,14 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 }
 
 string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
-                                                      const vector<DuckLakeTableInfo> &new_tables) {
+                                                      const vector<DuckLakeTableInfo> &new_tables,
+                                                      const set<TableIndex> &replaced_tables) {
 	auto &catalog = transaction.GetCatalog();
 	auto context_ref = transaction.context.lock();
 	auto &context = *context_ref;
 	vector<string> inlined_tables;
 	string inlined_table_queries;
+	string drop_queries;
 	for (auto &table : new_tables) {
 		if (catalog.DataInliningRowLimit(context, table.schema_id, table.id) == 0 || IsTransactionLocal(table.id)) {
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
@@ -3183,8 +3185,48 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			continue;
 		}
 		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
+		if (replaced_tables.count(table.id) && DroppedTablesStayReadable()) {
+			auto replaced_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.id);
+			if (replaced_entry) {
+				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>());
+			}
+		}
 	}
-	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries;
+	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries + drop_queries;
+}
+
+string DuckLakeMetadataManager::InlinedTableHasRowsQuery(const string &table_name) {
+	return StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s LIMIT 1;", SQLIdentifier(table_name));
+}
+
+string DuckLakeMetadataManager::DropInlinedTableSql(idx_t table_id, idx_t schema_version, const string &table_name) {
+	return StringUtil::Format(
+	    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;\n"
+	    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;\n",
+	    table_id, schema_version, SQLIdentifier(table_name));
+}
+
+string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table) {
+	auto &inlined_tables = table.GetInlinedDataTables();
+	if (inlined_tables.empty()) {
+		return string();
+	}
+	auto &current = *std::max_element(inlined_tables.begin(), inlined_tables.end(),
+	                                  [](const DuckLakeInlinedTableInfo &a, const DuckLakeInlinedTableInfo &b) {
+		                                  return a.schema_version < b.schema_version;
+	                                  });
+	// the batch of a flush still writes to the table it flushes
+	if (transaction.InlinedTableFlushed(current.table_name)) {
+		return string();
+	}
+	auto query = InlinedTableHasRowsQuery(current.table_name);
+	auto result = Query(query);
+	result->ThrowIfError("Failed to check emptiness of an inlined data table in DuckLake: ");
+	if (result->begin() != result->end()) {
+		return string();
+	}
+	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
+	return DropInlinedTableSql(table_id.index, current.schema_version, current.table_name);
 }
 
 string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros) {
@@ -5555,6 +5597,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
+		if (!flushed.wrote_files) {
+			// a concurrent schema change can drop an inlined table without rows
+			continue;
+		}
 		// rows that ended after the flush were deleted by this transaction and are not flushed
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,

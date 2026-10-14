@@ -24,6 +24,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool DroppedTablesStayReadable() const override {
+		return false;
+	}
 	idx_t MaxIdentifierLength() const override {
 		return 63;
 	}

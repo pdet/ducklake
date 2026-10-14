@@ -218,6 +218,10 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! Whether transactions that started before a metadata table was dropped still read it
+	virtual bool DroppedTablesStayReadable() const {
+		return true;
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -456,7 +460,14 @@ public:
 	                                           bool create_if_not_exists = false, bool include_local_changes = true);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const string &table_name);
-	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables);
+	//! Also drops the empty inlined data tables of the replaced tables
+	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
+	                                     const set<TableIndex> &replaced_tables);
+	//! Drop the current inlined data table of a table if it holds no rows
+	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
+	//! A query that returns a row if the inlined data table holds any row
+	static string InlinedTableHasRowsQuery(const string &table_name);
+	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const string &table_name);
 	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                      vector<string> &inlined_tables, string &inlined_table_queries);
 	static string InlinedTableNameFor(idx_t table_id, idx_t schema_version);

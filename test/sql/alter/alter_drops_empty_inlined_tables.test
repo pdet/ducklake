@@ -1,5 +1,5 @@
-# name: test/sql/alter/alter_inlined_tables_on_demand.test
-# description: A schema change creates no inlined data table until rows are inlined in its schema version
+# name: test/sql/alter/alter_drops_empty_inlined_tables.test
+# description: An ALTER drops the empty inlined data tables of the table that its new inlined data table supersedes
 # group: [alter]
 
 require ducklake
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_inlined_tables_on_demand', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_drops_empty_inlined_tables', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.p AS SELECT range::INTEGER AS i FROM range(1000)
@@ -53,12 +53,12 @@ COMMIT
 statement ok
 ALTER TABLE ducklake.p DROP COLUMN c
 
-# p and r keep the inlined data table they were created with
+# p keeps only its current inlined data table, r also keeps the one that holds its rows
 query II
 SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY ALL ORDER BY ALL
 ----
 1	1
-2	1
+2	2
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')
@@ -98,7 +98,6 @@ SELECT sum(i) FROM ducklake.r AT (VERSION => 3)
 ----
 6
 
-# the insert created the inlined data table of the latest version of r
 query II
 SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY ALL ORDER BY ALL
 ----
@@ -160,7 +159,7 @@ SELECT (SELECT count(*) FROM ducklake.e_renamed), (SELECT sum(i) FROM ducklake.s
 ----
 0	1	0
 
-# a flush that commits after a concurrent ALTER of the table
+# a concurrent ALTER drops the empty inlined table that a pending flush did not write to
 statement ok
 CREATE TABLE ducklake.c (i INTEGER)
 
