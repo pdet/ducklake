@@ -229,6 +229,8 @@ public:
 	                                       TableIndex table_id, optional_idx row_id_start);
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
+	//! Drop the inlined data table each of the tables had before a commit superseded it, if it holds no rows
+	static void DropEmptyReplacedInlinedTables(const DuckLakeCommitContext &context, const set<TableIndex> &table_ids);
 
 	void CleanupFiles();
 
