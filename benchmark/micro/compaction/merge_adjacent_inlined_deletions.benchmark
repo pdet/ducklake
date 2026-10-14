@@ -16,7 +16,7 @@ include benchmark/micro/fixtures/inlined_deletion_files.benchmark.in
 
 include benchmark/micro/fixtures/restore_cleanup.benchmark.in
 
-# Files with deletions are not merged, so the calls only read the file list and the files with deletions
+# files with deletions are excluded from merging
 run
 SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
 SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');

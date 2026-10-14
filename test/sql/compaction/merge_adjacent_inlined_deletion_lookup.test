@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_inlined_deletion_lookup')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_inlined_deletion_lookup', DATA_INLINING_ROW_LIMIT 1)
 
 statement ok
 CREATE TABLE ducklake.t (id INTEGER, p INTEGER)
@@ -37,11 +37,12 @@ SELECT count(*) FROM ducklake_merge_adjacent_files('ducklake')
 statement ok
 CALL disable_logging()
 
-# no metadata query of the merge grows with the files
-query I
-SELECT max(length(query)) < 4096 FROM duckdb_logs_parsed('DuckLakeMetadata')
+# the deletion lookup does not list the candidate files
+query II
+SELECT count(*), max(length(query)) < 4096 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query ILIKE '%SELECT DISTINCT file_id FROM%'
 ----
-true
+1	true
 
 statement ok
 INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000, 4000) r(i)
@@ -49,7 +50,7 @@ INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000, 4000) r(i)
 statement ok
 INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(4000, 6000) r(i)
 
-# the two new files of each partition merge, its file with a deleted row stays
+# only the two new files in each partition merge
 query II
 SELECT sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('ducklake')
 ----

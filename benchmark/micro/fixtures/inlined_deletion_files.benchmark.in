@@ -9,6 +9,7 @@ cache_file ${lake}_ready.marker
 load
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 1);
 CREATE TABLE lake.t (id INTEGER, p INTEGER);
 ALTER TABLE lake.t SET PARTITIONED BY (p);
 INSERT INTO lake.t SELECT i, i % 10000 FROM range(200000) t(i);

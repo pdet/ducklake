@@ -712,7 +712,6 @@ private:
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
 
-	//! The ids of the files of a table that have inlined deletions
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
 	                                               const string &inlined_table_name,

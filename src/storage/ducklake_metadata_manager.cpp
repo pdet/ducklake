@@ -2732,12 +2732,8 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				file.has_inlined_deletions = true;
 			}
 		}
-	} else {
-		// Cheap existence-only check — avoids fetching every deleted row_id for non-rewrite paths.
-		unordered_set<idx_t> files_with_deletions;
-		if (!files.empty()) {
-			files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot);
-		}
+	} else if (!files.empty()) {
+		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot);
 		for (auto &file : files) {
 			if (files_with_deletions.count(file.file.id.index)) {
 				file.has_inlined_deletions = true;
