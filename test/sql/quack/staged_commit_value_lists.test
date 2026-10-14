@@ -30,6 +30,10 @@ INSERT INTO dl.f SELECT range FROM range(10000)
 statement ok
 CALL dl.set_option('data_inlining_row_limit', 100000, table_name => 'f')
 
+# the first delete creates the inlined deletion table in a commit of the client
+statement ok
+DELETE FROM dl.f WHERE a = 0
+
 statement ok
 CALL enable_logging('DuckLakeMetadata')
 
@@ -50,9 +54,9 @@ CALL disable_logging()
 
 # each staged table gets a few statements instead of one per row
 query III
-SELECT sum(len(string_split(query, 'ducklake_staged_inlined_row VALUES')) - 1) < 100,
-    sum(len(string_split(query, 'ducklake_staged_inlined_delete VALUES')) - 1) < 100,
-    sum(len(string_split(query, 'ducklake_staged_inlined_file_delete VALUES')) - 1) < 100
+SELECT sum(len(string_split(query, 'ducklake_staged_inlined_row VALUES')) - 1) BETWEEN 1 AND 99,
+    sum(len(string_split(query, 'ducklake_staged_inlined_delete VALUES')) - 1) BETWEEN 1 AND 99,
+    sum(len(string_split(query, 'ducklake_staged_inlined_file_delete VALUES')) - 1) BETWEEN 1 AND 99
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 true	true	true
