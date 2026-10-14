@@ -158,3 +158,30 @@ query III
 SELECT (SELECT count(*) FROM ducklake.e_renamed), (SELECT sum(i) FROM ducklake.s_renamed), (SELECT count(k) FROM ducklake.s_renamed)
 ----
 0	1	0
+
+# a concurrent ALTER drops the empty inlined table that a pending flush did not write to
+statement ok
+CREATE TABLE ducklake.c (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'c')
+
+statement ok con1
+CREATE TABLE ducklake.unrelated (i INTEGER)
+
+statement ok con2
+ALTER TABLE ducklake.c ADD COLUMN j INTEGER
+
+statement ok con1
+COMMIT
+
+statement ok
+INSERT INTO ducklake.c VALUES (1, 2)
+
+query II
+SELECT i, j FROM ducklake.c
+----
+1	2

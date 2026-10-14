@@ -5597,6 +5597,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
+		if (!flushed.wrote_files) {
+			// a concurrent schema change can drop an inlined table without rows
+			continue;
+		}
 		// rows that ended after the flush were deleted by this transaction and are not flushed
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,
