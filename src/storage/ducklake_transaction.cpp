@@ -1735,12 +1735,7 @@ Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	return *default_schema;
 }
 
-DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
-	auto catalog_snapshot = ducklake_catalog.CatalogSnapshot();
-	if (catalog_snapshot) {
-		// the catalog was opened at a specific snapshot - load that snapshot
-		return GetSnapshot(catalog_snapshot);
-	}
+DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	lock_guard<mutex> guard(snapshot_lock);
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
@@ -1749,11 +1744,26 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 	return *snapshot;
 }
 
+DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
+	auto catalog_snapshot = ducklake_catalog.CatalogSnapshot();
+	if (catalog_snapshot) {
+		// the catalog was opened at a specific snapshot - load that snapshot
+		return GetSnapshot(catalog_snapshot);
+	}
+	return GetLatestSnapshot();
+}
+
+idx_t DuckLakeTransaction::GetNewestVisibleSnapshotId() {
+	return GetLatestSnapshot().snapshot_id;
+}
+
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {
 	if (!at_clause) {
 		// no AT-clause - get the latest snapshot
 		return GetSnapshot();
 	}
+	// snapshots committed after the transaction started are not visible to it
+	auto newest_snapshot_id = GetNewestVisibleSnapshotId();
 	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
 	// this is used as a caching key for the snapshot
 	child_list_t<Value> values;
@@ -1767,7 +1777,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		return entry->second;
 	}
 	// find the snapshot and cache it
-	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound);
+	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound, newest_snapshot_id);
 	snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
 	return result_snapshot;
 }
