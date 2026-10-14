@@ -181,7 +181,8 @@
         "test/sql/cte/materialized/materialized_cte_order_preservation.test",
         "test/sql/cte/materialized/materialized_cte_parallel_buffered.test",
         "test/optimizer/partial_aggregate_pushdown.test",
-        "test/sql/optimizer/pushdown_extract_reapplied.test"
+        "test/sql/optimizer/pushdown_extract_reapplied.test",
+        "test/sql/optimizer/variant_json_cast_pushdown.test"
       ]
     },
     {
@@ -206,7 +207,8 @@
         "test/sql/sql_export/compression_fallbacks.test",
         "test/sql/sql_export/compression_fallbacks_plan.test",
         "test/sql/sql_export/rewritten_functions.test",
-        "test/optimizer/statistics/statistics_early_join_range.test"
+        "test/optimizer/statistics/statistics_early_join_range.test",
+        "test/sql/serialization/logical_operator_serialization.test"
       ]
     },
     {
@@ -271,7 +273,8 @@
         "test/sql/alter/rename_table/test_rename_table_view.test",
         "test/sql/alter/alter_schema_set_schema_options.test",
         "test/sql/create/create_schema_options.test",
-        "test/sql/alter/drop_col/test_drop_col_dotted_name.test"
+        "test/sql/alter/drop_col/test_drop_col_dotted_name.test",
+        "test/sql/parser/parsed_data_statement_roundtrip.test"
       ]
     },
     {
@@ -661,7 +664,8 @@
         "test/optimizer/joins/always_true_scan_filter_estimate.test",
         "test/sql/sql_export/pushed_column_paths.test",
         "test/sql/optimizer/plan/dense_or_filter_pushdown.test",
-        "test/sql/storage/distinct_statistics_sample.test"
+        "test/sql/storage/distinct_statistics_sample.test",
+        "test/sql/explain/tree_renderer_branches.test"
       ]
     },
     {
@@ -726,7 +730,8 @@
         "test/sql/types/geo/geometry_shred_limit.test",
         "test/sql/types/geo/geometry_shred.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
-        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test"
+        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
+        "test/sql/storage/compression/constant/constant_numeric_types.test"
       ]
     },
     {
@@ -809,13 +814,20 @@
     {
       "reason": "Asserts insertion order of a large parallel CTAS copy via LIMIT/OFFSET without ORDER BY; DuckLake does not preserve it.",
       "paths": [
-        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
+        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test",
+        "test/sql/cte/materialized/materialized_cte_parallel_scan.test"
       ]
     },
     {
       "reason": "Asserts DuckDB-native VARIANT shredding statistics and vector types, which differ for VARIANT values stored in Parquet.",
       "paths": [
         "test/issues/general/test_24298.test"
+      ]
+    },
+    {
+      "reason": "EXPLAIN (SQL) cannot render UPDATE or DELETE of a DuckLake table, which identifies rows by data file and row number instead of a single row-id column.",
+      "paths": [
+        "test/sql/sql_export/dml_statements.test"
       ]
     },
     {
