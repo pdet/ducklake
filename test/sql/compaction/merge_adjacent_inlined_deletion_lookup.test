@@ -20,11 +20,11 @@ statement ok
 ALTER TABLE ducklake.t SET PARTITIONED BY (p)
 
 statement ok
-INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000) r(i)
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(600) r(i)
 
 # every file has one deleted row
 statement ok
-DELETE FROM ducklake.t WHERE id < 1000
+DELETE FROM ducklake.t WHERE id < 300
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')
@@ -39,29 +39,29 @@ CALL disable_logging()
 
 # the deletion lookup does not list the candidate files
 query II
-SELECT count(*), max(length(query)) < 4096 FROM duckdb_logs_parsed('DuckLakeMetadata')
+SELECT count(*), max(length(query)) < 1024 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query ILIKE '%SELECT DISTINCT file_id FROM%'
 ----
 1	true
 
 statement ok
-INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000, 4000) r(i)
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(600, 1200) r(i)
 
 statement ok
-INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(4000, 6000) r(i)
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(1200, 1800) r(i)
 
 # only the two new files in each partition merge
 query II
 SELECT sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('ducklake')
 ----
-2000	1000
+600	300
 
 query I
 SELECT count(*) FROM ducklake_list_files('ducklake', 't')
 ----
-2000
+600
 
 query III
-SELECT count(*), sum(id), count(*) FILTER (WHERE id < 1000) FROM ducklake.t
+SELECT count(*), sum(id), count(*) FILTER (WHERE id < 300) FROM ducklake.t
 ----
-5000	17497500	0
+1500	1574250	0
