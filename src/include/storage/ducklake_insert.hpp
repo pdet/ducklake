@@ -138,6 +138,8 @@ public:
 	//! Binds the column references of sort keys to the positions of the columns
 	static void ResolveSortOrders(vector<BoundOrderByNode> &orders, TableIndex table_index,
 	                              const vector<LogicalType> &types);
+	//! Makes the copy write sorted input in order, even when it rotates files
+	static void PreserveSortedOrder(PhysicalCopyToFile &physical_copy);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);
