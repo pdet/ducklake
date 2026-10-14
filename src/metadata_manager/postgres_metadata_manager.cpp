@@ -350,7 +350,6 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
-//! Runs a metadata query in Postgres
 static string PostgresQuery(const string &query) {
 	auto remote_query = StringUtil::Replace(query, "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}");
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
