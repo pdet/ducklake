@@ -36,7 +36,6 @@ public:
 	                                                MultiFilePushdownInfo &info,
 	                                                vector<unique_ptr<Expression>> &filters) const override;
 
-	vector<OpenFileInfo> GetAllFiles() const override;
 	FileExpandResult GetExpandResult() const override;
 	idx_t GetTotalFileCount() const override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
@@ -50,17 +49,23 @@ public:
 	}
 
 	bool CanUseGlobalStats() const;
+	//! Whether filters can prune files by their stats
+	bool SupportsFilterPushdown() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
+	static DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file);
+	static DuckLakeFileData GetDeleteData(const DuckLakeDeleteFile &delete_file);
 
 protected:
 	//! Get the i-th expanded file
 	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
+	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
+	void AddInlinedDataTables(DuckLakeTransaction &transaction) const;
 	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
 	                             unique_ptr<TableFilter> filter) const;
 	//! Build the node for a table filter on one column - a leaf, or a conjunction of them when it
@@ -99,8 +104,6 @@ private:
 	//! A tree is not a promise that it prunes - that is decided when the SQL is generated.
 	unique_ptr<DuckLakeFilterNode> BuildFilterTree(ClientContext &context, MultiFilePushdownInfo &info,
 	                                               const Expression &expr, FilterTreeState &state) const;
-	//! Get the row_id_start for transaction-local inlined data.
-	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 
 private:
 	mutable mutex file_lock;

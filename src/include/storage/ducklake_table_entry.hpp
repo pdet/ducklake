@@ -64,14 +64,20 @@ public:
 	LocalChange GetLocalChange() const {
 		return local_change;
 	}
+	//! Whether the transaction changed the type of a column of this table
+	bool ChangedColumnType();
+	//! Whether this transaction added the field with ADD COLUMN
+	bool AddedColumn(FieldIndex field_index);
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
 	optional_ptr<const DuckLakePartition> GetPartitionData() const {
 		return partition_data.get();
 	}
-	//! Returns SQL expressions for each partition field (e.g., "region", "year(ts)")
-	vector<string> GetPartitionSQLExpressions() const;
+	//! Whether this entry starts a new partition spec with the same fields
+	bool StartsPartitionSpec() const {
+		return starts_partition_spec;
+	}
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
 	}
@@ -88,12 +94,23 @@ public:
 	unordered_set<idx_t> GetSkippedStatsFields() const;
 	//! Refuses a field added below a skipped column whose statistics cannot be skipped
 	void ValidateAddedFieldsCanSkipStats(const DuckLakeFieldId &parent_id, const DuckLakeFieldId &new_field_id) const;
+	//! The topmost fields of this entry that the previous entry does not have
+	duckdb::set<FieldIndex> GetNewFields(const DuckLakeTableEntry &previous) const;
+	//! The statistics of count rows that were written before the given fields were added
+	map<FieldIndex, DuckLakeColumnStats> GetAddedFieldStats(const duckdb::set<FieldIndex> &added_fields,
+	                                                        idx_t count) const;
 	const ColumnChangeInfo &GetChangedFields() const {
 		return *changed_fields;
 	}
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	//! Whether an inlined data table of the schema version has the columns of the last schema change
+	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
+	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
+	//! The inlined data tables at the snapshot, without the flushed ones when local changes are included
+	vector<DuckLakeInlinedTableInfo> GetInlinedDataTables(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      bool include_local_changes = true) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;
@@ -125,6 +142,7 @@ public:
 
 	//! Gets the top-level not-null fields
 	case_insensitive_set_t GetNotNullFields() const;
+	void ThrowNotNullViolation(const string &column_name) const;
 
 	DuckLakeTableInfo GetTableInfo() const;
 	vector<DuckLakeColumnInfo> GetTableColumns() const;
@@ -201,6 +219,10 @@ private:
 	                                    SetTableOptionsInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
 	                                    ResetTableOptionsInfo &info);
+	//! The entry of a column type change, which starts a new partition spec when bucket hashes change
+	unique_ptr<CatalogEntry> AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
+	                                         unique_ptr<ColumnChangeInfo> change_info,
+	                                         shared_ptr<DuckLakeFieldData> new_field_data);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);
@@ -240,6 +262,7 @@ private:
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	LocalChange local_change;
 	unique_ptr<DuckLakePartition> partition_data;
+	bool starts_partition_spec = false;
 	unique_ptr<DuckLakeSort> sort_data;
 	map<string, string> table_options;
 	// only set for REMOVED_COLUMN

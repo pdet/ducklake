@@ -60,11 +60,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (lcase == "busy_timeout") {
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else if (lcase == "ducklake_version") {
-		auto version = DuckLakeVersionFromString(value.ToString());
-		if (version < DuckLakeVersion::V1_0) {
-			throw InvalidInputException("ducklake_version must be >= '1.0', got '%s'", value.ToString());
-		}
-		options.ducklake_version = version;
+		options.ducklake_version = ParseWritableDuckLakeVersion(value.ToString(), "ducklake_version");
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}
@@ -102,12 +98,13 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 	}
 	if (secret) {
 		// if we have a secret - handle the options
-		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret->secret);
+		auto &kv_secret = secret->secret->Cast<KeyValueSecret>();
 		for (auto &entry : kv_secret.secret_map) {
 			HandleDuckLakeOption(options, entry.first.GetIdentifierName(), entry.second);
 		}
 	}
 	options.access_mode = attach_options.access_mode;
+	options.on_conflict = info.on_conflict;
 	bool is_create_if_not_exists_set = false;
 	for (auto &entry : attach_options.options) {
 		if (StringUtil::Lower(entry.first) == "create_if_not_exists") {

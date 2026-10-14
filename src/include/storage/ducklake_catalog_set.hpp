@@ -20,6 +20,8 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 
 using ducklake_entries_map_t = case_insensitive_map_t<unique_ptr<CatalogEntry>>;
+//! The oid of an entry by its type and id
+using ducklake_entry_oids_t = map<pair<CatalogType, idx_t>, idx_t>;
 
 //! The DuckLakeCatalogSet contains a set of catalog entries for a given schema version of the DuckLake
 //! Note that we don't need any locks to access this - the catalog set is constant for a given snapshot
@@ -37,20 +39,15 @@ public:
 	void AddEntry(DuckLakeSchemaEntry &schema, TableIndex id, unique_ptr<CatalogEntry> entry);
 	void AddEntry(DuckLakeSchemaEntry &schema, MacroIndex id, unique_ptr<CatalogEntry> entry);
 	void MoveEntriesTo(vector<unique_ptr<CatalogEntry>> &result);
-	template <class T>
-	optional_ptr<T> GetEntry(const string &name) {
-		auto entry = GetEntry(name);
-		if (!entry) {
-			return nullptr;
-		}
-		return entry->Cast<T>();
-	}
 
 	const ducklake_entries_map_t &GetEntries() const {
 		return catalog_entries;
 	}
 	const map<SchemaIndex, reference<DuckLakeSchemaEntry>> &GetSchemaIdMap() {
 		return schema_entry_map;
+	}
+	const map<TableIndex, reference<CatalogEntry>> &GetTableIdMap() const {
+		return table_entry_map;
 	}
 	idx_t TotalEntryCount() const {
 		return catalog_entries.size() + table_entry_map.size() + macro_entry_map.size();

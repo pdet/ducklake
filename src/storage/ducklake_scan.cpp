@@ -22,6 +22,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/qualified_name.hpp"
+#include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 namespace duckdb {
 
@@ -30,7 +31,9 @@ static InsertionOrderPreservingMap<string> DuckLakeFunctionToString(TableFunctio
 
 	if (input.table_function.function_info) {
 		auto &table_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-		result["Table"] = table_info.table_name;
+		result["Table"] = table_info.table.ParentSchema()
+		                      .GetQualifiedName(Identifier(table_info.table_name))
+		                      .ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	}
 
 	return result;
@@ -211,7 +214,7 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	// record_count (total ever inserted) equals the net (delete-adjusted) row count. count(*) is unaffected
 	// either way: it does not consult MinMaxIsExact and subtracts delete counts independently.
 	auto table_stats = table.GetTableStats(*transaction);
-	bool min_max_exact = table_stats && table_stats->record_count == net_count;
+	bool min_max_exact = table_stats && !table_stats->record_count_unknown && table_stats->record_count == net_count;
 
 	// Return single partition with total count
 	PartitionStatistics stats;
@@ -262,10 +265,8 @@ shared_ptr<DuckLakeFunctionInfo>
 DuckLakeFunctionInfo::Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto result = make_shared_ptr<DuckLakeFunctionInfo>(table, transaction, snapshot);
 	result->table_name = table.name.GetIdentifierName();
-	for (auto &col : table.GetColumns().Logical()) {
-		result->column_names.push_back(col.Name().GetIdentifierName());
-		result->column_types.push_back(col.Type());
-	}
+	result->column_names = table.GetColumns().GetColumnNames();
+	result->column_types = table.GetColumns().GetColumnTypes();
 	result->table_id = table.GetTableId();
 	return result;
 }
@@ -289,49 +290,48 @@ bool DuckLakeFunctionInfo::CanUseGlobalStats() {
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                           const TableFunction &function) {
+                           const BoundTableFunction &function) {
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	auto &catalog = func_info.table.ParentCatalog();
 	serializer.WriteProperty(100, "catalog_name", catalog.GetName());
 	serializer.WriteProperty(101, "schema_name", func_info.table.ParentSchema().name);
 	serializer.WriteProperty(102, "table_name", func_info.table_name);
-	serializer.WriteObject(103, "snapshot", [&](Serializer &obj) { func_info.snapshot.Serialize(obj); });
+	serializer.WriteProperty(103, "snapshot", func_info.snapshot);
 	serializer.WriteProperty(104, "scan_type", static_cast<uint8_t>(func_info.scan_type));
 	bool has_start_snapshot = func_info.start_snapshot != nullptr;
 	serializer.WriteProperty(105, "has_start_snapshot", has_start_snapshot);
 	if (has_start_snapshot) {
-		serializer.WriteObject(106, "start_snapshot",
-		                       [&](Serializer &obj) { func_info.start_snapshot->Serialize(obj); });
+		serializer.WriteProperty(106, "start_snapshot", *func_info.start_snapshot);
 	}
 	serializer.WriteProperty(107, "qualified_name",
 	                         func_info.table.ParentSchema().GetQualifiedName(Identifier(func_info.table_name)));
+	serializer.WritePropertyWithDefault<bool>(108, "include_local_changes", func_info.include_local_changes, true);
 }
 
-unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
 	auto &context = deserializer.Get<ClientContext &>();
 	auto catalog_name = deserializer.ReadProperty<string>(100, "catalog_name");
 	auto schema_name = deserializer.ReadProperty<string>(101, "schema_name");
 	auto table_name = deserializer.ReadProperty<string>(102, "table_name");
-	DuckLakeSnapshot snapshot;
-	deserializer.ReadObject(103, "snapshot", [&](Deserializer &obj) { snapshot = DuckLakeSnapshot::Deserialize(obj); });
+	auto snapshot = deserializer.ReadProperty<DuckLakeSnapshot>(103, "snapshot");
 	auto scan_type = static_cast<DuckLakeScanType>(deserializer.ReadPropertyWithExplicitDefault<uint8_t>(
 	    104, "scan_type", static_cast<uint8_t>(DuckLakeScanType::SCAN_TABLE)));
 	bool has_start_snapshot = deserializer.ReadPropertyWithExplicitDefault<bool>(105, "has_start_snapshot", false);
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
 	if (has_start_snapshot) {
 		start_snapshot = make_uniq<DuckLakeSnapshot>();
-		deserializer.ReadObject(106, "start_snapshot",
-		                        [&](Deserializer &obj) { *start_snapshot = DuckLakeSnapshot::Deserialize(obj); });
+		deserializer.ReadProperty(106, "start_snapshot", *start_snapshot);
 	}
 	auto qualified_name =
 	    deserializer.ReadPropertyWithExplicitDefault<QualifiedName>(107, "qualified_name", QualifiedName());
 	if (qualified_name.Path().empty()) {
 		qualified_name = QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(table_name));
 	}
+	auto include_local_changes = deserializer.ReadPropertyWithExplicitDefault<bool>(108, "include_local_changes", true);
 
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
-		function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
+		function = BoundTableFunction(DuckLakeFunctions::GetDuckLakeScanFunction(*context.db));
 		if (!function.bind) {
 			throw InvalidInputException("ducklake_scan requires the parquet extension to be loaded");
 		}
@@ -341,12 +341,19 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Tab
 	auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
-	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, qualified_name).Cast<DuckLakeTableEntry>();
+	// a time travel scan finds its table at the serialized snapshot
+	unique_ptr<BoundAtClause> at_clause;
+	if (!include_local_changes) {
+		at_clause = make_uniq<BoundAtClause>("version", Value::UBIGINT(snapshot.snapshot_id));
+	}
+	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY, qualified_name, at_clause.get(), QueryErrorContext());
+	auto &table_entry = Catalog::GetEntry(context, table_lookup).Cast<DuckLakeTableEntry>();
 
 	function.function_info = DuckLakeFunctionInfo::Create(table_entry, transaction, snapshot);
 	auto &func_info = function.function_info->Cast<DuckLakeFunctionInfo>();
 	func_info.scan_type = scan_type;
 	func_info.start_snapshot = std::move(start_snapshot);
+	func_info.include_local_changes = include_local_changes;
 
 	return DuckLakeFunctions::BindDuckLakeScan(context, function);
 }

@@ -94,6 +94,16 @@ struct DuckLakeInlinedTableInfo {
 	idx_t schema_version;
 };
 
+//! The schema versions of the creation and the last schema change of a table
+struct DuckLakeTableSchemaVersions {
+	optional_idx creation;
+	optional_idx last_change;
+
+	bool ChangedSinceCreation() const {
+		return creation.IsValid() && last_change.IsValid() && creation.GetIndex() != last_change.GetIndex();
+	}
+};
+
 struct DuckLakeTableInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
@@ -213,8 +223,11 @@ struct DuckLakePartitionFieldInfo {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	string transform;
+	bool operator==(const DuckLakePartitionFieldInfo &new_field) const {
+		return field_id == new_field.field_id && transform == new_field.transform;
+	}
 	bool operator!=(const DuckLakePartitionFieldInfo &new_field) const {
-		return field_id != new_field.field_id || transform != new_field.transform;
+		return !(*this == new_field);
 	}
 };
 
@@ -222,16 +235,10 @@ struct DuckLakePartitionInfo {
 	optional_idx id;
 	TableIndex table_id;
 	vector<DuckLakePartitionFieldInfo> fields;
+	//! Replaces the current spec even if it has the same fields
+	bool replaces_equal_spec = false;
 	bool operator==(const DuckLakePartitionInfo &new_partition) const {
-		if (table_id != new_partition.table_id || fields.size() != new_partition.fields.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < fields.size(); i++) {
-			if (fields[i] != new_partition.fields[i]) {
-				return false;
-			}
-		}
-		return true;
+		return table_id == new_partition.table_id && fields == new_partition.fields;
 	}
 	bool operator!=(vector<DuckLakePartitionInfo>::const_reference value) const {
 		return !(*this == value);
@@ -244,9 +251,12 @@ struct DuckLakeSortFieldInfo {
 	string dialect;
 	OrderType sort_direction;
 	OrderByNullType null_order;
+	bool operator==(const DuckLakeSortFieldInfo &new_field) const {
+		return expression == new_field.expression && dialect == new_field.dialect &&
+		       sort_direction == new_field.sort_direction && null_order == new_field.null_order;
+	}
 	bool operator!=(const DuckLakeSortFieldInfo &new_field) const {
-		return expression != new_field.expression || dialect != new_field.dialect ||
-		       sort_direction != new_field.sort_direction || null_order != new_field.null_order;
+		return !(*this == new_field);
 	}
 };
 
@@ -255,15 +265,7 @@ struct DuckLakeSortInfo {
 	TableIndex table_id;
 	vector<DuckLakeSortFieldInfo> fields;
 	bool operator==(const DuckLakeSortInfo &new_sort) const {
-		if (table_id != new_sort.table_id || fields.size() != new_sort.fields.size()) {
-			return false;
-		}
-		for (idx_t i = 0; i < fields.size(); i++) {
-			if (fields[i] != new_sort.fields[i]) {
-				return false;
-			}
-		}
-		return true;
+		return table_id == new_sort.table_id && fields == new_sort.fields;
 	}
 	bool operator!=(vector<DuckLakeSortInfo>::const_reference value) const {
 		return !(*this == value);
@@ -298,7 +300,15 @@ struct DuckLakeGlobalStatsInfo {
 	idx_t record_count;
 	idx_t next_row_id;
 	idx_t table_size_bytes;
+	//! The stats row has no record_count
+	bool record_count_unknown = false;
+	//! The stats row has no file_size_bytes
+	bool missing_table_size = false;
 	vector<DuckLakeGlobalColumnStatsInfo> column_stats;
+
+	bool MayHaveRows() const {
+		return record_count_unknown || record_count > 0;
+	}
 };
 
 struct SnapshotChangeInfo {
@@ -397,6 +407,8 @@ struct DuckLakeFileColumnStats {
 	string max;
 	bool has_min = false;
 	bool has_max = false;
+	bool contains_nan = false;
+	bool has_contains_nan = false;
 };
 
 struct DuckLakeFileListEntry {
@@ -428,6 +440,8 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
 	optional_idx snapshot_id;
+	//! Whether the data file itself was deleted at snapshot_id
+	bool file_deleted = false;
 	//! The start of the snapshot range for filtering
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
@@ -485,21 +499,13 @@ struct DuckLakeCompactionFileEntry {
 	vector<DuckLakeCompactionDeleteFileData> delete_files;
 	optional_idx max_partial_file_snapshot;
 	idx_t schema_version;
-	//! Snapshot and schema version used to resolve the file's partition spec.
-	optional_idx partition_snapshot_id;
+	//! Schema version used to resolve the file's partition spec.
 	optional_idx partition_schema_version;
 	//! Inlined file deletions stored in the metadata database rather than delete files.
 	set<idx_t> inlined_file_deletions;
 	//! Whether this file has any inlined deletions (cheap flag; set for all compaction types).
 	bool has_inlined_deletions = false;
 	double delete_ratio = 0;
-};
-
-struct DuckLakeRewriteFileEntry {
-	DuckLakeCompactionFileData file;
-	vector<DuckLakeCompactionDeleteFileData> delete_files;
-	optional_idx max_partial_file_snapshot;
-	idx_t schema_version;
 };
 
 struct DuckLakeCompactionEntry {
@@ -528,14 +534,16 @@ struct DuckLakeMergeAdjacentOptions {
 	optional_idx max_file_size;
 	//! If set, only files written at or after this timestamp are considered for compaction
 	Value newer_than;
+	//! If set, only files written before this timestamp are considered for compaction
+	Value older_than;
 };
 
-struct DuckLakeFileSizeOptions {
-	optional_idx min_file_size;
-	optional_idx max_file_size;
+struct DuckLakeFileSizeOptions : public DuckLakeMergeAdjacentOptions {
+	DuckLakeFileSizeOptions(const DuckLakeMergeAdjacentOptions &options, idx_t target_file_size)
+	    : DuckLakeMergeAdjacentOptions(options), target_file_size(target_file_size) {
+	}
+
 	idx_t target_file_size;
-	//! If set, only files written at or after this timestamp are considered for compaction
-	Value newer_than;
 };
 
 struct DuckLakeTableSizeInfo {

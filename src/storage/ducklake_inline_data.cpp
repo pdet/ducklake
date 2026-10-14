@@ -1,5 +1,7 @@
 #include "storage/ducklake_inline_data.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_types.hpp"
 
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_insert.hpp"
@@ -55,17 +57,12 @@ public:
 			target = std::move(source);
 			return;
 		}
-		ColumnDataAppendState append_state;
-		target->InitializeAppend(append_state);
-		for (auto &chunk : source->Chunks()) {
-			target->Append(append_state, chunk);
-		}
+		target->Append(*source);
 	}
 
 	const DuckLakeInlineData &op;
 	mutex lock;
 	idx_t total_inlined_rows = 0;
-	InlinePhase global_phase = InlinePhase::INLINING_ROWS;
 	unique_ptr<ColumnDataCollection> global_inlined_data;
 };
 
@@ -272,7 +269,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 	}
 	auto &column_stats = stats[c];
 	auto &type = data.GetType();
-	if (type.IsNested() && type.id() != LogicalTypeId::VARIANT) {
+	if (DuckLakeTypes::IsNested(type)) {
 		// nested - recurse into children
 		switch (data.GetType().id()) {
 		case LogicalTypeId::STRUCT: {
@@ -323,6 +320,29 @@ void SetFinalStats(DuckLakeBaseColumnStats &stats, DuckLakeInlinedData &result) 
 	}
 }
 
+static vector<DuckLakeBaseColumnStats> GetColumnStats(DuckLakeTableEntry &table, ColumnDataCollection &data,
+                                                      idx_t column_count) {
+	vector<DuckLakeBaseColumnStats> result;
+	auto &field_data = table.GetFieldData();
+	auto skipped_fields = table.GetSkippedStatsFields();
+	for (auto &chunk : data.Chunks()) {
+		for (idx_t c = 0; c < column_count; c++) {
+			UpdateStats(result, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
+			            skipped_fields);
+		}
+	}
+	return result;
+}
+
+void DuckLakeInlineData::RecomputeColumnStats(DuckLakeTableEntry &table, DuckLakeInlinedData &inlined_data) {
+	auto &data = *inlined_data.data;
+	inlined_data.column_stats.clear();
+	for (auto &column_stats : GetColumnStats(table, data, data.ColumnCount())) {
+		SetFinalStats(column_stats, inlined_data);
+	}
+	inlined_data.outdated_stats_table = nullptr;
+}
+
 OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                              OperatorFinalizeInput &input) const {
 	// push inlined data to transaction
@@ -353,15 +373,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	auto physical_col_count = table.GetColumns().PhysicalColumnCount();
 
 	// compute the column stats for the data
-	vector<DuckLakeBaseColumnStats> new_stats;
-	auto &field_data = table.GetFieldData();
-	auto skipped_fields = table.GetSkippedStatsFields();
-	for (auto &chunk : inlined_data.Chunks()) {
-		for (idx_t c = 0; c < physical_col_count; c++) {
-			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
-			            skipped_fields);
-		}
-	}
+	auto new_stats = GetColumnStats(table, inlined_data, physical_col_count);
 	// set the final stats and verify NOT NULL constraints
 	auto not_null_fields = table.GetNotNullFields();
 	for (idx_t c = 0; c < new_stats.size(); c++) {
@@ -371,8 +383,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		if (column_stats.stats.null_count > 0) {
 			auto column_name = table.GetColumn(LogicalIndex(c)).GetName();
 			if (not_null_fields.count(column_name.GetIdentifierName())) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(table.name),
-				                          SQLIdentifier(column_name));
+				table.ThrowNotNullViolation(column_name.GetIdentifierName());
 			}
 		}
 	}
@@ -384,14 +395,8 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		ColumnDataAppendState append_state;
 		phys_data->InitializeAppend(append_state);
 		for (auto &chunk : inlined_data.Chunks()) {
-			// extract row_ids from the row_id column
-			auto &row_id_vec = chunk.data[physical_col_count];
-			UnifiedVectorFormat row_id_format;
-			row_id_vec.ToUnifiedFormat(row_id_format);
-			auto row_id_data = UnifiedVectorFormat::GetData<int64_t>(row_id_format);
-			for (idx_t r = 0; r < chunk.size(); r++) {
-				auto idx = row_id_format.sel->get_index(r);
-				result->row_ids.push_back(row_id_data[idx]);
+			for (auto row_id : chunk.data[physical_col_count].Values<int64_t>()) {
+				result->row_ids.push_back(row_id.GetValueUnsafe());
 			}
 			DataChunk phys_chunk;
 			phys_chunk.InitializeEmpty(phys_types);
@@ -409,7 +414,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 
 	// push the inlined data into the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
-	if (table.GetInlinedDataTables().empty()) {
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	if (table.GetInlinedDataTables().empty() ||
+	    !table.HasCurrentInlinedDataTable(
+	        catalog.GetTableSchemaVersions(transaction, table.GetTableId()).last_change)) {
 		transaction.SetRequiresNewInlinedTable(true);
 	}
 	transaction.AppendInlinedData(table.GetTableId(), std::move(result));

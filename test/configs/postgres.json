@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Test requires a Quack metadata catalog",
+      "paths": [
+        "test/sql/quack/inlined_superseded_drop_failure.test"
+      ]
+    },
+    {
       "reason": "Secret storage resolution is independent of the catalog backend and is covered under the default config",
       "paths": [
         "test/sql/secrets/ducklake_secret_storages.test"
@@ -53,9 +59,17 @@
       ]
     },
     {
+      "reason": "on_init ends with USE memory, which a DuckLake opened as the main database does not have",
+      "paths": [
+        "test/sql/attach/ducklake_main_database.test"
+      ]
+    },
+    {
       "reason": "Test only for SQLite as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_sqlite.test",
+        "test/sql/metadata/sqlite_all_varchar.test",
+        "test/sql/data_inlining/sqlite_column_limit.test",
         "test/sql/issues/issue_1309.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
@@ -65,12 +79,6 @@
       "reason": "Postgres 63-byte identifier limit disables inlining for long column names",
       "paths": [
         "test/sql/data_inlining/long_column_name_inlining.test"
-      ]
-    },
-    {
-      "reason": "Postgres Locking (Not a bug, rather PG behavior)",
-      "paths": [
-        "test/sql/transaction/transaction_conflict_inlining.test"
       ]
     },
     {
@@ -89,6 +97,12 @@
       "reason": "Metadata reads run under REPEATABLE READ, so an open transaction never observes a later merge or flush; the partial-file count guard is unreachable and count(*) legitimately folds from metadata",
       "paths": [
         "test/sql/quack/partial_file_count.test"
+      ]
+    },
+    {
+      "reason": "The commit batch of a Postgres catalog is not logged through DuckLakeMetadata, so the number of column inserts cannot be counted",
+      "paths": [
+        "test/sql/issues/issue_1146_column_insert_batches.test"
       ]
     }
   ]

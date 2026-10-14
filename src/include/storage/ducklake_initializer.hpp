@@ -25,10 +25,14 @@ public:
 
 private:
 	void InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema);
-	void LoadExistingDuckLake(DuckLakeTransaction &transaction);
+	void LoadExistingDuckLake(DuckLakeTransaction &transaction, bool skip_dev_migration = false);
+	//! Loads an existing DuckLake, retrying when another attach migrates it at the same time
+	void LoadExistingDuckLakeWithRetries(DuckLakeTransaction &transaction);
+	void AttachMetadata(DuckLakeTransaction &transaction);
+	void RestartMetadataTransaction(DuckLakeTransaction &transaction);
+	bool DuckLakeIsInitialized(DuckLakeTransaction &transaction);
 	void InitializeDataPath();
 	string GetAttachOptions();
-	void CheckAndAutoloadedRequiredExtension(const string &pattern);
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
 
