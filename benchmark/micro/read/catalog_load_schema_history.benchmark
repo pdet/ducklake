@@ -1,0 +1,48 @@
+# name: benchmark/micro/read/catalog_load_schema_history.benchmark
+# description: Load the catalog of 10 tables of 40 columns, one dropped and recreated 300 times, one altered 200 times
+# group: [read]
+
+name Catalog Load Schema History
+group micro
+subgroup read
+
+require ducklake
+
+cache_file catalog_load_schema_history_ready.marker
+
+# Line k of the generated schema.sql commits one or two snapshots
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/catalog_load_schema_history_gen';
+COPY (SELECT CASE
+WHEN k < 10 THEN 'CREATE TABLE lake.t' || k || ' (' || cols || ');'
+WHEN k < 310 THEN 'DROP TABLE lake.t0; COMMIT; BEGIN; CREATE TABLE lake.t0 (' || cols || ');'
+ELSE 'ALTER TABLE lake.t1 ADD COLUMN x INTEGER; COMMIT; BEGIN; ALTER TABLE lake.t1 DROP COLUMN x;'
+END || ' COMMIT; BEGIN;'
+FROM range(410) t(k), (SELECT string_agg('c' || j || ' INTEGER', ', ' ORDER BY j) AS cols FROM range(40) t(j))
+ORDER BY k)
+TO '${BENCHMARK_DIR}/catalog_load_schema_history_gen/schema.sql' (HEADER false, QUOTE '');
+@create catalog_load_schema_history
+@attach catalog_load_schema_history AS lake (DATA_PATH '${BENCHMARK_DIR}/catalog_load_schema_history_files')
+IMPORT DATABASE '${BENCHMARK_DIR}/catalog_load_schema_history_gen';
+SELECT CASE WHEN (SELECT count(*) <> 811 FROM lake.snapshots())
+THEN error('catalog_load_schema_history: expected 811 snapshots') END;
+DETACH lake;
+@seal catalog_load_schema_history
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/catalog_load_schema_history_ready.marker' (FORMAT CSV);
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+reload
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+run
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake';
+
+# Reattaching clears the catalog cache
+cleanup
+DETACH lake;
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+result_query I
+SELECT * FROM __answer
+----
+400
