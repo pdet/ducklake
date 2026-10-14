@@ -840,12 +840,18 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			}
 
 			break;
-		case LogicalTypeId::MAP:
-			// for maps we don't need to do any name mapping - the child elements are always key/value
-			// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
-			map_entry->child_entries =
-			    MapColumns(file_metadata, column.child_columns[0]->child_columns, field_id.Children(), prefix, true);
+		case LogicalTypeId::MAP: {
+			// (1) Parquet has an extra element in between the map and its children ("REPEATED") - strip it
+			// (2) the reader takes the first child as the key, also when the key and value names are swapped
+			auto &key_value = column.child_columns[0]->child_columns;
+			if (key_value.size() == 2 && StringUtil::CIEquals(key_value[0]->name, field_children[1]->Name()) &&
+			    StringUtil::CIEquals(key_value[1]->name, field_children[0]->Name())) {
+				key_value[0]->name = field_children[0]->Name();
+				key_value[1]->name = field_children[1]->Name();
+			}
+			map_entry->child_entries = MapColumns(file_metadata, key_value, field_id.Children(), prefix, true);
 			break;
+		}
 		default:
 			throw InvalidInputException("Unsupported nested type %s for add files", field_id.Type());
 		}
