@@ -361,10 +361,14 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
-string PostgresMetadataManager::GetSnapshotColumnsQuery() const {
-	auto remote_query = StringUtil::Replace(SnapshotColumnsQuery(), "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}");
+static string PostgresQuery(const string &remote_query) {
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));
+}
+
+string PostgresMetadataManager::GetSnapshotColumnsQuery() const {
+	return PostgresQuery(
+	    StringUtil::Replace(SnapshotColumnsQuery(), "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}"));
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
@@ -373,9 +377,7 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
                                                       FileListType file_list_type, const string &) {
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
 	    table, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, "{METADATA_SCHEMA_ESCAPED}");
-
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                          SQLString(remote_query));
+	return PostgresQuery(remote_query);
 }
 
 } // namespace duckdb
