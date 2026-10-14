@@ -3112,7 +3112,11 @@ static string ChunkValuesStatements(const vector<string> &tuples,
 }
 
 string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
-	auto insert_prefix = "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
+	return InsertValuesIntoSql("{METADATA_CATALOG}." + table_name, values);
+}
+
+string DuckLakeMetadataManager::InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values) {
+	auto insert_prefix = "INSERT INTO " + qualified_table_name + " VALUES ";
 	return ChunkValuesStatements(values, [&](const string &tuples) { return insert_prefix + tuples + ";"; });
 }
 

@@ -377,6 +377,8 @@ public:
 	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
+	//! The inserts of the given rows into a table outside the metadata catalog, in batches
+	static string InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values);
 	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter);
