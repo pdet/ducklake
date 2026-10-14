@@ -350,25 +350,19 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
-string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	return R"(
-	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
-		'SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
-		 (SELECT MAX(value) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata WHERE key = ''version'')
-		 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
-		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
-		 );')
-	)";
-}
-
-static string PostgresQuery(const string &remote_query) {
+//! Runs a metadata query in Postgres
+static string PostgresQuery(const string &query) {
+	auto remote_query = StringUtil::Replace(query, "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}");
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));
 }
 
+string PostgresMetadataManager::GetLatestSnapshotQuery() const {
+	return PostgresQuery(LatestSnapshotQuery());
+}
+
 string PostgresMetadataManager::GetSnapshotColumnsQuery() const {
-	return PostgresQuery(
-	    StringUtil::Replace(SnapshotColumnsQuery(), "{METADATA_CATALOG}", "{METADATA_SCHEMA_ESCAPED}"));
+	return PostgresQuery(SnapshotColumnsQuery());
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
