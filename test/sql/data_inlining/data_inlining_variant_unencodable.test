@@ -1,0 +1,53 @@
+# name: test/sql/data_inlining/data_inlining_variant_unencodable.test
+# description: VARIANT values that a data file cannot store are refused when inlined, so inlined rows can always be flushed
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/data_inlining_variant_unencodable', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER, v VARIANT)
+
+statement error
+INSERT INTO ducklake.t VALUES (1, INTERVAL 1 DAY::VARIANT)
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement error
+INSERT INTO ducklake.t VALUES (2, {'a': [INTERVAL 1 DAY]}::VARIANT)
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, 42::VARIANT), (4, {'a': 1, 'b': 'x'}::VARIANT), (5, NULL)
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+query II
+SELECT i, v::VARCHAR FROM ducklake.t ORDER BY i
+----
+3	42
+4	{'a': 1, 'b': x}
+5	NULL
+
+statement ok
+CHECKPOINT ducklake
