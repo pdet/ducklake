@@ -641,22 +641,31 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 	return result;
 }
 
-//! The scans of the table that emit the row numbers of its files, the plan of a MERGE also scans its source
-static void FindDeleteSources(PhysicalOperator &plan, TableIndex table_id,
+//! Whether the scan reads the current rows of the table, a MERGE can also read its source or an older version
+static bool ScansCurrentRows(PhysicalTableScan &scan, DuckLakeTableEntry &table) {
+	if (scan.function.GetName() != "ducklake_scan") {
+		return false;
+	}
+	auto &read_info = scan.function.function_info->Cast<DuckLakeFunctionInfo>();
+	return &read_info.table.ParentCatalog() == &table.ParentCatalog() && read_info.table_id == table.GetTableId() &&
+	       read_info.scan_type == DuckLakeScanType::SCAN_TABLE && read_info.include_local_changes;
+}
+
+//! The scans of the current rows of the table that emit the row numbers of its files
+static void FindDeleteSources(PhysicalOperator &plan, DuckLakeTableEntry &table,
                               vector<reference<PhysicalTableScan>> &result) {
 	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
 		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
 		// that the merge into reads from
 		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
 		if (merge_input) {
-			FindDeleteSources(*merge_input, table_id, result);
+			FindDeleteSources(*merge_input, table, result);
 		}
 		return;
 	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		auto &scan = plan.Cast<PhysicalTableScan>();
-		if (scan.function.GetName() != "ducklake_scan" ||
-		    scan.function.function_info->Cast<DuckLakeFunctionInfo>().table_id != table_id) {
+		if (!ScansCurrentRows(scan, table)) {
 			return;
 		}
 		// does this emit the virtual columns?
@@ -669,7 +678,7 @@ static void FindDeleteSources(PhysicalOperator &plan, TableIndex table_id,
 		return;
 	}
 	for (auto &child : plan.children) {
-		FindDeleteSources(child.get(), table_id, result);
+		FindDeleteSources(child.get(), table, result);
 	}
 }
 
@@ -678,7 +687,7 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
                                              vector<idx_t> row_id_indexes, string encryption_key,
                                              bool allow_duplicates) {
 	vector<reference<PhysicalTableScan>> delete_sources;
-	FindDeleteSources(child_plan, table.GetTableId(), delete_sources);
+	FindDeleteSources(child_plan, table, delete_sources);
 	auto delete_map = make_shared_ptr<DuckLakeDeleteMap>();
 	for (auto &delete_source : delete_sources) {
 		auto &bind_data = delete_source.get().bind_data->Cast<MultiFileBindData>();

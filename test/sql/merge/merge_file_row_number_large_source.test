@@ -70,3 +70,36 @@ query II
 SELECT (SELECT count(*) FROM lake.t), (SELECT count(*) FROM lake.s)
 ----
 0	100000
+
+# a source that reads an older version of the target keeps the deletes made since
+statement ok
+CREATE TABLE lake.h (a INTEGER)
+
+statement ok
+INSERT INTO lake.h SELECT range FROM range(10)
+
+statement ok
+DELETE FROM lake.h WHERE a = 1
+
+statement ok
+SET VARIABLE one_deleted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+DELETE FROM lake.h WHERE a = 2
+
+query I
+MERGE INTO lake.h AS t USING (SELECT file_row_number AS row_number FROM lake.h AT (VERSION => getvariable('one_deleted'))) AS s
+ON t.file_row_number = s.row_number AND s.row_number = 5 WHEN MATCHED THEN DELETE
+----
+1
+
+query I
+SELECT a FROM lake.h ORDER BY a
+----
+0
+3
+4
+6
+7
+8
+9
