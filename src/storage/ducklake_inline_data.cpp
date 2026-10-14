@@ -345,21 +345,42 @@ void DuckLakeInlineData::RecomputeColumnStats(DuckLakeTableEntry &table, DuckLak
 }
 
 //! Refuse VARIANT values that a data file cannot store, such as INTERVAL members, so they never get stuck inlined
+static void VerifyParquetVariants(Vector &data, idx_t count) {
+	auto &type = data.GetType();
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT: {
+		child_list_t<LogicalType> parquet_variant {{"metadata", LogicalType::BLOB}, {"value", LogicalType::BLOB}};
+		Vector encoded(LogicalType::STRUCT(std::move(parquet_variant)), count);
+		ParquetVariantConversion::ToParquetVariant(data, count, encoded);
+		break;
+	}
+	case LogicalTypeId::STRUCT:
+		for (auto &child : StructVector::GetEntries(data)) {
+			VerifyParquetVariants(child, count);
+		}
+		break;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		VerifyParquetVariants(ListVector::GetChildMutable(data), ListVector::GetListSize(data));
+		break;
+	default:
+		break;
+	}
+}
+
 static void VerifyParquetVariants(ColumnDataCollection &data) {
-	vector<idx_t> variant_columns;
+	vector<column_t> variant_columns;
 	for (idx_t c = 0; c < data.ColumnCount(); c++) {
-		if (data.Types()[c].id() == LogicalTypeId::VARIANT) {
+		if (TypeVisitor::Contains(data.Types()[c], LogicalTypeId::VARIANT)) {
 			variant_columns.push_back(c);
 		}
 	}
 	if (variant_columns.empty()) {
 		return;
 	}
-	child_list_t<LogicalType> parquet_variant {{"metadata", LogicalType::BLOB}, {"value", LogicalType::BLOB}};
-	for (auto &chunk : data.Chunks()) {
-		for (auto c : variant_columns) {
-			Vector encoded(LogicalType::STRUCT(parquet_variant), chunk.size());
-			ParquetVariantConversion::ToParquetVariant(chunk.data[c], chunk.size(), encoded);
+	for (auto &chunk : data.Chunks(variant_columns)) {
+		for (auto &column : chunk.data) {
+			VerifyParquetVariants(column, chunk.size());
 		}
 	}
 }

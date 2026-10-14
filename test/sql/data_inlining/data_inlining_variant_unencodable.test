@@ -27,15 +27,36 @@ INSERT INTO ducklake.t VALUES (2, {'a': [INTERVAL 1 DAY]}::VARIANT)
 Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
 
 statement ok
-INSERT INTO ducklake.t VALUES (3, 42::VARIANT), (4, {'a': 1, 'b': 'x'}::VARIANT), (5, NULL)
+CREATE TABLE ducklake.nested (s STRUCT(v VARIANT), l VARIANT[], m MAP(VARCHAR, VARIANT))
 
-query I
-SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+statement error
+INSERT INTO ducklake.nested VALUES ({'v': INTERVAL 1 DAY::VARIANT}, NULL, NULL)
 ----
-0
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement error
+INSERT INTO ducklake.nested VALUES (NULL, [42::VARIANT, INTERVAL 1 DAY::VARIANT], NULL)
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement error
+INSERT INTO ducklake.nested VALUES (NULL, NULL, MAP {'k': INTERVAL 1 DAY::VARIANT})
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
 
 statement ok
-CALL ducklake_flush_inlined_data('ducklake')
+INSERT INTO ducklake.nested VALUES ({'v': 1::VARIANT}, [2::VARIANT], MAP {'k': 3::VARIANT})
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, 42::VARIANT), (4, {'a': 1, 'b': 'x'}::VARIANT), (5, NULL)
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 't')), (SELECT count(*) FROM ducklake_list_files('ducklake', 'nested'))
+----
+0	0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
 
 query I
 SELECT count(*) FROM ducklake_list_files('ducklake', 't')
@@ -49,5 +70,7 @@ SELECT i, v::VARCHAR FROM ducklake.t ORDER BY i
 4	{'a': 1, 'b': x}
 5	NULL
 
-statement ok
-CHECKPOINT ducklake
+query III
+SELECT s::VARCHAR, l::VARCHAR, m::VARCHAR FROM ducklake.nested
+----
+{'v': 1}	[2]	{k=3}
