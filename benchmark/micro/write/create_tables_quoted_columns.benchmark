@@ -32,7 +32,7 @@ CREATE TABLE lake.main.quoted_4 AS FROM quoted_source;
 COMMIT;
 
 # A missed reset makes the first CREATE TABLE fail because quoted_0 already exists
-# The union by position needs equal column counts and the union by name shows the shared column names
+# Both unions have 203 columns only if every inlined data table has all of them
 result_query IIIIII
 SET VARIABLE quoted_inlined = (SELECT list('__ducklake_metadata_lake.' || i.table_name)
 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables i
@@ -40,8 +40,9 @@ JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) WHERE t.table_na
 SELECT (SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name LIKE 'quoted\_%' ESCAPE '\'
 AND column_name LIKE 'c% with ''quotes'' and {braces}'),
 (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_column WHERE column_name LIKE '% with ''quotes'' and {braces}'),
-len(getvariable('quoted_inlined')), (SELECT count(*) FROM query_table(getvariable('quoted_inlined'))),
+len(getvariable('quoted_inlined')),
+(SELECT count(*) FROM (DESCRIBE SELECT * FROM query_table(getvariable('quoted_inlined')))),
 count(*) FILTER (WHERE column_name LIKE '% with ''quotes'' and {braces}'), count(*)
 FROM (DESCRIBE SELECT * FROM query_table(getvariable('quoted_inlined'), true))
 ----
-1000	1000	5	0	200	203
+1000	1000	5	203	200	203
