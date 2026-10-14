@@ -1,0 +1,66 @@
+# name: test/sql/compaction/merge_adjacent_inlined_deletion_lookup.test
+# description: Merging adjacent files finds the files with inlined deletions without listing the candidate files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_inlined_deletion_lookup')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000) r(i)
+
+# every file has one deleted row
+statement ok
+DELETE FROM ducklake.t WHERE id < 1000
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('ducklake')
+----
+0
+
+statement ok
+CALL disable_logging()
+
+# no metadata query of the merge grows with the files
+query I
+SELECT max(length(query)) < 4096 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(2000, 4000) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 1000 FROM range(4000, 6000) r(i)
+
+# the two new files of each partition merge, its file with a deleted row stays
+query II
+SELECT sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('ducklake')
+----
+2000	1000
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+2000
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id < 1000) FROM ducklake.t
+----
+5000	17497500	0
