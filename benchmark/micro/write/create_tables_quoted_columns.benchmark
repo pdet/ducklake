@@ -32,10 +32,14 @@ CREATE TABLE lake.main.quoted_4 AS FROM quoted_source;
 COMMIT;
 
 # A missed reset makes the first CREATE TABLE fail because quoted_0 already exists
-result_query III
+result_query IIIII
+SET VARIABLE quoted_inlined = (SELECT list('__ducklake_metadata_lake.' || i.table_name)
+FROM __ducklake_metadata_lake.ducklake_inlined_data_tables i
+JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) WHERE t.table_name LIKE 'quoted\_%' ESCAPE '\');
 SELECT (SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name LIKE 'quoted\_%' ESCAPE '\'
 AND column_name LIKE 'c% with ''quotes'' and {braces}'),
 (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_column WHERE column_name LIKE '% with ''quotes'' and {braces}'),
-(SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+len(getvariable('quoted_inlined')), count(*) FILTER (WHERE column_name LIKE '% with ''quotes'' and {braces}'), count(*)
+FROM (DESCRIBE SELECT * FROM query_table(getvariable('quoted_inlined'), true))
 ----
-1000	1000	0
+1000	1000	5	200	203
