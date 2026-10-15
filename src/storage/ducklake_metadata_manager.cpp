@@ -605,7 +605,6 @@ LEFT JOIN (
 				break;
 			}
 			if (user_columns.count(entry.second)) {
-				// the rows of a dropped table only go away with the snapshots that contain the table
 				throw InvalidInputException(
 				    "Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: %s \"%s\" has a "
 				    "column \"%s\" colliding with the renamed metadata column. %s before migrating",

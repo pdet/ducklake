@@ -81,7 +81,7 @@ void QuackMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLake
 
 void QuackMetadataManager::MigrateV10(bool allow_failures) {
 	if (allow_failures) {
-		// the re-run of a dev catalog expects failing probes, which abort a server transaction
+		// the rerun of a dev catalog expects failing probes, which abort a server transaction
 		DuckLakeMetadataManager::MigrateV10(allow_failures);
 		return;
 	}

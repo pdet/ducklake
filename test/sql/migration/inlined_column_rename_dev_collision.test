@@ -1,0 +1,57 @@
+# name: test/sql/migration/inlined_column_rename_dev_collision.test
+# description: on a dev catalog a collision in one inlined table leaves every inlined table unrenamed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_dev_collision.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_column_rename_dev_collision', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.a(i INTEGER);
+
+statement ok
+INSERT INTO dl.a VALUES (1), (2);
+
+statement ok
+CREATE TABLE dl.b(_ducklake_begin_snapshot INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO dl.b VALUES (10, 20);
+
+# simulate a catalog of an older dev build, which calls itself 1.1-dev1 but has the legacy inlined column names
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'
+
+statement ok
+DETACH dl
+
+# the dev migration of a plain attach finds the collision and renames nothing
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+statement ok
+SELECT row_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1 LIMIT 0
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (AUTOMATIC_MIGRATION TRUE)
+----
+table "b" has a column "_ducklake_begin_snapshot" colliding with the renamed metadata column
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+statement ok
+SELECT row_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1 LIMIT 0
+
+statement ok
+DETACH dl
