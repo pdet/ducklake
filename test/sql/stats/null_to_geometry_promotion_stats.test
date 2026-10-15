@@ -65,9 +65,6 @@ SELECT g FROM committed_nulls ORDER BY ALL
 POINT (1 2)
 NULL
 
-# FIXME: the table stats claim an empty extent without point types, so vertex_extract folds to NULL, see https://github.com/pdet/ducklake_internal/issues/109
-mode skip
-
 query II
 SELECT g, vertex_extract(g, 'x') FROM committed_nulls ORDER BY ALL
 ----
@@ -78,5 +75,3 @@ query I
 SELECT count(*) FROM committed_nulls WHERE vertex_extract(g, 'y') = 2
 ----
 1
-
-mode unskip

@@ -97,9 +97,6 @@ SELECT v FROM s WHERE v IN ('v1', 'v5', v || 'x') ORDER BY v
 v1
 v5
 
-# FIXME: an IN list with an element that is not a constant only keeps the buckets of its constants, see https://github.com/pdet/ducklake_internal/issues/107
-mode skip
-
 query I
 SELECT count(*) FROM s WHERE v IN ('v1', 'v5', v)
 ----
@@ -109,5 +106,3 @@ query I
 SELECT count(*) FROM t WHERE i IN (1, 5, i)
 ----
 100
-
-mode unskip
