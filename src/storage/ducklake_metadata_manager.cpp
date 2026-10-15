@@ -3373,8 +3373,6 @@ static string InsertColumnsSql(const vector<DuckLakeNewColumn> &new_columns, con
 	for (auto &new_col : new_columns) {
 		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, end_snapshot, column_values);
 	}
-
-	// insert column entries
 	return DuckLakeMetadataManager::InsertValuesSql("ducklake_column", column_values);
 }
 

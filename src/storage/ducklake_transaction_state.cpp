@@ -429,14 +429,19 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
-void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, NewTableInfo &result,
-                       unordered_map<idx_t, idx_t> &txn_added_fields) {
+//! Returns the nested fields of a column added in this transaction that is re-added
+vector<DuckLakeColumnInfo> CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded,
+                                             NewTableInfo &result, unordered_map<idx_t, idx_t> &txn_added_fields) {
+	vector<DuckLakeColumnInfo> children;
 	auto it = txn_added_fields.find(field_id.index);
 	if (it != txn_added_fields.end()) {
 		auto erased_idx = it->second;
-		if (!readded) {
-			// files written in this transaction can hold the field id, so it stays taken
-			result.dropped_new_columns.push_back(std::move(result.new_columns[erased_idx]));
+		auto &cancelled = result.new_columns[erased_idx];
+		if (readded) {
+			children = std::move(cancelled.column_info.children);
+		} else {
+			// files written in this transaction can hold the field ids, so they stay taken
+			result.dropped_new_columns.push_back(std::move(cancelled));
 		}
 		result.new_columns.erase(result.new_columns.begin() + erased_idx);
 		txn_added_fields.erase(it);
@@ -445,13 +450,14 @@ void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, N
 				entry.second--;
 			}
 		}
-		return;
+		return children;
 	}
 	// Column was not added in the same transaction, we emit a drop.
 	DuckLakeDroppedColumn dropped_col;
 	dropped_col.table_id = table_id;
 	dropped_col.field_id = field_id;
 	result.dropped_columns.push_back(dropped_col);
+	return children;
 }
 
 template <typename T>
@@ -467,10 +473,6 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
 	auto &new_fields = change_info.new_fields;
-	// A field that is dropped without being re-added under the same field id in the same change
-	// (i.e. an actual DROP COLUMN, not a rename/alter type) ceases to exist - discard any column
-	// tags queued for it in this transaction; already-committed tags are expired when writing the
-	// dropped columns (GH #1310).
 	for (auto &dropped_field_id : change_info.dropped_fields) {
 		bool readded = std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
 			return new_col.column_info.id.index == dropped_field_id.index;
@@ -479,6 +481,7 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 		if (readded) {
 			continue;
 		}
+		// a dropped field loses its queued tags, its committed tags expire when the drop is written
 		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
 		                                            [&](const DuckLakeColumnTagInfo &tag) {
 			                                            return tag.table_id.index == table_id.index &&
@@ -1688,12 +1691,14 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			auto committed_table_id = commit_state.GetTableId(table);
 
 			// Cancel the previous txn-local add for this field, or drop the committed column.
-			CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
+			auto children =
+			    CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
 
 			// Insert the new column with the updated info and register it.
 			DuckLakeNewColumn new_col;
 			new_col.table_id = committed_table_id;
 			new_col.column_info = table.GetColumnInfo(local_change.field_index);
+			new_col.column_info.children = std::move(children);
 			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
 			result.new_columns.push_back(std::move(new_col));
 
