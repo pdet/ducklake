@@ -194,6 +194,8 @@ private:
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
 	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
+	//! The value of a hive key in the path of the file, or nullptr when the path does not hold the key
+	optional_ptr<const string> GetHiveValue(const ParquetFileMetadata &file, const string &key) const;
 
 	void CheckMatchingType(const LogicalType &type, ParquetColumn &column);
 
@@ -204,6 +206,8 @@ private:
 	bool allow_missing;
 	bool ignore_extra_columns;
 	map<string, string> hive_partitions;
+	//! The hive keys that directories of the file path give different values
+	set<string> conflicting_hive_keys;
 	HivePartitioningType hive_partitioning;
 	unordered_set<string> processed_files;
 	unordered_set<idx_t> skipped_fields;
@@ -947,11 +951,11 @@ bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata,
 	}
 	auto identity_key = identity_hive_keys.find(field_id.GetFieldIndex().index);
 	auto &hive_key = identity_key == identity_hive_keys.end() ? name : identity_key->second;
-	auto hive_entry = hive_partitions.find(hive_key);
-	if (hive_entry == hive_partitions.end()) {
+	auto hive_entry = GetHiveValue(file_metadata, hive_key);
+	if (!hive_entry) {
 		return false;
 	}
-	auto hive_value = HivePartitioning::GetValue(context, hive_key, hive_entry->second, field_id.Type());
+	auto hive_value = HivePartitioning::GetValue(context, hive_key, *hive_entry, field_id.Type());
 	column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_key, hive_value));
 	return true;
 }
@@ -1133,6 +1137,19 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
 	}
 }
 
+optional_ptr<const string> DuckLakeFileProcessor::GetHiveValue(const ParquetFileMetadata &file,
+                                                               const string &key) const {
+	auto entry = hive_partitions.find(key);
+	if (entry == hive_partitions.end()) {
+		return nullptr;
+	}
+	if (conflicting_hive_keys.count(key)) {
+		throw InvalidInputException("Hive partition key \"%s\" has different values in the directories of \"%s\"", key,
+		                            file.filepath);
+	}
+	return entry->second;
+}
+
 void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 	auto partition_data = table.GetPartitionData();
 	if (!partition_data) {
@@ -1148,8 +1165,8 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		}
 		auto field_id = field_data.GetByFieldIndex(partition_field.field_id);
 		auto &partition_key_name = partition_key_names[field_idx];
-		auto hive_entry = hive_partitions.find(partition_key_name);
-		if (hive_entry == hive_partitions.end()) {
+		auto hive_entry = GetHiveValue(file, partition_key_name);
+		if (!hive_entry) {
 			// key not found in the file path
 			continue;
 		}
@@ -1157,8 +1174,7 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 		// For YEAR/MONTH/DAY/HOUR transforms, the type is BIGINT, not the source column type
 		auto partition_key_type =
 		    DuckLakePartitionUtils::GetPartitionKeyType(partition_field.transform.type, field_id->Type());
-		auto hive_value =
-		    HivePartitioning::GetValue(context, partition_key_name, hive_entry->second, partition_key_type);
+		auto hive_value = HivePartitioning::GetValue(context, partition_key_name, *hive_entry, partition_key_type);
 		file.hive_partition_values.emplace_back(HivePartition {partition_field.field_id, partition_key_type, hive_value,
 		                                                       partition_field.transform,
 		                                                       optional_idx(partition_field.partition_key_index)});
@@ -1176,10 +1192,32 @@ void DuckLakeFileProcessor::MarkVariantColumns(ParquetFileMetadata &file, const 
 	}
 }
 
+//! The hive keys that two directories of a path give different values
+static set<string> GetConflictingHiveKeys(const string &path) {
+	map<string, string> values;
+	set<string> conflicts;
+	idx_t directory_start = 0;
+	for (idx_t i = 0; i < path.size(); i++) {
+		if (path[i] != '/' && path[i] != '\\') {
+			continue;
+		}
+		// the hive parser keeps the first value of a key, so each directory is parsed on its own
+		for (auto &entry : HivePartitioning::Parse(path.substr(directory_start, i + 1 - directory_start))) {
+			auto existing = values.emplace(entry.first, entry.second);
+			if (!existing.second && existing.first->second != entry.second) {
+				conflicts.insert(entry.first);
+			}
+		}
+		directory_start = i + 1;
+	}
+	return conflicts;
+}
+
 void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	if (hive_partitioning != HivePartitioningType::NO) {
 		// we are mapping hive partitions - check if there are any hive partitioned columns
 		hive_partitions = HivePartitioning::Parse(file.filepath);
+		conflicting_hive_keys = GetConflictingHiveKeys(file.filepath);
 	}
 
 	MapPartitionColumns(file);

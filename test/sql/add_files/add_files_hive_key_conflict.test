@@ -1,0 +1,66 @@
+# name: test/sql/add_files/add_files_hive_key_conflict.test
+# description: ducklake_add_data_files refuses a hive key that the directories of a file path give different values
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_hive_key_conflict/', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, year INTEGER)
+
+# the files of year=2020 and year=2021 sit below a directory year=1999
+statement ok
+COPY (SELECT 1 AS id, 2020 AS year UNION ALL SELECT 2, 2021) TO '{DATA_PATH}/year=1999' (FORMAT parquet, PARTITION_BY (year))
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/year=1999/**/*.parquet', hive_partitioning => true)
+----
+Hive partition key "year" has different values in the directories of
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+----
+0
+
+# the same value in both directories
+statement ok
+COPY (SELECT 3 AS id, 2020 AS year) TO '{DATA_PATH}/year=2020' (FORMAT parquet, PARTITION_BY (year))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/year=2020/**/*.parquet', hive_partitioning => true)
+
+# a key that maps to no column
+statement ok
+COPY (SELECT 4 AS id, 'us' AS region, 2022 AS year) TO '{DATA_PATH}/region=eu' (FORMAT parquet, PARTITION_BY (region, year))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/region=eu/**/*.parquet', hive_partitioning => true)
+
+query II
+SELECT id, year FROM ducklake.t ORDER BY id
+----
+3	2020
+4	2022
+
+# the key of a partition transform
+statement ok
+CREATE TABLE ducklake.p (id INTEGER, ts TIMESTAMP)
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (year(ts))
+
+statement ok
+COPY (SELECT 5 AS id, TIMESTAMP '2020-05-01' AS ts, 2020 AS year) TO '{DATA_PATH}/year=1998' (FORMAT parquet, PARTITION_BY (year))
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'p', '{DATA_PATH}/year=1998/**/*.parquet', hive_partitioning => true)
+----
+Hive partition key "year" has different values in the directories of
