@@ -279,11 +279,10 @@ bool PostgresMetadataManager::StoresNativeType(const LogicalType &stored_type, c
 }
 
 vector<bool> PostgresMetadataManager::GetNativeInlinedColumns(const string &table_name,
-                                                              const vector<LogicalType> &types, bool may_probe) {
-	auto &catalog = transaction.GetCatalog();
+                                                              const vector<LogicalType> &types) {
 	vector<bool> result;
 	// the v1.1 migration rebuilds the inlined tables of DuckLake 0.3
-	if (catalog.SupportsV1_1Metadata() || catalog.TryGetNativeInlinedColumns(table_name, result) || !may_probe) {
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		return result;
 	}
 	auto probe = DuckLakeMetadataManager::Query(
@@ -300,7 +299,6 @@ vector<bool> PostgresMetadataManager::GetNativeInlinedColumns(const string &tabl
 	if (std::find(result.begin(), result.end(), true) == result.end()) {
 		result.clear();
 	}
-	catalog.CacheNativeInlinedColumns(table_name, result);
 	return result;
 }
 

@@ -72,6 +72,57 @@ SELECT * FROM postgres_query('__ducklake_metadata_dl', 'SELECT s, pg_typeof(s)::
 ----
 wörld \x41 back\slash	character varying	date
 
+# quotes go in as text, and a NUL byte, which a Postgres VARCHAR cannot hold, fails the commit
+statement ok
+INSERT INTO dl.t VALUES (4, 'it''s "quoted"', '{"q": "it''s"}', NULL, NULL, NULL)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t (id, s) VALUES (5, 'nul' || chr(0) || 'byte')
+
+statement error
+COMMIT
+----
+
+query I
+SELECT count(*) FROM dl.t WHERE id = 5
+----
+0
+
+# an update in the same commit as an insert into a table with BYTEA columns
+statement ok
+CREATE TABLE dl.b (id INTEGER, s VARCHAR)
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE dl.t SET s = 'updated ' || s WHERE id = 2
+
+statement ok
+INSERT INTO dl.b VALUES (1, 'bytea ' || chr(0) || ' é')
+
+statement ok
+COMMIT
+
+query II
+SELECT id, s FROM dl.t WHERE id IN (2, 4) ORDER BY id
+----
+2	updated wörld \x41 back\slash
+4	it's "quoted"
+
+query I
+SELECT j FROM dl.t WHERE id = 4
+----
+{"q": "it's"}
+
+query I
+SELECT s = 'bytea ' || chr(0) || ' é' FROM dl.b
+----
+true
+
 statement ok
 CALL ducklake_flush_inlined_data('dl')
 
@@ -79,11 +130,12 @@ query IIIIII
 SELECT id, s, j, d, ts, tz FROM dl.t WHERE id < 101 ORDER BY id
 ----
 1	hello	{"a": 1}	2020-01-01	2020-01-01 10:00:00	2020-01-01 10:00:00+00
-2	wörld \x41 back\slash	{"b": "é"}	2021-01-01	2021-01-01 10:00:00	2021-01-01 10:00:00+00
+2	updated wörld \x41 back\slash	{"b": "é"}	2021-01-01	2021-01-01 10:00:00	2021-01-01 10:00:00+00
 3	(empty)	NULL	NULL	NULL	NULL
+4	it's "quoted"	{"q": "it's"}	NULL	NULL	NULL
 100	big 0	{"i": 0}	2022-01-01	2022-01-01 00:00:00	2022-01-01 00:00:00+00
 
 query I
 SELECT count(*) FROM dl.t
 ----
-153
+154

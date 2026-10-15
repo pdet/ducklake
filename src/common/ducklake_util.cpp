@@ -455,15 +455,14 @@ string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
-//! A value for a column of the native type of the value, which takes text as is
+//! A typed value for a column of the native type of the value
 static string NativeValueToSQL(const Value &val) {
 	if (val.IsNull()) {
 		return "NULL";
 	}
-	if (val.type().id() == LogicalTypeId::VARCHAR) {
-		return EscapeVarcharForSQL(StringValue::Get(val));
-	}
-	return StringUtil::Format("CAST(%s AS %s)", SQLString::ToString(val.ToString()), LogicalType(val.type().id()));
+	auto literal = val.type().id() == LogicalTypeId::VARCHAR ? EscapeVarcharForSQL(StringValue::Get(val))
+	                                                         : SQLString::ToString(val.ToString());
+	return StringUtil::Format("CAST(%s AS %s)", literal, val.type());
 }
 
 static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,

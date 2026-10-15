@@ -593,10 +593,8 @@ public:
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}
-	//! Which columns of an inlined table hold the native type of their values, empty when none do
-	//! A table that may have been created in this commit is only looked up in the cache, not probed
-	virtual vector<bool> GetNativeInlinedColumns(const string &table_name, const vector<LogicalType> &types,
-	                                             bool may_probe) {
+	//! Which columns of an existing inlined table hold the native type of their values, empty when none do
+	virtual vector<bool> GetNativeInlinedColumns(const string &table_name, const vector<LogicalType> &types) {
 		return vector<bool>();
 	}
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures, const string &from_version,
@@ -743,6 +741,8 @@ private:
 	                                               const string &snapshot_column);
 
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
+	//! The native columns of the inlined tables that this commit inserts into, see GetNativeInlinedColumns
+	unordered_map<string, vector<bool>> native_inlined_columns_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:
