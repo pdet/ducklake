@@ -90,3 +90,12 @@ statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.0')
 ----
 Cannot downgrade
+
+# so does a ducklake_version in a secret
+statement ok
+CREATE SECRET pinned_lake (TYPE DUCKLAKE, METADATA_PATH '{DUCKLAKE_CONNECTION}', DUCKLAKE_VERSION '1.0')
+
+statement error
+ATTACH 'ducklake:pinned_lake' AS dl
+----
+Cannot downgrade
