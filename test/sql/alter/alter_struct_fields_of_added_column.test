@@ -40,6 +40,16 @@ ALTER TABLE ducklake.t RENAME COLUMN n.p.q TO qq
 statement ok
 ALTER TABLE ducklake.t DROP COLUMN n.p.w
 
+# fields with children of their own keep them when renamed
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c STRUCT(p STRUCT(a INTEGER, b INTEGER), l INTEGER[])
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN c.p TO q
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN c.l TO m
+
 statement ok
 COMMIT
 
@@ -52,9 +62,10 @@ id	INTEGER
 s	STRUCT(a INTEGER)
 r	STRUCT(x INTEGER, z INTEGER)
 n	STRUCT(p STRUCT(qq INTEGER), v INTEGER)
+c	STRUCT(q STRUCT(a INTEGER, b INTEGER), m INTEGER[])
 
 statement ok
-INSERT INTO ducklake.t VALUES ({i}, {'a': 1}, {'x': 2, 'z': 3}, {'p': {'qq': 4}, 'v': 5})
+INSERT INTO ducklake.t VALUES ({i}, {'a': 1}, {'x': 2, 'z': 3}, {'p': {'qq': 4}, 'v': 5}, {'q': {'a': 6, 'b': 7}, 'm': [8]})
 
 statement ok
 DETACH ducklake
@@ -64,8 +75,8 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alte
 
 endloop
 
-query IIII
-SELECT id, s, r, n FROM ducklake.t ORDER BY id
+query IIIII
+SELECT id, s, r, n, c FROM ducklake.t ORDER BY id
 ----
-0	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}
-1	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}
+0	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}	{'q': {'a': 6, 'b': 7}, 'm': [8]}
+1	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}	{'q': {'a': 6, 'b': 7}, 'm': [8]}
