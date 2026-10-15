@@ -30,6 +30,8 @@ public:
 	SchemaIndex GetSchemaId() const {
 		return schema_id;
 	}
+	//! The nearest schema id up the parent chain that is not transaction-local, as only those can hold options
+	SchemaIndex GetOptionSchemaId() const;
 	optional_ptr<DuckLakeSchemaEntry> ParentDuckLakeSchema() const {
 		auto parent = GetParentSchema();
 		return parent ? &parent->Cast<DuckLakeSchemaEntry>() : nullptr;

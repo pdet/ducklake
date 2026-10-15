@@ -43,6 +43,28 @@ CREATE TABLE dl.a.b.c.t3 AS SELECT 1 AS x
 statement ok
 CREATE TABLE dl.other.t4 AS SELECT 1 AS x
 
+# a schema created in the same transaction inherits from its committed parents
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA dl.a.d
+
+statement ok
+CREATE SCHEMA dl.a.d.e
+
+statement ok
+CREATE TABLE dl.a.d.e.t6 AS SELECT 1 AS x
+
+statement ok
+CREATE TABLE dl.a.d.t7 (x INTEGER)
+
+statement ok
+INSERT INTO dl.a.d.t7 VALUES (1)
+
+statement ok
+COMMIT
+
 query II
 SELECT regexp_extract(file_name, '/(t[0-9])/[^/]*$', 1) AS tbl, compression
 FROM parquet_metadata('{DATA_PATH}/nested_schema_options/**/*.parquet')
@@ -52,6 +74,8 @@ t1	GZIP
 t2	GZIP
 t3	GZIP
 t4	SNAPPY
+t6	GZIP
+t7	GZIP
 
 # the nearest schema with the option wins, and a table option wins over every schema
 statement ok
@@ -91,6 +115,8 @@ t3	GZIP
 t3	UNCOMPRESSED
 t4	SNAPPY
 t5	ZSTD
+t6	GZIP
+t7	GZIP
 
 # inlining that only a parent schema enables applies to the nested tables
 statement ok

@@ -52,6 +52,15 @@ void DuckLakeSchemaEntry::SetParentSchema(DuckLakeSchemaEntry &parent) {
 	path_key = ChildPathKey(parent, name.GetIdentifierName());
 }
 
+SchemaIndex DuckLakeSchemaEntry::GetOptionSchemaId() const {
+	for (auto schema = this; schema; schema = schema->ParentDuckLakeSchema().get()) {
+		if (!schema->schema_id.IsTransactionLocal()) {
+			return schema->schema_id;
+		}
+	}
+	return SchemaIndex();
+}
+
 const string &DuckLakeSchemaEntry::PathKey() const {
 	return path_key;
 }

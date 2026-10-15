@@ -408,7 +408,7 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry 
       data_path(table.DataPath() + hive_partition) {
 	partition_data = table.GetPartitionData();
 	field_data = table.GetFieldData();
-	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetOptionSchemaId();
 	table_id = table.GetTableId();
 	table_options = table.GetTableOptions();
 	encryption_key = catalog.GenerateEncryptionKey(context);
@@ -420,7 +420,7 @@ DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeSchemaEntry
     : catalog(schema.ParentCatalog().Cast<DuckLakeCatalog>()), columns(columns), data_path(data_path_p) {
 	field_data = &field_data_p;
 	partition_data = partition_data_p;
-	schema_id = schema.GetSchemaId();
+	schema_id = schema.GetOptionSchemaId();
 	encryption_key = catalog.GenerateEncryptionKey(context);
 }
 
@@ -840,8 +840,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	// No table id yet, so the WITH options stand in for the table scope
 	auto pipeline = DuckLakeInsert::PlanInsertPipeline(
 	    context, planner, plan, op.schema, columns, create_info.GetTableName(), sort_data.get(),
-	    SortOnInsert(duck_schema.GetSchemaId(), TableIndex(), &table_options),
-	    GetInliningLimit(context, duck_schema.GetSchemaId(), TableIndex(), columns, &table_options));
+	    SortOnInsert(duck_schema.GetOptionSchemaId(), TableIndex(), &table_options),
+	    GetInliningLimit(context, duck_schema.GetOptionSchemaId(), TableIndex(), columns, &table_options));
 
 	DuckLakeTypes::CheckSupportedTypes(columns, GetDuckLakeVersion());
 	auto table_uuid = duck_transaction.GenerateUUID();

@@ -1222,7 +1222,6 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 		}
 	}
 	lock_guard<mutex> guard(config_lock);
-	// search options in-order: table scope, then the schema and its parents
 	if (TryGetOptionInScope(options.table_options, table_id, option, result)) {
 		return true;
 	}
@@ -1254,7 +1253,7 @@ bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, S
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	auto schema_id = schema.GetSchemaId();
+	auto schema_id = schema.GetOptionSchemaId();
 	auto table_id = table.GetTableId();
 	return TryGetConfigOption(option, result, schema_id, table_id, &table.GetTableOptions());
 }
@@ -1273,7 +1272,7 @@ idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, SchemaIndex 
 
 idx_t DuckLakeCatalog::DataInliningRowLimit(ClientContext &context, DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return DataInliningRowLimit(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	return DataInliningRowLimit(context, schema.GetOptionSchemaId(), table.GetTableId(), &table.GetTableOptions());
 }
 
 idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
@@ -1288,12 +1287,12 @@ idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex sch
 
 idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return GetTargetFileSize(context, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	return GetTargetFileSize(context, schema.GetOptionSchemaId(), table.GetTableId(), &table.GetTableOptions());
 }
 
 idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return GetInliningLimit(context, schema.GetSchemaId(), table.GetTableId(), table.GetColumns(),
+	return GetInliningLimit(context, schema.GetOptionSchemaId(), table.GetTableId(), table.GetColumns(),
 	                        &table.GetTableOptions());
 }
 
@@ -1319,7 +1318,7 @@ bool DuckLakeCatalog::SortOnInsert(SchemaIndex schema_id, TableIndex table_id,
 
 bool DuckLakeCatalog::SortOnInsert(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return SortOnInsert(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	return SortOnInsert(schema.GetOptionSchemaId(), table.GetTableId(), &table.GetTableOptions());
 }
 
 bool DuckLakeCatalog::AutoCompactEnabled(SchemaIndex schema_id, TableIndex table_id) const {
@@ -1328,12 +1327,12 @@ bool DuckLakeCatalog::AutoCompactEnabled(SchemaIndex schema_id, TableIndex table
 
 bool DuckLakeCatalog::AutoCompactEnabled(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return AutoCompactEnabled(schema.GetSchemaId(), table.GetTableId());
+	return AutoCompactEnabled(schema.GetOptionSchemaId(), table.GetTableId());
 }
 
 bool DuckLakeCatalog::WriteDeletionVectors(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+	return WriteDeletionVectors(schema.GetOptionSchemaId(), table.GetTableId(), &table.GetTableOptions());
 }
 
 unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,
