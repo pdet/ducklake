@@ -3020,6 +3020,10 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 	auto expression = column;
 	if (type.id() == LogicalTypeId::VARCHAR && !TypeIsNativelySupported(type)) {
 		// Postgres stores VARCHAR and JSON as BYTEA.
+		if (!transaction.GetCatalog().SupportsV1_1Metadata()) {
+			// 1.0 catalogs can still hold the VARCHAR and JSON columns of DuckLake 0.3, whose bytes hex reads alike
+			expression = "unhex(hex(" + expression + "))";
+		}
 		expression = "decode(" + expression + ")";
 	}
 	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
