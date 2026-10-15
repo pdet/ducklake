@@ -453,6 +453,31 @@ static constexpr const DuckLakeAddedColumn V1_1_DEV1_ADDED_COLUMNS[] = {
     {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
     {"ducklake_schema", "parent_schema_id", "BIGINT"}};
 
+//! Files without a row group count are older than 1.1, whose writer took the NaN flag from the last row group
+static string LegacyNaNFlagsMigrationQuery() {
+	return R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_column_stats AS tcs SET contains_nan = NULL
+WHERE tcs.contains_nan = false AND EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_column_stats fcs
+	JOIN {METADATA_CATALOG}.ducklake_data_file df ON df.data_file_id = fcs.data_file_id
+	WHERE fcs.table_id = tcs.table_id AND fcs.column_id = tcs.column_id AND fcs.contains_nan = false
+	AND df.row_group_count IS NULL);
+UPDATE {METADATA_CATALOG}.ducklake_table_column_stats AS tcs
+SET extra_stats = REPLACE(tcs.extra_stats, '"contains_nan":false,', '')
+WHERE EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_variant_stats fvs
+	JOIN {METADATA_CATALOG}.ducklake_data_file df ON df.data_file_id = fvs.data_file_id
+	WHERE fvs.table_id = tcs.table_id AND fvs.column_id = tcs.column_id AND fvs.contains_nan = false
+	AND df.row_group_count IS NULL);
+UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET contains_nan = NULL
+WHERE contains_nan = false AND data_file_id IN (
+	SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE row_group_count IS NULL);
+UPDATE {METADATA_CATALOG}.ducklake_file_variant_stats SET contains_nan = NULL
+WHERE contains_nan = false AND data_file_id IN (
+	SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE row_group_count IS NULL);
+)";
+}
+
 static string V1_1Dev1MigrationQuery() {
 	string query;
 	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
@@ -462,8 +487,9 @@ static string V1_1Dev1MigrationQuery() {
 	query += R"(CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 )";
+	query += LegacyNaNFlagsMigrationQuery();
+	query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';\n";
 	return query;
 }
 
