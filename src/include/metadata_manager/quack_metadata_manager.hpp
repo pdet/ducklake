@@ -43,9 +43,15 @@ public:
 
 	bool MetadataExists() override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
+	void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) override;
+	void MigrateV10(bool allow_failures) override;
 
 protected:
 	string MetadataExistsQuery() const override;
+
+private:
+	//! Runs the statements of the callback in one server transaction, rolled back when one of them fails
+	void ExecuteInServerTransaction(const std::function<void()> &statements);
 };
 
 } // namespace duckdb

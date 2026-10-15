@@ -62,6 +62,32 @@ unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 
+void QuackMetadataManager::ExecuteInServerTransaction(const std::function<void()> &statements) {
+	// no other query may run in the server transaction
+	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
+	Query("BEGIN TRANSACTION;")->ThrowIfError("Failed to begin a transaction on the Quack server: ");
+	try {
+		statements();
+	} catch (...) {
+		Query("ROLLBACK;");
+		throw;
+	}
+	Query("COMMIT;")->ThrowIfError("Failed to commit a transaction on the Quack server: ");
+}
+
+void QuackMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
+	ExecuteInServerTransaction([&]() { DuckLakeMetadataManager::InitializeDuckLake(has_explicit_schema, encryption); });
+}
+
+void QuackMetadataManager::MigrateV10(bool allow_failures) {
+	if (allow_failures) {
+		// the re-run of a dev catalog expects failing probes, which abort a server transaction
+		DuckLakeMetadataManager::MigrateV10(allow_failures);
+		return;
+	}
+	ExecuteInServerTransaction([&]() { DuckLakeMetadataManager::MigrateV10(allow_failures); });
+}
+
 string QuackMetadataManager::MetadataExistsQuery() const {
 	return "SELECT COUNT(*) FROM information_schema.tables "
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
