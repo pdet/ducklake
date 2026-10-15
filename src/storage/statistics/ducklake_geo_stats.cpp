@@ -124,8 +124,8 @@ static GeometryTypeSet ToTypeSet(const set<string> &geo_types) {
 
 static void SetBoundsUnknownIfEmpty(double &min, double &max) {
 	if (min == GeometryExtent::EMPTY_MIN && max == GeometryExtent::EMPTY_MAX) {
-		min = -WIDEST_FINITE_BOUND;
-		max = WIDEST_FINITE_BOUND;
+		min = GeometryExtent::UNKNOWN_MIN;
+		max = GeometryExtent::UNKNOWN_MAX;
 	}
 }
 
