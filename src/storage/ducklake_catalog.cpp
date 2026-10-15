@@ -866,6 +866,13 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 					throw InvalidInputException("Invalid bucket partition transform: %s", field.transform);
 				}
 				partition_field.transform.bucket_count = bucket_count;
+				auto column = table->GetFieldData().GetByFieldIndex(field.field_id);
+				if (field.bucket_source_type.empty()) {
+					partition_field.bucket_hash_changed = true;
+				} else if (column && !column->Type().IsNested()) {
+					partition_field.bucket_hash_changed = DuckLakePartitionUtils::BucketChangesWithType(
+					    DuckLakeTypes::FromString(field.bucket_source_type), column->Type());
+				}
 			} else if (!DuckLakePartitionUtils::TryGetTransformType(field.transform, partition_field.transform.type) ||
 			           partition_field.transform.type == DuckLakeTransformType::BUCKET) {
 				throw InvalidInputException("Unsupported partition transform %s", field.transform);

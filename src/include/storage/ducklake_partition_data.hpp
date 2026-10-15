@@ -43,6 +43,8 @@ struct DuckLakePartitionField {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	DuckLakeTransform transform;
+	//! Whether the bucket column changed its bucket hash type while the spec was active
+	bool bucket_hash_changed = false;
 
 	bool operator==(const DuckLakePartitionField &other) const {
 		return partition_key_index == other.partition_key_index && field_id == other.field_id &&

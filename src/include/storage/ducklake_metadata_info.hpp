@@ -87,6 +87,8 @@ struct DuckLakeColumnInfo {
 	bool nulls_allowed {};
 	vector<DuckLakeColumnInfo> children;
 	vector<DuckLakeTag> tags;
+	//! The snapshot of the current definition of a column loaded from the catalog
+	optional_idx begin_snapshot;
 };
 
 struct DuckLakeInlinedTableInfo {
@@ -223,6 +225,8 @@ struct DuckLakePartitionFieldInfo {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	string transform;
+	//! The type of a bucket column when the spec began, empty when unknown
+	string bucket_source_type;
 	bool operator==(const DuckLakePartitionFieldInfo &new_field) const {
 		return field_id == new_field.field_id && transform == new_field.transform;
 	}
@@ -234,6 +238,8 @@ struct DuckLakePartitionFieldInfo {
 struct DuckLakePartitionInfo {
 	optional_idx id;
 	TableIndex table_id;
+	//! The snapshot a spec loaded from the catalog began
+	optional_idx begin_snapshot;
 	vector<DuckLakePartitionFieldInfo> fields;
 	//! Replaces the current spec even if it has the same fields
 	bool replaces_equal_spec = false;

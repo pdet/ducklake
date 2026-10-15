@@ -1,0 +1,36 @@
+# name: benchmark/micro/fixtures/bucket_tables.benchmark.in
+# description: Read-only lake with 300 tables partitioned by bucket(4, id), 30 of them retyped after their insert
+# group: [fixtures]
+
+cache_file bucket_tables_ready.marker
+
+load
+@create bucket_tables
+@attach bucket_tables AS lake (DATA_PATH '${BENCHMARK_DIR}/bucket_tables_data')
+CALL lake.set_option('data_inlining_row_limit', 0);
+BEGIN;
+@for t in range(300)
+CREATE TABLE lake.t_@{t} (id INTEGER, v VARCHAR);
+ALTER TABLE lake.t_@{t} SET PARTITIONED BY (bucket(4, id));
+@end
+COMMIT;
+BEGIN;
+@for t in range(300)
+INSERT INTO lake.t_@{t} SELECT i, 'v' || i FROM range(16) t(i);
+@end
+COMMIT;
+BEGIN;
+@for t in range(30)
+ALTER TABLE lake.t_@{t} ALTER id TYPE BIGINT;
+@end
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake') <> 300
+OR (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_partition_info) <> 300
+THEN error('unexpected bucket tables fixture') END;
+DETACH lake;
+@seal bucket_tables
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/bucket_tables_ready.marker' (FORMAT CSV);
+@attach bucket_tables AS lake (READ_ONLY)
+
+reload
+@attach bucket_tables AS lake (READ_ONLY)

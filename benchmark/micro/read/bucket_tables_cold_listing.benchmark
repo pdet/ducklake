@@ -1,0 +1,32 @@
+# name: benchmark/micro/read/bucket_tables_cold_listing.benchmark
+# description: Attach a lake with 300 bucket partitioned tables, 30 of them retyped, list them and look up rows, three times
+# group: [read]
+
+name Bucket Tables Cold Listing
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/bucket_tables.benchmark.in
+
+# Every attach loads the catalog, including the partition specs of all tables
+run
+SELECT count(*), (SELECT v FROM lake.t_150 WHERE id = 7) || (SELECT v FROM lake.t_15 WHERE id = 8) FROM duckdb_tables() WHERE database_name = 'lake';
+DETACH lake;
+@attach bucket_tables AS lake (READ_ONLY)
+SELECT count(*), (SELECT v FROM lake.t_150 WHERE id = 7) || (SELECT v FROM lake.t_15 WHERE id = 8) FROM duckdb_tables() WHERE database_name = 'lake';
+DETACH lake;
+@attach bucket_tables AS lake (READ_ONLY)
+SELECT count(*), (SELECT v FROM lake.t_150 WHERE id = 7) || (SELECT v FROM lake.t_15 WHERE id = 8) FROM duckdb_tables() WHERE database_name = 'lake';
+
+cleanup
+DETACH lake;
+@attach bucket_tables AS lake (READ_ONLY)
+
+result_query II
+SELECT * FROM __answer
+----
+300	v7v8

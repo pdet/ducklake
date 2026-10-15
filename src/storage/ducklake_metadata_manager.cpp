@@ -978,6 +978,68 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata());
 }
 
+//! Load the type each bucket column had when its partition spec began
+static void
+LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
+                      const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
+                      const vector<DuckLakeTableInfo> &tables, vector<DuckLakePartitionInfo> &partitions) {
+	map<pair<idx_t, idx_t>, reference<const DuckLakeColumnInfo>> columns;
+	for (auto &table : tables) {
+		for (auto &column : table.columns) {
+			columns.emplace(make_pair(table.id.index, column.id.index), column);
+		}
+	}
+	// only a column defined again after its spec began needs the type it had then
+	set<TableIndex> table_ids;
+	set<FieldIndex> column_ids;
+	for (auto &partition : partitions) {
+		for (auto &field : partition.fields) {
+			if (!StringUtil::StartsWith(field.transform, "bucket(")) {
+				continue;
+			}
+			auto entry = columns.find(make_pair(partition.table_id.index, field.field_id.index));
+			if (entry == columns.end()) {
+				continue;
+			}
+			auto &column = entry->second.get();
+			if (column.begin_snapshot.IsValid() && partition.begin_snapshot.IsValid() &&
+			    column.begin_snapshot.GetIndex() <= partition.begin_snapshot.GetIndex()) {
+				field.bucket_source_type = column.type;
+				continue;
+			}
+			table_ids.insert(partition.table_id);
+			column_ids.insert(field.field_id);
+		}
+	}
+	if (table_ids.empty()) {
+		return;
+	}
+	auto table_id_list = GenerateIDList(table_ids);
+	auto result =
+	    query_executor(snapshot, StringUtil::Format(R"(
+SELECT part.partition_id, col.column_id, col.column_type
+FROM {METADATA_CATALOG}.ducklake_partition_info part
+JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = part.table_id
+WHERE {SNAPSHOT_ID} >= part.begin_snapshot AND ({SNAPSHOT_ID} < part.end_snapshot OR part.end_snapshot IS NULL)
+  AND part.table_id IN (%s) AND col.table_id IN (%s) AND col.column_id IN (%s) AND col.parent_column IS NULL
+  AND part.begin_snapshot >= col.begin_snapshot AND (part.begin_snapshot < col.end_snapshot OR col.end_snapshot IS NULL)
+)",
+	                                                table_id_list, table_id_list, GenerateIDList(column_ids)));
+	result->ThrowIfError("Failed to get the bucket column types of the partition specs from DuckLake: ");
+	map<pair<idx_t, idx_t>, string> source_types;
+	for (auto &row : *result) {
+		source_types[make_pair(row.GetValue<uint64_t>(0), row.GetValue<uint64_t>(1))] = row.GetValue<string>(2);
+	}
+	for (auto &partition : partitions) {
+		for (auto &field : partition.fields) {
+			auto entry = source_types.find(make_pair(partition.id.GetIndex(), field.field_id.index));
+			if (entry != source_types.end()) {
+				field.bucket_source_type = entry->second;
+			}
+		}
+	}
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
     const string &base_data_path, const string &separator, bool supports_v1_1_metadata) {
@@ -1047,7 +1109,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags, default_value_type
+	) AS column_tags, default_value_type, col.begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -1117,6 +1179,9 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		}
 		if (!row.IsNull(COLUMN_INDEX_START + 8)) {
 			column_info.default_value_type = row.GetValue<string>(COLUMN_INDEX_START + 8);
+		}
+		if (!row.IsNull(COLUMN_INDEX_START + 9)) {
+			column_info.begin_snapshot = row.GetValue<uint64_t>(COLUMN_INDEX_START + 9);
 		}
 		column_info.nulls_allowed = row.GetValue<bool>(COLUMN_INDEX_START + 5);
 		if (!row.IsNull(COLUMN_INDEX_START + 7)) {
@@ -1221,7 +1286,7 @@ WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < duckl
 
 	// load partition information
 	result = query_executor(snapshot, R"(
-SELECT partition_id, part.table_id, partition_key_index, column_id, transform
+SELECT partition_id, part.table_id, partition_key_index, column_id, transform, part.begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_partition_column part_col USING (partition_id)
 WHERE {SNAPSHOT_ID} >= part.begin_snapshot AND ({SNAPSHOT_ID} < part.end_snapshot OR part.end_snapshot IS NULL)
@@ -1237,6 +1302,7 @@ ORDER BY part.table_id, partition_id, partition_key_index
 			DuckLakePartitionInfo partition_info;
 			partition_info.id = partition_id;
 			partition_info.table_id = table_id;
+			partition_info.begin_snapshot = row.GetValue<uint64_t>(5);
 			partitions.push_back(std::move(partition_info));
 		}
 		auto &partition_entry = partitions.back();
@@ -1247,6 +1313,7 @@ ORDER BY part.table_id, partition_id, partition_key_index
 		partition_field.transform = row.GetValue<string>(4);
 		partition_entry.fields.push_back(std::move(partition_field));
 	}
+	LoadBucketSourceTypes(snapshot, query_executor, catalog.tables, partitions);
 
 	// load sort information
 	result = query_executor(snapshot, R"(
@@ -2077,6 +2144,10 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 		}
 		const auto &col_filter = it->second;
 		if (!col_filter.table_filter || !col_filter.table_filter->expr) {
+			continue;
+		}
+		// files written before the change hold the buckets of the old type
+		if (field.bucket_hash_changed) {
 			continue;
 		}
 

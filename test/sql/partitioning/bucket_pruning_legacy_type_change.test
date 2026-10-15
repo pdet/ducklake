@@ -1,0 +1,43 @@
+# name: test/sql/partitioning/bucket_pruning_legacy_type_change.test
+# description: bucket pruning keeps the files of a DuckLake 1.0 spec whose bucket column changed its hash type
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+# DuckLake 1.0 kept one spec when it changed the type of a bucket column, so the files written before the change hold
+# the buckets of the old type
+unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/bucket_retype.db' AS legacy (DATA_PATH 'data/old_ducklake/bucket_retype/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query IIII
+SELECT (SELECT list(k ORDER BY k) FROM legacy.d WHERE c = 9), (SELECT list(k ORDER BY k) FROM legacy.dec WHERE c = 9),
+       (SELECT list(k ORDER BY k) FROM legacy.ts WHERE c = TIMESTAMP '2020-01-10'),
+       (SELECT list(k ORDER BY k) FROM legacy.big WHERE c = 9)
+----
+[9, 109]	[9, 109]	[9, 109]	[9, 109]
+
+# a type change that keeps the hash of every value still prunes to one of the two files of each insert
+query II
+EXPLAIN ANALYZE SELECT k FROM legacy.big WHERE c = 9
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2\s.*
+
+query II
+EXPLAIN ANALYZE SELECT k FROM legacy.d WHERE c = 9
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 4\s.*
+
+# the same after the migration
+unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype_migrated.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/bucket_retype_migrated.db' AS migrated (DATA_PATH 'data/old_ducklake/bucket_retype/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT (SELECT list(k ORDER BY k) FROM migrated.d WHERE c = 9), (SELECT list(k ORDER BY k) FROM migrated.big WHERE c = 9)
+----
+[9, 109]	[9, 109]
