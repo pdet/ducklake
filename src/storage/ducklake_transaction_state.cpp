@@ -434,7 +434,10 @@ static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex fie
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (fields[i].id == field_id) {
 			if (replacement) {
+				// a renamed field keeps the children queued for it
+				auto children = std::move(fields[i].children);
 				fields[i] = *replacement;
+				fields[i].children = std::move(children);
 			} else {
 				fields.erase(fields.begin() + i);
 			}
@@ -1727,18 +1730,16 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			}
 
 			auto committed_table_id = commit_state.GetTableId(table);
-			auto column_info = table.GetColumnInfo(local_change.field_index);
-			if (!UpdateNestedAddedField(result, txn_added_fields, local_change.field_index, column_info)) {
-				// Cancel the previous txn-local add for this field, or drop the committed column.
-				CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
 
-				// Insert the new column with the updated info and register it.
-				DuckLakeNewColumn new_col;
-				new_col.table_id = committed_table_id;
-				new_col.column_info = std::move(column_info);
-				txn_added_fields[local_change.field_index.index] = result.new_columns.size();
-				result.new_columns.push_back(std::move(new_col));
-			}
+			// Cancel the previous txn-local add for this field, or drop the committed column.
+			CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
+
+			// Insert the new column with the updated info and register it.
+			DuckLakeNewColumn new_col;
+			new_col.table_id = committed_table_id;
+			new_col.column_info = table.GetColumnInfo(local_change.field_index);
+			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
+			result.new_columns.push_back(std::move(new_col));
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
