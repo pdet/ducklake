@@ -677,6 +677,11 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 		optional_idx next_file_id;
 		inlined_rows.clear();
+		if (attempt > 0) {
+			// the flush can have dropped an inlined table it emptied
+			inlined_data_tables =
+			    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+		}
 		for (auto &table : inlined_data_tables) {
 			vector<MultiFileColumnDefinition> columns;
 			if (!DuckLakeMultiFileReader::GetInlinedTableColumns(read_info, table.schema_version, columns)) {

@@ -650,6 +650,11 @@ DuckLakeFileListExtendedEntry DuckLakeDeleteMap::GetExtendedFileInfo(const strin
 			file_map.emplace(std::move(path), std::move(file_entry));
 		}
 		delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			throw TransactionException("Transaction conflict - attempting to delete from file \"%s\" - but another "
+			                           "transaction has rewritten it",
+			                           filename);
+		}
 	}
 	if (delete_entry == file_map.end()) {
 		throw InternalException("Could not find matching file for written delete file");
