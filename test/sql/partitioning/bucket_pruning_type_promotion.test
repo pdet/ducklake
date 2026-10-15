@@ -214,7 +214,7 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info WHERE 
 ----
 4
 
-# type changes that keep the hash of every value, so the old files are still pruned
+# type changes that keep the hash of every value keep the spec
 foreach source,target INTEGER,BIGINT INTEGER,DECIMAL(18) FLOAT,DOUBLE UTINYINT,UBIGINT UINTEGER,HUGEINT UBIGINT,UHUGEINT UTINYINT,DECIMAL(38) HUGEINT,HUGEINT DECIMAL(4),DECIMAL(18) DECIMAL(20),DECIMAL(38)
 
 statement ok
@@ -233,6 +233,32 @@ query I
 SELECT k FROM w WHERE c = 5
 ----
 5
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'w' AND end_snapshot IS NULL)
+----
+1
+
+statement ok
+DROP TABLE w
+
+endloop
+
+# so the old files of a column that is not hashed by its VARCHAR cast are still pruned
+foreach source,target INTEGER,BIGINT INTEGER,DECIMAL(18) FLOAT,DOUBLE DECIMAL(4),DECIMAL(18)
+
+statement ok
+CREATE TABLE w (c {source}, k INTEGER)
+
+statement ok
+ALTER TABLE w SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO w SELECT i, i FROM range(64) t(i)
+
+statement ok
+ALTER TABLE w ALTER c TYPE {target}
 
 query II
 EXPLAIN ANALYZE SELECT k FROM w WHERE c = 5

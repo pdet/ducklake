@@ -15,6 +15,15 @@ static int32_t HashString(string_t value) {
 static void Murmur3ScalarFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &input = args.data[0];
 	auto count = args.size();
+	if (DuckLakeMurmur3::HashesCastText(input.GetType())) {
+		Vector varchar_input(LogicalType::VARCHAR);
+		VectorOperations::DefaultCast(input, varchar_input, count);
+		UnaryExecutor::Execute<string_t, int32_t>(varchar_input, result, count, HashString);
+		if (args.AllConstant()) {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		}
+		return;
+	}
 	switch (input.GetType().InternalType()) {
 	case PhysicalType::BOOL:
 		UnaryExecutor::Execute<bool, int32_t>(input, result, count, DuckLakeMurmur3::HashValue<int64_t>);
@@ -40,15 +49,8 @@ static void Murmur3ScalarFunction(DataChunk &args, ExpressionState &state, Vecto
 	case PhysicalType::VARCHAR:
 		UnaryExecutor::Execute<string_t, int32_t>(input, result, count, HashString);
 		break;
-	default: {
-		Vector varchar_input(LogicalType::VARCHAR);
-		VectorOperations::DefaultCast(input, varchar_input, count);
-		UnaryExecutor::Execute<string_t, int32_t>(varchar_input, result, count, HashString);
-		if (args.AllConstant()) {
-			result.SetVectorType(VectorType::CONSTANT_VECTOR);
-		}
-		break;
-	}
+	default:
+		throw InternalException("murmur3_32 has no hash for type %s", input.GetType());
 	}
 }
 

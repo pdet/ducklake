@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/bucket_pruning_many_files.benchmark
+# description: Run 28 point lookups and IN lists on BIGINT and VARCHAR bucket keys that prune all but 8 to 24 of 512 files
+# group: [read]
+
+name Bucket Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/bucket_files.benchmark.in
+
+run benchmark/micro/queries/bucket_pruning.sql
+
+result_query II
+SELECT * FROM __answer
+----
+123457	61728.5

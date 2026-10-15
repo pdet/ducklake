@@ -1,0 +1,92 @@
+# name: test/sql/partitioning/bucket_pruning_cast_text.test
+# description: bucket pruning reads every file of a column whose values are hashed by their VARCHAR cast
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# written by DuckLake 1.0, whose nested VARCHAR cast differs and which hashed other rows of a filtered insert
+unzip data/old_ducklake/bucket_text_hash.db.gz {TEST_DIR}/bucket_text_hash.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/bucket_text_hash.db' AS legacy (DATA_PATH 'data/old_ducklake/bucket_text_hash/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query III
+SELECT (SELECT k FROM legacy.l WHERE l = ['a\b']), (SELECT k FROM legacy.l WHERE l = ['c\d']), (SELECT k FROM legacy.l WHERE l = ['\'])
+----
+1	2	3
+
+query IIIIII
+SELECT (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000000'),
+       (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000002'),
+       (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000004'),
+       (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000006'),
+       (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000008'),
+       (SELECT k FROM legacy.u WHERE u = '00000000-0000-0000-0000-000000000010')
+----
+0	2	4	6	8	10
+
+query I
+SELECT list(k ORDER BY k) FROM legacy.u
+WHERE u IN ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000006')
+----
+[2, 6]
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_cast_text', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE u (u UUID, k INTEGER)
+
+statement ok
+ALTER TABLE u SET PARTITIONED BY (bucket(4, u))
+
+statement ok
+INSERT INTO u SELECT md5(i::VARCHAR)::UUID, i FROM range(64) t(i)
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'u')
+----
+4
+
+query I
+SELECT k FROM u WHERE u = 'e4da3b7f-bbce-2345-d777-2b0674a318d5'
+----
+5
+
+query II
+EXPLAIN ANALYZE SELECT k FROM u WHERE u = 'e4da3b7f-bbce-2345-d777-2b0674a318d5'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 4\s.*
+
+statement ok
+CREATE TABLE q (l DOUBLE[], k INTEGER)
+
+statement ok
+ALTER TABLE q SET PARTITIONED BY (bucket(16, l))
+
+statement ok
+INSERT INTO q SELECT [i + 0.5], i FROM range(64) t(i)
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'q')
+----
+15
+
+query I
+SELECT k FROM q WHERE l = [5.5]
+----
+5
+
+query II
+EXPLAIN ANALYZE SELECT k FROM q WHERE l = [5.5]
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 15\s.*

@@ -1,0 +1,30 @@
+# name: benchmark/micro/fixtures/bucket_files.benchmark.in
+# description: Read-only lake with tables bucketed on a BIGINT and on a VARCHAR key, 512 files each, every file spanning the whole key range
+# group: [fixtures]
+
+cache_file bucket_files_ready.marker
+
+# every insert spreads 131072 keys over 64 buckets, so zone maps prune nothing and only bucket pruning can
+load
+@create bucket_files
+@attach bucket_files AS lake (DATA_PATH '${BENCHMARK_DIR}/bucket_files_data')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.by_id (id BIGINT, s VARCHAR, val DOUBLE);
+CREATE TABLE lake.by_s (id BIGINT, s VARCHAR, val DOUBLE);
+ALTER TABLE lake.by_id SET PARTITIONED BY (bucket(64, id));
+ALTER TABLE lake.by_s SET PARTITIONED BY (bucket(64, s));
+@for f in range(8)
+INSERT INTO lake.by_id SELECT i, printf('v%07d', i), i * 0.5 FROM range(@{f}, 1048576, 8) t(i);
+INSERT INTO lake.by_s SELECT i, printf('v%07d', i), i * 0.5 FROM range(@{f}, 1048576, 8) t(i);
+@end
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'by_id')) <> 512
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'by_s')) <> 512
+THEN error('by_id and by_s must consist of 512 files each') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal bucket_files
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/bucket_files_ready.marker' (FORMAT CSV);
+@attach bucket_files AS lake (READ_ONLY)
+
+reload
+@attach bucket_files AS lake (READ_ONLY)

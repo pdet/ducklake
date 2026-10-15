@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/types.hpp"
 
 namespace duckdb {
 
@@ -71,6 +72,23 @@ struct DuckLakeMurmur3 {
 	template <class T>
 	static int32_t HashValue(T value) {
 		return Hash(reinterpret_cast<const uint8_t *>(&value), sizeof(T));
+	}
+
+	//! Whether murmur3_32 hashes the VARCHAR cast of the type, whose text differs between DuckDB versions
+	static bool HashesCastText(const LogicalType &type) {
+		switch (type.InternalType()) {
+		case PhysicalType::BOOL:
+		case PhysicalType::INT8:
+		case PhysicalType::INT16:
+		case PhysicalType::INT32:
+		case PhysicalType::INT64:
+		case PhysicalType::FLOAT:
+		case PhysicalType::DOUBLE:
+		case PhysicalType::VARCHAR:
+			return false;
+		default:
+			return true;
+		}
 	}
 };
 

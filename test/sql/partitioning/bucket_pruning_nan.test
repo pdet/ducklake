@@ -135,17 +135,3 @@ query II
 EXPLAIN ANALYZE SELECT k FROM p WHERE d IN (0, NULL)
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
-
-statement ok
-CREATE TABLE q (l DOUBLE[], k INTEGER)
-
-statement ok
-ALTER TABLE q SET PARTITIONED BY (bucket(16, l))
-
-statement ok
-INSERT INTO q SELECT [i + 0.5], i FROM range(64) t(i)
-
-query II
-EXPLAIN ANALYZE SELECT k FROM q WHERE l = [5.5]
-----
-analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*

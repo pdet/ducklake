@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
+#include "common/ducklake_murmur3.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
@@ -1920,31 +1921,15 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
 }
 
-//! Whether equal values can hash to other buckets, as for NaNs and for zeros inside nested values
-static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
+//! Whether equal values can hash to other buckets, as for NaNs
+static bool EqualsValuesInOtherBuckets(const Value &value) {
 	if (value.IsNull()) {
 		return false;
 	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::FLOAT:
-	case PhysicalType::DOUBLE: {
-		auto number = value.GetValue<double>();
-		return Value::IsNan(number) || (nested && number == 0);
-	}
-	case PhysicalType::STRUCT:
-		for (auto &child : StructValue::GetChildren(value)) {
-			if (EqualsValuesInOtherBuckets(child, true)) {
-				return true;
-			}
-		}
-		return false;
-	case PhysicalType::LIST:
-		for (auto &child : ListValue::GetChildren(value)) {
-			if (EqualsValuesInOtherBuckets(child, true)) {
-				return true;
-			}
-		}
-		return false;
+	case PhysicalType::DOUBLE:
+		return Value::IsNan(value.GetValue<double>());
 	default:
 		return false;
 	}
@@ -1959,7 +1944,7 @@ static optional_idx FoldBucketValue(ClientContext &context, const Value &constan
 		return optional_idx();
 	}
 	auto cast = constant.DefaultTryCastAs(col_type);
-	if (!cast || EqualsValuesInOtherBuckets(*cast, false)) {
+	if (!cast || EqualsValuesInOtherBuckets(*cast)) {
 		return optional_idx();
 	}
 	auto const_expr = make_uniq<BoundConstantExpression>(std::move(*cast));
@@ -2077,6 +2062,10 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 		}
 		const auto &col_filter = it->second;
 		if (!col_filter.table_filter || !col_filter.table_filter->expr) {
+			continue;
+		}
+		// a value hashed by its cast text can be in another bucket in the files of other writers
+		if (DuckLakeMurmur3::HashesCastText(col_filter.column_type)) {
 			continue;
 		}
 
