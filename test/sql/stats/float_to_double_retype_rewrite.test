@@ -1,0 +1,117 @@
+# name: test/sql/stats/float_to_double_retype_rewrite.test
+# description: files that compaction, rewrites and flushes write as FLOAT after a retype to DOUBLE get DOUBLE bounds
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/float_to_double_retype_rewrite', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+# files merged after the retype
+statement ok
+CREATE TABLE dl.m(v FLOAT)
+
+statement ok
+INSERT INTO dl.m VALUES (0.1)
+
+statement ok
+INSERT INTO dl.m VALUES (0.2)
+
+statement ok
+ALTER TABLE dl.m ALTER v TYPE DOUBLE
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+SELECT count(*) FROM dl.m WHERE v > 0.2
+----
+1
+
+# a file rewritten to drop its deletes after the retype
+statement ok
+CREATE TABLE dl.r(v FLOAT)
+
+statement ok
+INSERT INTO dl.r VALUES (0.1), (0.2), (0.3)
+
+statement ok
+DELETE FROM dl.r WHERE v > 0.25
+
+statement ok
+ALTER TABLE dl.r ALTER v TYPE DOUBLE
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'r', delete_threshold => 0)
+
+query I
+SELECT count(*) FROM dl.r WHERE v > 0.2
+----
+1
+
+query II
+SELECT min(v), max(v) FROM dl.r
+----
+0.10000000149011612	0.20000000298023224
+
+# inlined rows flushed after the retype
+statement ok
+CREATE TABLE dl.f(v FLOAT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'f')
+
+statement ok
+INSERT INTO dl.f VALUES (0.1), (0.2)
+
+statement ok
+ALTER TABLE dl.f ALTER v TYPE DOUBLE
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+query I
+SELECT count(*) FROM dl.f WHERE v > 0.2
+----
+1
+
+# a struct field merged after the retype
+statement ok
+CREATE TABLE dl.s(s STRUCT(a FLOAT))
+
+statement ok
+INSERT INTO dl.s VALUES ({'a': 0.1})
+
+statement ok
+INSERT INTO dl.s VALUES ({'a': 0.2})
+
+statement ok
+ALTER TABLE dl.s ALTER s TYPE STRUCT(a DOUBLE)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+SELECT count(*) FROM dl.s WHERE s.a > 0.2
+----
+1
+
+# the new files keep their FLOAT type, their bounds are the DOUBLE values read from them
+query III
+SELECT tbl.table_name, stats.min_value, stats.max_value
+FROM meta.ducklake_file_column_stats stats
+JOIN meta.ducklake_table tbl USING (table_id)
+JOIN meta.ducklake_data_file df USING (data_file_id)
+WHERE df.end_snapshot IS NULL
+ORDER BY ALL
+----
+f	0.10000000149011612	0.20000000298023224
+m	0.10000000149011612	0.20000000298023224
+r	0.10000000149011612	0.20000000298023224
+s	0.10000000149011612	0.20000000298023224

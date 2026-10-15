@@ -138,6 +138,8 @@ public:
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);
+	//! Files written with the FLOAT type of an older schema version read as the DOUBLE of a retyped column
+	static void WidenRetypedFloatBounds(DuckLakeTransaction &transaction, DuckLakeInsertGlobalState &gstate);
 	static void AddWrittenFiles(DuckLakeInsertGlobalState &gstate, DataChunk &chunk, const string &encryption_key,
 	                            optional_idx partition_id, bool set_snapshot_id = false);
 
