@@ -98,9 +98,6 @@ public:
 	                                               TableIndex table_index, const vector<OrderByNode> &pre_bound_orders);
 	static DuckLakeTableEntry &GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
 	                                               const DuckLakeTableEntry &table);
-	//! The NOT NULL fields of the table that are still NOT NULL in its latest version
-	static case_insensitive_set_t GetRewriteNotNullFields(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                                                      const DuckLakeTableEntry &table);
 	static unique_ptr<LogicalOperator>
 	PlanRewriteScan(ClientContext &context, Binder &binder, DuckLakeTableEntry &table, DuckLakeCopyInput &copy_input,
 	                bool write_row_id, bool write_snapshot_id,

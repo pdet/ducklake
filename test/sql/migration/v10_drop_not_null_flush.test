@@ -67,3 +67,29 @@ query I
 SELECT count(*) FROM migrated_meta.ducklake_data_file
 ----
 1
+
+# the deleted NULL row stays in the history after the column is NOT NULL again
+unzip data/old_ducklake/v10_drop_not_null.db.gz {TEST_DIR}/v10_drop_not_null_flush_set.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_drop_not_null_flush_set.db' AS restored (DATA_PATH '{TEST_DIR}/v10_drop_not_null_flush_set', OVERRIDE_DATA_PATH TRUE)
+
+statement ok
+DELETE FROM restored.t WHERE id = 2
+
+statement ok
+ALTER TABLE restored.t ALTER a SET NOT NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('restored')
+
+query II
+SELECT id, a FROM restored.t ORDER BY id
+----
+1	10
+
+query II
+SELECT id, a FROM restored.t AT (VERSION => 4) ORDER BY id
+----
+1	10
+2	NULL

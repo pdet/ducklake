@@ -87,10 +87,8 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 //===--------------------------------------------------------------------===//
 unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext &context) const {
 	auto result = make_uniq<DuckLakeInsertGlobalState>(table);
-	// rows inlined before a DROP NOT NULL share their table with the rows inserted after it
-	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	result->not_null_fields = DuckLakeCompactor::GetRewriteNotNullFields(catalog, transaction, table);
+	// a flush moves committed rows, so the NOT NULL columns of their schema version are not checked again
+	result->not_null_fields.clear();
 	return std::move(result);
 }
 

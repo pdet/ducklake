@@ -553,22 +553,6 @@ DuckLakeTableEntry &DuckLakeCompactor::GetLatestTableEntry(DuckLakeCatalog &cata
 	return latest_entry->Cast<DuckLakeTableEntry>();
 }
 
-case_insensitive_set_t DuckLakeCompactor::GetRewriteNotNullFields(DuckLakeCatalog &catalog,
-                                                                  DuckLakeTransaction &transaction,
-                                                                  const DuckLakeTableEntry &table) {
-	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
-	auto latest_not_null_fields = latest_table.GetNotNullFields();
-	case_insensitive_set_t result;
-	for (auto &name : table.GetNotNullFields()) {
-		auto &field_id = table.GetFieldId(table.GetColumn(Identifier(name)).Physical());
-		auto latest_field_id = latest_table.GetFieldId(field_id.GetFieldIndex());
-		if (latest_field_id && latest_not_null_fields.count(latest_field_id->Name())) {
-			result.insert(name);
-		}
-	}
-	return result;
-}
-
 unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
     ClientContext &context, Binder &binder, DuckLakeTableEntry &table, DuckLakeCopyInput &copy_input, bool write_row_id,
     bool write_snapshot_id,
