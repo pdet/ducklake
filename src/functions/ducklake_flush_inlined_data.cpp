@@ -309,7 +309,7 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	auto sort_order_sql = GetFlushSortOrderSQL(table);
 	optional_idx partition_id;
-	auto partition_data = table.GetPartitionData();
+	auto partition_data = table.GetFilePartitionData();
 	if (partition_data) {
 		partition_id = partition_data->partition_id;
 	}

@@ -1,0 +1,134 @@
+# name: test/sql/partitioning/partition_reset_write_in_transaction.test
+# description: files written after RESET PARTITIONED BY in the same transaction are not partitioned
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/partition_reset_write_in_transaction', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+foreach tbl insert_tbl update_tbl merge_tbl add_tbl set_tbl
+
+statement ok
+CREATE TABLE lake.{tbl} (a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE lake.{tbl} SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO lake.{tbl} VALUES (1, 10)
+
+endloop
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.insert_tbl RESET PARTITIONED BY
+
+statement ok
+INSERT INTO lake.insert_tbl VALUES (2, 20)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.update_tbl RESET PARTITIONED BY
+
+statement ok
+UPDATE lake.update_tbl SET b = 11
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.merge_tbl RESET PARTITIONED BY
+
+statement ok
+MERGE INTO lake.merge_tbl USING (SELECT 2 AS a, 20 AS b) s ON merge_tbl.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b)
+
+statement ok
+COMMIT
+
+statement ok
+COPY (SELECT 5 AS a, 50 AS b) TO '{DATA_PATH}/partition_reset_write_in_transaction_added.parquet'
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.add_tbl RESET PARTITIONED BY
+
+statement ok
+CALL ducklake_add_data_files('lake', 'add_tbl', '{DATA_PATH}/partition_reset_write_in_transaction_added.parquet')
+
+statement ok
+COMMIT
+
+# a spec set after the reset in the same transaction partitions the files written after it
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.set_tbl RESET PARTITIONED BY
+
+statement ok
+INSERT INTO lake.set_tbl VALUES (2, 20)
+
+statement ok
+ALTER TABLE lake.set_tbl SET PARTITIONED BY (b)
+
+statement ok
+INSERT INTO lake.set_tbl VALUES (3, 30)
+
+statement ok
+COMMIT
+
+# whether each live file is unpartitioned
+query II
+SELECT tbl.table_name, list(file.partition_id IS NULL ORDER BY file.data_file_id)
+FROM meta.ducklake_data_file file JOIN meta.ducklake_table tbl USING (table_id)
+WHERE file.end_snapshot IS NULL AND tbl.end_snapshot IS NULL
+GROUP BY tbl.table_name ORDER BY tbl.table_name
+----
+add_tbl	[false, true]
+insert_tbl	[false, true]
+merge_tbl	[false, true]
+set_tbl	[false, true, false]
+update_tbl	[true]
+
+query IIIII
+SELECT (SELECT list(b ORDER BY b) FROM lake.insert_tbl), (SELECT list(b ORDER BY b) FROM lake.update_tbl),
+       (SELECT list(b ORDER BY b) FROM lake.merge_tbl), (SELECT list(b ORDER BY b) FROM lake.add_tbl),
+       (SELECT list(b ORDER BY b) FROM lake.set_tbl)
+----
+[10, 20]	[11]	[10, 20]	[10, 50]	[10, 20, 30]
+
+# every partitioned file references a spec of the catalog
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+WHERE partition_id IS NOT NULL AND partition_id NOT IN (SELECT partition_id FROM meta.ducklake_partition_info)
+----
+0
+
+statement ok
+INSERT INTO lake.insert_tbl VALUES (3, 30)
+
+query I
+SELECT list(file.partition_id IS NULL ORDER BY file.data_file_id)
+FROM meta.ducklake_data_file file JOIN meta.ducklake_table tbl USING (table_id)
+WHERE file.end_snapshot IS NULL AND tbl.end_snapshot IS NULL AND tbl.table_name = 'insert_tbl'
+----
+[false, true, true]

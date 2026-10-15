@@ -406,7 +406,7 @@ static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns
 DuckLakeCopyInput::DuckLakeCopyInput(ClientContext &context, DuckLakeTableEntry &table, const string &hive_partition)
     : catalog(table.ParentCatalog().Cast<DuckLakeCatalog>()), columns(table.GetColumns()),
       data_path(table.DataPath() + hive_partition) {
-	partition_data = table.GetPartitionData();
+	partition_data = table.GetFilePartitionData();
 	field_data = table.GetFieldData();
 	schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
 	table_id = table.GetTableId();
@@ -669,7 +669,7 @@ PhysicalOperator &DuckLakeInsert::PlanInsert(ClientContext &context, PhysicalPla
                                              DuckLakeTableEntry &table, string encryption_key) {
 	vector<LogicalType> return_types;
 	return_types.emplace_back(LogicalType::BIGINT);
-	return planner.Make<DuckLakeInsert>(return_types, table, GetPartitionId(table.GetPartitionData()),
+	return planner.Make<DuckLakeInsert>(return_types, table, GetPartitionId(table.GetFilePartitionData()),
 	                                    std::move(encryption_key));
 }
 
