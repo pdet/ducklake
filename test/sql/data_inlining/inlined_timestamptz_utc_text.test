@@ -88,3 +88,40 @@ query II
 SELECT id, v FROM dl.r WHERE v < TIMESTAMPTZ '1677-09-22 00:00:10+00'
 ----
 10	1677-09-22 00:00:00+00
+
+# rows inlined before a type change in the same transaction are cast in the time zone of the session
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE dl.c (id INTEGER, v TIMESTAMP)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.c VALUES (1, TIMESTAMP '2020-06-01 12:00:00')
+
+statement ok
+ALTER TABLE dl.c ALTER v TYPE TIMESTAMPTZ
+
+query I
+SELECT v = TIMESTAMPTZ '2020-06-01 16:00:00+00' FROM dl.c
+----
+true
+
+statement ok
+COMMIT
+
+statement ok
+SET TimeZone = 'UTC'
+
+query I
+SELECT v FROM dl.c
+----
+2020-06-01 16:00:00+00
+
+query I
+SELECT id FROM dl.c WHERE v > TIMESTAMPTZ '2020-06-01 15:00:00+00'
+----
+1

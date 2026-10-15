@@ -351,10 +351,11 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, DuckL
 	inlined_data.outdated_stats_table = table;
 }
 
-void LocalTableChanges::SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table) {
+void LocalTableChanges::SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table, bool changed_types) {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
-	if (table_changes && table_changes->new_inlined_data && table_changes->new_inlined_data->outdated_stats_table) {
+	if (table_changes && table_changes->new_inlined_data &&
+	    (changed_types || table_changes->new_inlined_data->outdated_stats_table)) {
 		table_changes->new_inlined_data->outdated_stats_table = table;
 	}
 }
@@ -2174,7 +2175,9 @@ static void HandleRenameOldEntry(DuckLakeCatalogSet &entries, const string &old_
 
 void DuckLakeTransaction::AlterEntryInternal(DuckLakeTableEntry &table, unique_ptr<CatalogEntry> new_entry) {
 	auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
-	state->local_changes.SetOutdatedStatsTable(table.GetTableId(), new_table);
+	// rows inlined before a type change are cast at commit, in the time zone of the session
+	state->local_changes.SetOutdatedStatsTable(table.GetTableId(), new_table,
+	                                           new_table.GetLocalChange().type == LocalChangeType::CHANGE_COLUMN_TYPE);
 	auto &entries = GetOrCreateTransactionLocalEntries(table);
 	entries.CreateEntry(std::move(new_entry));
 	switch (new_table.GetLocalChange().type) {
