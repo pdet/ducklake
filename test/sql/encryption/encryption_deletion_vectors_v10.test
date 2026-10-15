@@ -1,0 +1,24 @@
+# name: test/sql/encryption/encryption_deletion_vectors_v10.test
+# description: The plaintext deletion vectors that DuckLake 1.0 wrote into encrypted catalogs stay readable
+# group: [encryption]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+unzip data/old_ducklake/encrypted_puffin_v10.db.gz {TEST_DIR}/encrypted_puffin_v10.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/encrypted_puffin_v10.db' AS dl (DATA_PATH 'data/old_ducklake/encrypted_puffin_v10/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query II
+SELECT format, encryption_key IS NOT NULL FROM __ducklake_metadata_dl.ducklake_delete_file
+----
+puffin	true
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+500	250000
