@@ -6,13 +6,16 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/bucket_pruning_legacy_type_change.db
 
 test-env DATA_PATH {TEST_DIR}
 
 # DuckLake 1.0 kept one spec when it changed the type of a bucket column, so the files written before the change hold
 # the buckets of the old type
 unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype.db
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/bucket_retype.db' AS legacy (DATA_PATH 'data/old_ducklake/bucket_retype/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
@@ -47,6 +50,19 @@ SELECT list(k ORDER BY k) FROM legacy.r2 WHERE c = 9
 ----
 [9, 109]
 
+# UTINYINT to INTEGER in the transaction of the spec, then to HUGEINT, which hashes like UTINYINT
+query I
+SELECT list(k ORDER BY k) FROM legacy.u WHERE c = 0
+----
+[0, 100]
+
+# the columns defined again since their spec began need the column history
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'legacy' AND query ILIKE '%part.partition_id, col.column_id, col.column_type%'
+----
+true
+
 # the same after the migration
 unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype_migrated.db
 
@@ -77,7 +93,20 @@ INSERT INTO ducklake.n SELECT i, i FROM range(16) t(i)
 statement ok
 COMMIT
 
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_legacy_type_change')
+
 query II
 EXPLAIN ANALYZE SELECT k FROM ducklake.n WHERE c = 9
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
+
+# without loading the column history
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'ducklake' AND query ILIKE '%part.partition_id, col.column_id, col.column_type%'
+----
+0

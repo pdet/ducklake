@@ -978,7 +978,7 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata());
 }
 
-//! Load the type each bucket column had when its partition spec began
+//! Load the types each bucket column had while its partition spec was active
 static void
 LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
                       const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
@@ -1008,7 +1008,7 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 			if (column_begin.IsValid() && spec_begin.IsValid() &&
 			    (column_begin.GetIndex() < spec_begin.GetIndex() ||
 			     (column_begin == spec_begin && column_begin == table.begin_snapshot))) {
-				field.bucket_source_type = column.type;
+				field.bucket_source_types.push_back(column.type);
 				continue;
 			}
 			table_ids.insert(partition.table_id);
@@ -1021,30 +1021,26 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 	auto table_id_list = GenerateIDList(table_ids);
 	auto result =
 	    query_executor(snapshot, StringUtil::Format(R"(
-SELECT part.partition_id, col.column_id, col.column_type, col.begin_snapshot
+SELECT part.partition_id, col.column_id, col.column_type
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = part.table_id
 WHERE {SNAPSHOT_ID} >= part.begin_snapshot AND ({SNAPSHOT_ID} < part.end_snapshot OR part.end_snapshot IS NULL)
   AND part.table_id IN (%s) AND col.table_id IN (%s) AND col.column_id IN (%s) AND col.parent_column IS NULL
-  AND part.begin_snapshot >= col.begin_snapshot AND (part.begin_snapshot <= col.end_snapshot OR col.end_snapshot IS NULL)
+  AND {SNAPSHOT_ID} >= col.begin_snapshot AND (part.begin_snapshot <= col.end_snapshot OR col.end_snapshot IS NULL)
 )",
 	                                                table_id_list, table_id_list, GenerateIDList(column_ids)));
 	result->ThrowIfError("Failed to get the bucket column types of the partition specs from DuckLake: ");
-	// the definition that ended in the snapshot of the spec precedes the one that began in it
-	map<pair<idx_t, idx_t>, pair<idx_t, string>> source_types;
+	// the definition that ended in the snapshot of the spec counts, as files of the spec can predate the change
+	map<pair<idx_t, idx_t>, vector<string>> source_types;
 	for (auto &row : *result) {
-		auto key = make_pair(row.GetValue<uint64_t>(0), row.GetValue<uint64_t>(1));
-		auto begin_snapshot = row.GetValue<uint64_t>(3);
-		auto entry = source_types.find(key);
-		if (entry == source_types.end() || begin_snapshot < entry->second.first) {
-			source_types[key] = make_pair(begin_snapshot, row.GetValue<string>(2));
-		}
+		source_types[make_pair(row.GetValue<uint64_t>(0), row.GetValue<uint64_t>(1))].push_back(
+		    row.GetValue<string>(2));
 	}
 	for (auto &partition : partitions) {
 		for (auto &field : partition.fields) {
 			auto entry = source_types.find(make_pair(partition.id.GetIndex(), field.field_id.index));
 			if (entry != source_types.end()) {
-				field.bucket_source_type = entry->second.second;
+				field.bucket_source_types = std::move(entry->second);
 			}
 		}
 	}
@@ -1165,9 +1161,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 				// path is provided - load it
 				table_info.path = FromRelativePath(ReadPath(row, 6), schema.path, separator);
 			}
-			if (!row.IsNull(COLUMN_INDEX_START + 10)) {
-				table_info.begin_snapshot = row.GetValue<uint64_t>(COLUMN_INDEX_START + 10);
-			}
+			table_info.begin_snapshot = OptIdx(row, COLUMN_INDEX_START + 10);
 			tables.push_back(std::move(table_info));
 		}
 		auto &table_entry = tables.back();
@@ -1193,9 +1187,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 		if (!row.IsNull(COLUMN_INDEX_START + 8)) {
 			column_info.default_value_type = row.GetValue<string>(COLUMN_INDEX_START + 8);
 		}
-		if (!row.IsNull(COLUMN_INDEX_START + 9)) {
-			column_info.begin_snapshot = row.GetValue<uint64_t>(COLUMN_INDEX_START + 9);
-		}
+		column_info.begin_snapshot = OptIdx(row, COLUMN_INDEX_START + 9);
 		column_info.nulls_allowed = row.GetValue<bool>(COLUMN_INDEX_START + 5);
 		if (!row.IsNull(COLUMN_INDEX_START + 7)) {
 			auto tags = row.GetValue<Value>(COLUMN_INDEX_START + 7);

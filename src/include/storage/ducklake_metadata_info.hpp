@@ -227,8 +227,8 @@ struct DuckLakePartitionFieldInfo {
 	idx_t partition_key_index = 0;
 	FieldIndex field_id;
 	string transform;
-	//! The type of a bucket column when the spec began, empty when unknown
-	string bucket_source_type;
+	//! The types a bucket column had while the spec was active, empty when unknown
+	vector<string> bucket_source_types;
 	bool operator==(const DuckLakePartitionFieldInfo &new_field) const {
 		return field_id == new_field.field_id && transform == new_field.transform;
 	}

@@ -867,11 +867,14 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				}
 				partition_field.transform.bucket_count = bucket_count;
 				auto column = table->GetFieldData().GetByFieldIndex(field.field_id);
-				if (field.bucket_source_type.empty()) {
-					partition_field.bucket_hash_changed = true;
-				} else if (column && !column->Type().IsNested()) {
-					partition_field.bucket_hash_changed = DuckLakePartitionUtils::BucketChangesWithType(
-					    DuckLakeTypes::FromString(field.bucket_source_type), column->Type());
+				partition_field.bucket_hash_changed = field.bucket_source_types.empty();
+				if (column && !column->Type().IsNested()) {
+					for (auto &source_type : field.bucket_source_types) {
+						if (DuckLakePartitionUtils::BucketChangesWithType(DuckLakeTypes::FromString(source_type),
+						                                                  column->Type())) {
+							partition_field.bucket_hash_changed = true;
+						}
+					}
 				}
 			} else if (!DuckLakePartitionUtils::TryGetTransformType(field.transform, partition_field.transform.type) ||
 			           partition_field.transform.type == DuckLakeTransformType::BUCKET) {
