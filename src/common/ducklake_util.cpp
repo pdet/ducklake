@@ -31,7 +31,6 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
-#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
@@ -40,6 +39,7 @@
 #include "duckdb/parser/query_node.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/tableref/pivotref.hpp"
 
 #include <cmath>
@@ -459,25 +459,16 @@ void DuckLakeUtil::VisitQuery(QueryNode &node, const std::function<void(ParsedEx
 	};
 	auto visit_ref = [&](TableRef &ref) {
 		ref_callback(ref);
-		if (ref.type == TableReferenceType::BASE_TABLE) {
-			auto &at_clause = ref.Cast<BaseTableRef>().at_clause;
-			if (at_clause) {
-				VisitQuery(*at_clause->ExpressionMutable(), expr_callback, ref_callback);
+		if (ref.type != TableReferenceType::PIVOT) {
+			return;
+		}
+		for (auto &pivot : ref.Cast<PivotRef>().pivots) {
+			for (auto &expr : pivot.pivot_expressions) {
+				VisitQuery(*expr, expr_callback, ref_callback);
 			}
-		} else if (ref.type == TableReferenceType::JOIN) {
-			auto &ranking = ref.Cast<JoinRef>().ranking_expression;
-			if (ranking) {
-				VisitQuery(*ranking, expr_callback, ref_callback);
-			}
-		} else if (ref.type == TableReferenceType::PIVOT) {
-			for (auto &pivot : ref.Cast<PivotRef>().pivots) {
-				for (auto &expr : pivot.pivot_expressions) {
-					VisitQuery(*expr, expr_callback, ref_callback);
-				}
-				for (auto &entry : pivot.entries) {
-					if (entry.expr) {
-						VisitQuery(*entry.expr, expr_callback, ref_callback);
-					}
+			for (auto &entry : pivot.entries) {
+				if (entry.expr) {
+					VisitQuery(*entry.expr, expr_callback, ref_callback);
 				}
 			}
 		}
@@ -487,79 +478,29 @@ void DuckLakeUtil::VisitQuery(QueryNode &node, const std::function<void(ParsedEx
 
 namespace {
 
-//! Replaces a catalog in the table and function names of a query, and in the references to the tables it reads
+//! Replaces a catalog in the table and function names of a query
 struct CatalogNameReplacer {
 	CatalogNameReplacer(const Identifier &from, const Identifier &to) : from(from), to(to) {
 	}
 
 	const Identifier &from;
 	const Identifier &to;
-	//! The schema path and name of every table the query reads from the catalog
-	vector<vector<Identifier>> tables;
-	//! Whether a table of the query is known by the name of the catalog, which then also qualifies columns and methods
+	//! Whether a table of the query is known by either catalog name, which then qualifies its methods instead
 	bool binds_catalog_name = false;
 
-	bool IsCatalog(const QualifiedName &name) const {
-		// a two-part name can hold the catalog in the place of the schema
-		return name.Catalog() == from || (name.Path().size() == 2 && name.Schema() == from);
+	bool IsCatalogName(const Identifier &name) const {
+		return name == from || name == to;
 	}
 
 	QualifiedName Replace(const QualifiedName &name) const {
-		if (!IsCatalog(name)) {
-			return name;
-		}
 		if (name.Catalog() == from) {
 			return name.WithCatalog(to);
 		}
-		return QualifiedName(to, Identifier(), name.Name());
-	}
-
-	static bool StartsWith(const vector<Identifier> &names, const vector<Identifier> &prefix) {
-		if (names.size() < prefix.size() + 1) {
-			return false;
+		// a two-part name can hold the catalog in the place of the schema, so the schema is left unset
+		if (name.Path().size() == 2 && name.Schema() == from) {
+			return QualifiedName(to, Identifier(), name.Name());
 		}
-		for (idx_t i = 0; i < prefix.size(); i++) {
-			if (names[i + 1] != prefix[i]) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	//! Whether the names start with the catalog, then the schema path and name of a table it reads or the name alone
-	bool QualifiesTable(const vector<Identifier> &names) const {
-		if (names.empty() || names[0] != from) {
-			return false;
-		}
-		for (auto &table : tables) {
-			if (StartsWith(names, table) || StartsWith(names, {table.back()})) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	void AddTable(TableRef &ref) {
-		if (ref.alias == from) {
-			binds_catalog_name = true;
-		}
-		if (ref.type != TableReferenceType::BASE_TABLE) {
-			return;
-		}
-		auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
-		if (ref.alias.empty() && name.Name() == from) {
-			binds_catalog_name = true;
-		}
-		if (IsCatalog(name)) {
-			tables.emplace_back(name.Path().begin() + 1, name.Path().end());
-		}
-	}
-
-	void ReplaceInRef(TableRef &ref) {
-		if (ref.type == TableReferenceType::BASE_TABLE) {
-			auto &table = ref.Cast<BaseTableRef>();
-			table.SetQualifiedName(Replace(table.GetQualifiedName()));
-		}
+		return name;
 	}
 
 	void Replace(QualifiedColumnName &column) const {
@@ -568,29 +509,54 @@ struct CatalogNameReplacer {
 		}
 	}
 
-	void ReplaceInExpression(ParsedExpression &expr) {
-		if (binds_catalog_name) {
-			return;
+	void AddBinding(TableRef &ref) {
+		if (!ref.alias.empty()) {
+			binds_catalog_name = binds_catalog_name || IsCatalogName(ref.alias);
+		} else if (ref.type == TableReferenceType::BASE_TABLE) {
+			auto &name = ref.Cast<BaseTableRef>().GetQualifiedName().Name();
+			binds_catalog_name = binds_catalog_name || IsCatalogName(name);
+		} else if (ref.type == TableReferenceType::TABLE_FUNCTION) {
+			auto &function = ref.Cast<TableFunctionRef>().function;
+			if (function->GetExpressionClass() == ExpressionClass::FUNCTION) {
+				auto &name = function->Cast<FunctionExpression>().GetQualifiedName().Name();
+				binds_catalog_name = binds_catalog_name || IsCatalogName(name);
+			}
 		}
+	}
+
+	void ReplaceInRef(TableRef &ref) {
+		if (ref.type == TableReferenceType::BASE_TABLE) {
+			auto &table = ref.Cast<BaseTableRef>();
+			table.SetQualifiedName(Replace(table.GetQualifiedName()));
+			if (table.at_clause) {
+				Run(*table.at_clause->ExpressionMutable());
+			}
+		} else if (ref.type == TableReferenceType::JOIN) {
+			auto &ranking = ref.Cast<JoinRef>().ranking_expression;
+			if (ranking) {
+				Run(*ranking);
+			}
+		}
+	}
+
+	void ReplaceInExpression(ParsedExpression &expr) {
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::FUNCTION: {
-			auto &function = expr.Cast<FunctionExpression>();
-			function.SetQualifiedName(Replace(function.GetQualifiedName()));
+			if (!binds_catalog_name) {
+				auto &function = expr.Cast<FunctionExpression>();
+				function.SetQualifiedName(Replace(function.GetQualifiedName()));
+			}
 			break;
 		}
 		case ExpressionClass::WINDOW: {
-			auto &window = expr.Cast<WindowExpression>();
-			window.SetQualifiedName(Replace(window.GetQualifiedName()));
-			break;
-		}
-		case ExpressionClass::COLUMN_REF: {
-			auto &names = expr.Cast<ColumnRefExpression>().ColumnNamesMutable();
-			if (QualifiesTable(names)) {
-				names[0] = to;
+			if (!binds_catalog_name) {
+				auto &window = expr.Cast<WindowExpression>();
+				window.SetQualifiedName(Replace(window.GetQualifiedName()));
 			}
 			break;
 		}
 		case ExpressionClass::STAR: {
+			// a column of a star list names its catalog only when it is fully qualified
 			auto &star = expr.Cast<StarExpression>();
 			qualified_column_set_t exclude_list;
 			for (auto column : star.ExcludeList()) {
@@ -615,21 +581,26 @@ struct CatalogNameReplacer {
 	template <class T>
 	void Run(T &query) {
 		DuckLakeUtil::VisitQuery(
-		    query, [](ParsedExpression &) {}, [&](TableRef &ref) { AddTable(ref); });
-		DuckLakeUtil::VisitQuery(
 		    query, [&](ParsedExpression &expr) { ReplaceInExpression(expr); },
 		    [&](TableRef &ref) { ReplaceInRef(ref); });
+	}
+
+	template <class T>
+	void Apply(T &query) {
+		DuckLakeUtil::VisitQuery(
+		    query, [](ParsedExpression &) {}, [&](TableRef &ref) { AddBinding(ref); });
+		Run(query);
 	}
 };
 
 } // namespace
 
 void DuckLakeUtil::ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to) {
-	CatalogNameReplacer(from, to).Run(node);
+	CatalogNameReplacer(from, to).Apply(node);
 }
 
 void DuckLakeUtil::ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to) {
-	CatalogNameReplacer(from, to).Run(expr);
+	CatalogNameReplacer(from, to).Apply(expr);
 }
 
 string DuckLakeUtil::OptionalIdxOrNull(const optional_idx &v) {
