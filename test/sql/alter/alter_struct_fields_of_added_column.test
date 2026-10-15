@@ -1,0 +1,71 @@
+# name: test/sql/alter/alter_struct_fields_of_added_column.test
+# description: Dropping and renaming fields of a STRUCT column added in the same transaction
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_struct_fields_of_added_column')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN s.b
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN r STRUCT(x INTEGER, y INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN r.y TO z
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN n STRUCT(p STRUCT(q INTEGER, w INTEGER), v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN n.p.q TO qq
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN n.p.w
+
+statement ok
+COMMIT
+
+loop i 0 2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE ducklake.t)
+----
+id	INTEGER
+s	STRUCT(a INTEGER)
+r	STRUCT(x INTEGER, z INTEGER)
+n	STRUCT(p STRUCT(qq INTEGER), v INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES ({i}, {'a': 1}, {'x': 2, 'z': 3}, {'p': {'qq': 4}, 'v': 5})
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_struct_fields_of_added_column')
+
+endloop
+
+query IIII
+SELECT id, s, r, n FROM ducklake.t ORDER BY id
+----
+0	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}
+1	{'a': 1}	{'x': 2, 'z': 3}	{'p': {'qq': 4}, 'v': 5}
