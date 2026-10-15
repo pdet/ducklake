@@ -68,8 +68,16 @@ vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, Schem
 		// names in the sort expressions resolve in the schema of the table first, as in a view
 		sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
 	}
-	return BindOrderByNodes(*sort_binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
-	                        columns.GetColumnTypes(), orders);
+	auto child_binder = Binder::CreateBinder(binder.context, sort_binder.get());
+	child_binder->bind_context.AddGenericBinding(
+	    table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()), columns.GetColumnTypes());
+	// sort keys can hold subqueries, which BindOrderByNodes rejects for COPY
+	ExpressionBinder expr_binder(*child_binder, binder.context);
+	vector<BoundOrderByNode> bound_orders;
+	for (auto &order : orders) {
+		bound_orders.emplace_back(order.type, order.null_order, expr_binder.Bind(order.expression));
+	}
+	return bound_orders;
 }
 
 PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) {
