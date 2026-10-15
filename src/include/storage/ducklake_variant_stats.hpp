@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_version.hpp"
 #include "storage/ducklake_stats.hpp"
 
 namespace duckdb {
@@ -43,12 +44,13 @@ public:
 //! Helper class for constructing variant stats from the stats returned by the Parquet writer
 struct PartialVariantStats {
 public:
-	PartialVariantStats();
+	explicit PartialVariantStats(DuckLakeVersion version);
 
 	void ParseVariantStats(const vector<string> &path, idx_t variant_field_start, const vector<Value> &col_stats);
 	DuckLakeColumnStats Finalize();
 
 private:
+	DuckLakeVersion version;
 	DuckLakeColumnStats result;
 	LogicalType variant_type;
 	map<vector<string>, DuckLakeVariantStats> shredded_field_stats;

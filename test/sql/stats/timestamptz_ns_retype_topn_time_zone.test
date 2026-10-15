@@ -1,0 +1,58 @@
+# name: test/sql/stats/timestamptz_ns_retype_topn_time_zone.test
+# description: top n pruning does not skip files with stats written before a TIMESTAMP to TIMESTAMPTZ_NS retype
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads = 1
+
+statement ok
+SET async_threads = 1
+
+statement ok
+SET disabled_optimizers = 'late_materialization'
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/timestamptz_ns_retype_topn_time_zone', DATA_INLINING_ROW_LIMIT 0)
+
+foreach type TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE dl.dst_{type} (v TIMESTAMP)
+
+statement ok
+INSERT INTO dl.dst_{type} SELECT TIMESTAMP '2020-03-08 02:30:00' + INTERVAL (i) SECOND FROM range(4096) t(i)
+
+statement ok
+ALTER TABLE dl.dst_{type} ALTER COLUMN v TYPE {type}
+
+loop file_nr 0 8
+
+statement ok
+INSERT INTO dl.dst_{type} SELECT (CASE WHEN i % 2 = 0 THEN '2020-03-08 07:10:00+00' ELSE '2020-03-08 07:45:00+00' END)::{type} FROM range(4096) t(i)
+
+endloop
+
+query I
+SELECT (SELECT v FROM dl.dst_{type} ORDER BY v LIMIT 1) = (SELECT v FROM dl.dst_{type} ORDER BY epoch_ns(v) LIMIT 1)
+----
+true
+
+query I
+SELECT (SELECT v FROM dl.dst_{type} ORDER BY v DESC LIMIT 1) = (SELECT v FROM dl.dst_{type} ORDER BY epoch_ns(v) DESC LIMIT 1)
+----
+true
+
+endloop

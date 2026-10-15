@@ -1,0 +1,87 @@
+# name: test/sql/migration/v10_timestamptz_ns.test
+# description: a catalog written by DuckLake 1.0 takes TIMESTAMPTZ_NS columns only after the v1.1 migration
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require icu
+
+# written by DuckDB 1.5.6, t has an inlined row
+unzip data/old_ducklake/v10_timestamptz.db.gz {TEST_DIR}/v10_timestamptz_ns.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_timestamptz_ns.db' AS lake (DATA_PATH '{TEST_DIR}/v10_timestamptz_ns', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+statement error
+CREATE TABLE lake.n (v TIMESTAMPTZ_NS)
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE lake.t ALTER ts TYPE TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+query I
+SELECT count(*) FROM meta.ducklake_column WHERE column_type = 'timestamptz_ns'
+----
+0
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_timestamptz_ns.db' AS lake (DATA_PATH '{TEST_DIR}/v10_timestamptz_ns', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ALTER TABLE lake.t ALTER ts TYPE TIMESTAMPTZ_NS
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN s.y TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE lake.n (v TIMESTAMPTZ_NS)
+
+statement ok
+INSERT INTO lake.n VALUES ('2020-01-01 00:00:00.123456789+00')
+
+statement ok
+INSERT INTO lake.t VALUES ('2021-01-01 00:00:00.123456789+00', {'x': 2, 'y': '2021-01-01 00:00:00.5+00'})
+
+query II
+SELECT ts, s FROM lake.t ORDER BY ts
+----
+2020-01-01 00:00:00+00	{'x': 1, 'y': NULL}
+2021-01-01 00:00:00.123456789+00	{'x': 2, 'y': '2021-01-01 00:00:00.5+00'}
+
+query I
+SELECT v FROM lake.n
+----
+2020-01-01 00:00:00.123456789+00
+
+query II
+SELECT column_name, column_type FROM meta.ducklake_column WHERE column_type = 'timestamptz_ns' ORDER BY ALL
+----
+ts	timestamptz_ns
+v	timestamptz_ns
+y	timestamptz_ns
+
+# shredded TIMESTAMPTZ_NS fields of a VARIANT keep their stats
+statement ok
+CREATE TABLE lake.v (v VARIANT)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'v')
+
+statement ok
+INSERT INTO lake.v SELECT {'a': ('2020-01-01 00:00:00.12345678' || i || '+00')::TIMESTAMPTZ_NS}::VARIANT FROM range(3) r(i)
+
+query II
+SELECT variant_path, shredded_type FROM meta.ducklake_file_variant_stats
+----
+"a"	timestamptz_ns

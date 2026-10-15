@@ -75,7 +75,7 @@ SELECT min(v) FROM (SELECT v FROM dl.u ORDER BY v DESC LIMIT 50)
 ----
 2020-06-15 13:07:30-04
 
-foreach type TIMESTAMPTZ TIMESTAMPTZ_NS
+foreach type TIMESTAMPTZ
 
 statement ok
 CREATE TABLE dl.dst_{type} (v TIMESTAMP)

@@ -48,6 +48,16 @@
       ]
     },
     {
+      "reason": "The TIMESTAMPTZ_NS type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/add_files/add_files_type_check_timestamptz_ns.test",
+        "test/sql/default/literal_default_rendering_timestamptz_ns.test",
+        "test/sql/stats/timestamptz_ns_retype_stats_time_zone.test",
+        "test/sql/stats/timestamptz_ns_retype_topn_time_zone.test",
+        "test/sql/types/all_types_timestamptz_ns.test"
+      ]
+    },
+    {
       "reason": "Nested macro parameter types and defaults were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/issues/issue_1116_nested_macro_parameters.test"

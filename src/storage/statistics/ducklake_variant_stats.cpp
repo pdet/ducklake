@@ -423,7 +423,7 @@ LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<str
 	throw InvalidInputException("Could not find typed_value field in type %s", variant_type);
 }
 
-PartialVariantStats::PartialVariantStats() : result(LogicalTypeId::VARIANT) {
+PartialVariantStats::PartialVariantStats(DuckLakeVersion version) : version(version), result(LogicalTypeId::VARIANT) {
 }
 
 void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t variant_field_start,
@@ -450,6 +450,10 @@ void PartialVariantStats::ParseVariantStats(const vector<string> &path, idx_t va
 		auto shredded_type = ExtractVariantType(variant_type, variant_field_names, variant_field_name);
 		auto shredded_stats = DuckLakeInsert::ParseColumnStats(shredded_type, col_stats);
 		result.column_size_bytes += shredded_stats.column_size_bytes;
+		if (!DuckLakeTypes::IsSupportedByVersion(shredded_type, version)) {
+			// the catalog cannot name the shredded type
+			return;
+		}
 		DuckLakeVariantStats variant_field_stats(std::move(shredded_type), std::move(shredded_stats));
 		field_names[variant_field_names] = std::move(variant_field_name);
 		shredded_field_stats.insert(make_pair(variant_field_names, std::move(variant_field_stats)));

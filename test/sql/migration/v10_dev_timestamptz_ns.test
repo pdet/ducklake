@@ -1,0 +1,37 @@
+# name: test/sql/migration/v10_dev_timestamptz_ns.test
+# description: a 1.0 catalog that development builds wrote a TIMESTAMPTZ_NS column into keeps loading
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require icu
+
+# written by DuckLake a457bcc9, t has an inlined row
+unzip data/old_ducklake/v10_dev_timestamptz_ns.db.gz {TEST_DIR}/v10_dev_timestamptz_ns.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_dev_timestamptz_ns.db' AS lake (DATA_PATH '{TEST_DIR}/v10_dev_timestamptz_ns', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+INSERT INTO lake.t VALUES ('2021-01-01 00:00:00.5+00', 2)
+
+query II
+SELECT ts, i FROM lake.t ORDER BY i
+----
+2020-01-01 00:00:00.123456789+00	1
+2021-01-01 00:00:00.5+00	2
+
+statement error
+CREATE TABLE lake.n (v TIMESTAMPTZ_NS)
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.0

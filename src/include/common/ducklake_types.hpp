@@ -22,6 +22,8 @@ public:
 	static LogicalType FromColumnInfo(const DuckLakeColumnInfo &col);
 	static string ToString(const LogicalType &str);
 	static void CheckSupportedType(const LogicalType &type, DuckLakeVersion version);
+	//! Whether catalogs of the version can store the type and its children
+	static bool IsSupportedByVersion(const LogicalType &type, DuckLakeVersion version);
 	static void CheckSupportedTypes(const ColumnList &columns, DuckLakeVersion version);
 
 	//! VARCHAR and BLOB, whose values can be the text NULL

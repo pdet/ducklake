@@ -1,0 +1,55 @@
+# name: test/sql/types/all_types_timestamptz_ns.test
+# description: the TIMESTAMPTZ_NS values of test_all_types read back from inlined rows and from data files
+# group: [types]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/all_types_timestamptz_ns', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE VIEW all_types AS SELECT timestamp_tz_ns FROM test_all_types();
+
+query I nosort alltypes
+FROM all_types
+----
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.data_types AS FROM all_types
+
+query I nosort alltypes
+FROM ducklake.data_types
+----
+
+statement ok
+COMMIT
+
+query I nosort alltypes
+FROM ducklake.data_types
+----
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+----
+1
+
+query I nosort alltypes
+FROM ducklake.data_types
+----
