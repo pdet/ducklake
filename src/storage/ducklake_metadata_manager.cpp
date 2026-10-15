@@ -507,6 +507,10 @@ AND NOT EXISTS (
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	if (!allow_failures) {
+		// only the bounds that the 1.0 release kept need widening
+		MigrateFloatRetypeBounds();
+	}
 	MigrateInlinedSchemaVersions();
 	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
@@ -3336,6 +3340,45 @@ string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set
 	}
 	return RewriteColumnStatsBoundsSql(widened_columns, widened_bounds, next_file_id) +
 	       RewriteColumnStatsBoundsSql(cleared_columns, "min_value = NULL, max_value = NULL", next_file_id);
+}
+
+void DuckLakeMetadataManager::MigrateFloatRetypeBounds() {
+	auto retyped = Query(StringUtil::Format(R"(
+SELECT retyped.table_id, retyped.column_id, (
+	SELECT MIN(snapshot.next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot snapshot
+	WHERE snapshot.snapshot_id >= retyped.begin_snapshot
+)
+FROM {METADATA_CATALOG}.ducklake_column retyped
+JOIN {METADATA_CATALOG}.ducklake_column original ON original.table_id = retyped.table_id
+	AND original.column_id = retyped.column_id AND original.end_snapshot = retyped.begin_snapshot
+WHERE original.column_type = %s AND retyped.column_type = %s)",
+	                                        SQLString(DuckLakeTypes::ToString(LogicalType::FLOAT)),
+	                                        SQLString(DuckLakeTypes::ToString(LogicalType::DOUBLE))));
+	retyped->ThrowIfError("Failed to list the FLOAT columns retyped to DOUBLE while migrating to v1.1-dev1: ");
+	// the files written up to the retype, which can hold FLOAT bounds
+	map<idx_t, map<TableIndex, set<FieldIndex>>> columns_by_next_file_id;
+	for (auto &row : *retyped) {
+		columns_by_next_file_id[row.GetValue<idx_t>(2)][TableIndex(row.GetValue<idx_t>(0))].insert(
+		    FieldIndex(row.GetValue<idx_t>(1)));
+	}
+	// a bound read as FLOAT or as DOUBLE stays inside the widened bounds
+	string widened_bounds;
+	for (auto &bound : {std::make_pair("min_value", "LEAST"), std::make_pair("max_value", "GREATEST")}) {
+		widened_bounds += widened_bounds.empty() ? "" : ", ";
+		widened_bounds += StringUtil::Format(
+		    "%s = CAST(%s(TRY_CAST(%s AS DOUBLE), TRY_CAST(TRY_CAST(%s AS REAL) AS DOUBLE)) AS VARCHAR)", bound.first,
+		    bound.second, bound.first, bound.first);
+	}
+	string migrate_query;
+	for (auto &entry : columns_by_next_file_id) {
+		migrate_query += RewriteColumnStatsBoundsSql(entry.second, widened_bounds, entry.first);
+	}
+	if (migrate_query.empty()) {
+		return;
+	}
+	auto result = Execute(migrate_query);
+	result->ThrowIfError(
+	    "Failed to widen the bounds of FLOAT columns retyped to DOUBLE while migrating to v1.1-dev1: ");
 }
 
 static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {

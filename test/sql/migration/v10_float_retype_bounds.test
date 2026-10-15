@@ -1,0 +1,72 @@
+# name: test/sql/migration/v10_float_retype_bounds.test
+# description: the v1.1 migration widens the FLOAT bounds that DuckDB 1.5.6 kept for columns retyped to DOUBLE
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, t, s.a, u and i held a FLOAT 0.1 before their retype to DOUBLE
+# t got 0.05 and 0.3 after the retype, u got 0.05 in the transaction of its retype, i has inlined rows
+unzip data/old_ducklake/float_retype_bounds.db.gz {TEST_DIR}/v10_float_retype_bounds.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_float_retype_bounds.db' AS lake (DATA_PATH 'data/old_ducklake/float_retype_bounds/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM lake.t WHERE v > 0.1
+----
+2
+
+query I
+SELECT count(*) FROM lake.t WHERE v > 0.1 AND v < 0.2
+----
+1
+
+query I
+SELECT count(*) FROM lake.s WHERE s.a > 0.1
+----
+1
+
+query I
+SELECT count(*) FROM lake.u WHERE v > 0.1
+----
+1
+
+query I
+SELECT count(*) FROM lake.i WHERE v > 0.1
+----
+1
+
+# the file written after the retype keeps its DOUBLE bounds
+query IIII
+SELECT tbl.table_name, stats.data_file_id, stats.min_value, stats.max_value
+FROM meta.ducklake_file_column_stats stats
+JOIN meta.ducklake_table tbl USING (table_id)
+ORDER BY ALL
+----
+s	2	0.1	0.10000000149011612
+t	0	0.1	0.10000000149011612
+t	1	0.05	0.3
+u	3	0.1	0.10000000149011612
+u	4	0.05	0.05000000074505806
+
+statement ok
+DETACH lake
+
+# a migrated catalog keeps the widened bounds
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_float_retype_bounds.db' AS lake (DATA_PATH 'data/old_ducklake/float_retype_bounds/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats JOIN meta.ducklake_table USING (table_id) WHERE table_name = 't'
+----
+0.05	0.30000001192092896
+
+query I
+SELECT count(*) FROM lake.t WHERE v > 0.1 AND v < 0.2
+----
+1
+
+statement ok
+DETACH lake
