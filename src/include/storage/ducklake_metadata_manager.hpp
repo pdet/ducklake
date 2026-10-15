@@ -592,6 +592,8 @@ public:
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
+	//! Restores the defaults that older versions dropped when they renamed a struct field
+	void MigrateRenamedFieldDefaults();
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}

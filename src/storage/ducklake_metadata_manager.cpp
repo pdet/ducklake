@@ -508,10 +508,31 @@ AND NOT EXISTS (
 	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
 }
 
+void DuckLakeMetadataManager::MigrateRenamedFieldDefaults() {
+	// the defaults of a struct field cannot change, so a later row of the field without them lost them in a rename
+	auto result = Execute(R"(
+UPDATE {METADATA_CATALOG}.ducklake_column AS renamed
+SET initial_default = original.initial_default, default_value = original.default_value,
+	default_value_type = original.default_value_type, default_value_dialect = original.default_value_dialect
+FROM {METADATA_CATALOG}.ducklake_column AS original
+WHERE renamed.parent_column IS NOT NULL AND renamed.initial_default IS NULL
+AND original.table_id = renamed.table_id AND original.column_id = renamed.column_id
+AND original.initial_default IS NOT NULL AND original.begin_snapshot < renamed.begin_snapshot
+AND NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_column later
+	WHERE later.table_id = original.table_id AND later.column_id = original.column_id
+	AND later.initial_default IS NOT NULL AND later.begin_snapshot > original.begin_snapshot
+	AND later.begin_snapshot < renamed.begin_snapshot
+);
+)");
+	result->ThrowIfError("Failed to restore the defaults of renamed struct fields while migrating to v1.1-dev1: ");
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
 	MigrateInlinedSchemaVersions();
+	MigrateRenamedFieldDefaults();
 	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
