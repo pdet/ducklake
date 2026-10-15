@@ -119,7 +119,15 @@ void DuckLakeColumnGeoStats::SetUnknownTypes() {
 unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
 
-	GeometryStats::GetExtent(stats) = extent;
+	auto &stats_extent = GeometryStats::GetExtent(stats);
+	stats_extent = extent;
+	for (auto &bound : GEO_STATS_BOUNDS) {
+		// the largest finite bounds of an unknown extent also cover infinite coordinates
+		auto &value = stats_extent.*bound.field;
+		if (std::fabs(value) == std::numeric_limits<double>::max()) {
+			value = -bound.empty_value;
+		}
+	}
 
 	auto &types = GeometryStats::GetTypes(stats);
 	for (auto &type : geo_types) {
