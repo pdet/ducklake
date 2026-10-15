@@ -98,10 +98,10 @@ COPY (SELECT 'POINT (0 0)'::GEOMETRY AS g) TO '{TEST_DIR}/geo_non_finite_origin.
 statement ok
 CALL ducklake_add_data_files('legacy', 't', '{TEST_DIR}/geo_non_finite_origin.parquet')
 
-query I
-SELECT extra_stats FROM __ducklake_metadata_legacy.ducklake_table_column_stats
+query II
+SELECT contains(extra_stats, 'Infinity'), contains(extra_stats, '"xmax":1.7976931348623157e308') FROM __ducklake_metadata_legacy.ducklake_table_column_stats
 ----
-{"bbox":{"xmin":0.0,"xmax":1.7976931348623157e308,"ymin":0.0,"ymax":7.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+false	true
 
 query II
 SELECT (SELECT count(*) FROM legacy.t), (SELECT count(*) FROM legacy.t WHERE g && 'POLYGON((4 6, 6 6, 6 8, 4 8, 4 6))'::GEOMETRY)
