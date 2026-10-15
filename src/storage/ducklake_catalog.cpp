@@ -552,25 +552,14 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(type), std::move(child_fields));
 }
 
-//! Binds a macro dialect type without catalog lookups, since those would reenter the catalog that is loading
-static LogicalType BindMacroDialectType(const string &type) {
-	return TypeVisitor::VisitReplace(UnboundType::TryParseAndDefaultBind(type), [](const LogicalType &child) {
-		if (child.id() != LogicalTypeId::UNBOUND) {
-			return child;
-		}
-		// the types that are not built in, such as JSON, are DuckLake types
-		auto &type_expr = UnboundType::GetTypeExpression(child)->Cast<TypeExpression>();
-		return DuckLakeTypes::FromString(type_expr.GetTypeName().GetIdentifierName());
-	});
-}
-
 static LogicalType ParseMacroParameterType(const string &type) {
 	LogicalType result;
 	try {
 		result = DuckLakeTypes::FromString(type);
 	} catch (InvalidInputException &) {
 		// nested types are stored as types of the macro dialect
-		return BindMacroDialectType(type);
+		// catalog lookups would reenter the catalog that is loading
+		return DuckLakeTypes::FromDuckDBString(type);
 	}
 	// older versions stored nested types without their child types, so these parameters are loaded untyped
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
