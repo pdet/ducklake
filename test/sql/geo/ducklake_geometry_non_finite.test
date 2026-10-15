@@ -1,0 +1,109 @@
+# name: test/sql/geo/ducklake_geometry_non_finite.test
+# description: Geometry statistics of non finite coordinates are unknown and written as standard JSON
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_geometry_non_finite.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_geometry_non_finite', METADATA_CATALOG 'meta')
+
+# the writer leaves out the bounds of a file with an infinite coordinate
+statement ok
+CREATE TABLE dl.t (g GEOMETRY)
+
+statement ok
+INSERT INTO dl.t VALUES ('POINT (Infinity 1)'::GEOMETRY), ('POINT (5 7)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.t VALUES ('POINT (0 0)'::GEOMETRY)
+
+query I
+SELECT count(*) FROM dl.t WHERE g && 'POLYGON((4 6, 6 6, 6 8, 4 8, 4 6))'::GEOMETRY
+----
+1
+
+query I
+SELECT extra_stats FROM meta.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') ORDER BY data_file_id
+----
+{"bbox":{"xmin":-1.7976931348623157e308,"xmax":1.7976931348623157e308,"ymin":-1.7976931348623157e308,"ymax":1.7976931348623157e308,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+{"bbox":{"xmin":0.0,"xmax":0.0,"ymin":0.0,"ymax":0.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+
+# a NaN coordinate
+statement ok
+CREATE TABLE dl.n (g GEOMETRY)
+
+statement ok
+INSERT INTO dl.n VALUES ('POINT (NaN 2)'::GEOMETRY), ('POINT (10 20)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.n VALUES ('POINT (0 0)'::GEOMETRY)
+
+query II
+SELECT (SELECT count(*) FROM dl.n WHERE g && 'POLYGON((9 19, 11 19, 11 21, 9 21, 9 19))'::GEOMETRY), (SELECT count(*) FROM dl.n WHERE vertex_extract(g, 'x') > 1)
+----
+1	1
+
+# an infinite Z coordinate leaves the other axes known
+statement ok
+CREATE TABLE dl.z (g GEOMETRY)
+
+statement ok
+INSERT INTO dl.z VALUES ('POINT Z (1 2 Infinity)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.z VALUES ('POINT Z (1 2 0)'::GEOMETRY)
+
+query II
+SELECT (SELECT count(*) FROM dl.z WHERE vertex_extract(g, 'z') > 1), (SELECT count(*) FROM dl.z WHERE g && 'POINT (1 2)'::GEOMETRY)
+----
+1	2
+
+query I
+SELECT extra_stats FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'z')
+----
+{"bbox":{"xmin":1.0,"xmax":1.0,"ymin":2.0,"ymax":2.0,"zmin":-1.7976931348623157e308,"zmax":1.7976931348623157e308,"mmin":null,"mmax":null},"types":["point_z"]}
+
+query II
+EXPLAIN SELECT count(*) FROM dl.z WHERE g && 'POINT (5 5)'::GEOMETRY
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# the stored statistics give the same results
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_geometry_non_finite', METADATA_CATALOG 'meta')
+
+query III
+SELECT (SELECT count(*) FROM dl.t WHERE g && 'POLYGON((4 6, 6 6, 6 8, 4 8, 4 6))'::GEOMETRY), (SELECT count(*) FROM dl.n WHERE g && 'POLYGON((9 19, 11 19, 11 21, 9 21, 9 19))'::GEOMETRY), (SELECT count(*) FROM dl.z WHERE vertex_extract(g, 'z') > 1)
+----
+1	1	1
+
+# written by DuckLake 0.3, whose statistics store an infinite bound as inf
+unzip data/old_ducklake/geo_non_finite.db.gz {TEST_DIR}/geo_non_finite_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/geo_non_finite_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/geo_non_finite/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+COPY (SELECT 'POINT (0 0)'::GEOMETRY AS g) TO '{TEST_DIR}/geo_non_finite_origin.parquet' (GEOPARQUET_VERSION 'V2')
+
+statement ok
+CALL ducklake_add_data_files('legacy', 't', '{TEST_DIR}/geo_non_finite_origin.parquet')
+
+query I
+SELECT extra_stats FROM __ducklake_metadata_legacy.ducklake_table_column_stats
+----
+{"bbox":{"xmin":0.0,"xmax":1.7976931348623157e308,"ymin":0.0,"ymax":7.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
+
+query II
+SELECT (SELECT count(*) FROM legacy.t), (SELECT count(*) FROM legacy.t WHERE g && 'POLYGON((4 6, 6 6, 6 8, 4 8, 4 6))'::GEOMETRY)
+----
+3	1
