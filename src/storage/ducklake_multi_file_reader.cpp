@@ -97,7 +97,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	ExpressionType comparison_type;
 	Value constant;
 	{
-		lock_guard<mutex> l(filter_data->lock);
+		annotated_shared_lock<annotated_shared_mutex> l(filter_data->lock);
 		if (!filter_data->initialized) {
 			return false;
 		}

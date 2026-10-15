@@ -2199,7 +2199,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			if (dynamic_filter_data) {
 				ExpressionType comparison_type;
 				{
-					lock_guard<mutex> l(dynamic_filter_data->lock);
+					annotated_shared_lock<annotated_shared_mutex> l(dynamic_filter_data->lock);
 					comparison_type = dynamic_filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
