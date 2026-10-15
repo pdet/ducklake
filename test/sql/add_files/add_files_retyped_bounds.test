@@ -68,6 +68,26 @@ SELECT min(t) FROM ducklake.tstz
 ----
 2020-01-01 12:34:56.123457+00
 
+# the max bound rounds up like the value it bounds
+statement ok
+COPY (SELECT TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456789+00' AS t) TO '{DATA_PATH}/retyped_tstz_ns_one.parquet'
+
+statement ok
+CREATE TABLE ducklake.tstz_one (t TIMESTAMPTZ)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tstz_one', '{DATA_PATH}/retyped_tstz_ns_one.parquet')
+
+query I
+SELECT count(*) FROM ducklake.tstz_one WHERE t >= TIMESTAMPTZ '2020-01-01 12:34:56.123457+00'
+----
+1
+
+query II
+SELECT min(t), max(t) FROM ducklake.tstz_one
+----
+2020-01-01 12:34:56.123457+00	2020-01-01 12:34:56.123457+00
+
 # a FLOAT widens to the DOUBLE nearest to it
 statement ok
 CREATE TABLE ducklake.dbl (f DOUBLE)
@@ -128,6 +148,7 @@ SELECT table_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake
 ----
 1	2020-01-01 12:34:56.123457	2021-01-01 00:00:00
 2	2020-01-01 12:34:56.123457+00	2021-01-01 00:00:00+00
-3	0.10000000149011612	0.10000000149011612
-4	2020-01-01 12:34:56.124	2021-01-01 00:00:00
-5	2020-01-01 00:00:00	NULL
+3	2020-01-01 12:34:56.123457+00	2020-01-01 12:34:56.123457+00
+4	0.10000000149011612	0.10000000149011612
+5	2020-01-01 12:34:56.124	2021-01-01 00:00:00
+6	2020-01-01 00:00:00	NULL
