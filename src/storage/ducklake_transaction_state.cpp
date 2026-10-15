@@ -429,8 +429,40 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
+static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex field_id,
+                              optional_ptr<const DuckLakeColumnInfo> replacement) {
+	for (idx_t i = 0; i < fields.size(); i++) {
+		if (fields[i].id == field_id) {
+			if (replacement) {
+				fields[i] = *replacement;
+			} else {
+				fields.erase(fields.begin() + i);
+			}
+			return true;
+		}
+		if (UpdateNestedField(fields[i].children, field_id, replacement)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Replaces or removes a field nested in a column that the transaction adds, since it is written with that column
+static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx_t, idx_t> &txn_added_fields,
+                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement) {
+	for (auto &entry : txn_added_fields) {
+		if (UpdateNestedField(result.new_columns[entry.second].column_info.children, field_id, replacement)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
                        unordered_map<idx_t, idx_t> &txn_added_fields) {
+	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr)) {
+		return;
+	}
 	auto it = txn_added_fields.find(field_id.index);
 	if (it != txn_added_fields.end()) {
 		auto erased_idx = it->second;
@@ -462,10 +494,21 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
+	unordered_set<idx_t> replaced_fields;
+	for (auto &new_col_info : change_info.new_fields) {
+		if (UpdateNestedAddedField(result, txn_added_fields, new_col_info.column_info.id, new_col_info.column_info)) {
+			replaced_fields.insert(new_col_info.column_info.id.index);
+		}
+	}
 	for (auto &dropped_field_id : change_info.dropped_fields) {
-		CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+		if (!replaced_fields.count(dropped_field_id.index)) {
+			CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+		}
 	}
 	for (auto &new_col_info : change_info.new_fields) {
+		if (replaced_fields.count(new_col_info.column_info.id.index)) {
+			continue;
+		}
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
@@ -1684,16 +1727,18 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			}
 
 			auto committed_table_id = commit_state.GetTableId(table);
+			auto column_info = table.GetColumnInfo(local_change.field_index);
+			if (!UpdateNestedAddedField(result, txn_added_fields, local_change.field_index, column_info)) {
+				// Cancel the previous txn-local add for this field, or drop the committed column.
+				CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
 
-			// Cancel the previous txn-local add for this field, or drop the committed column.
-			CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
-
-			// Insert the new column with the updated info and register it.
-			DuckLakeNewColumn new_col;
-			new_col.table_id = committed_table_id;
-			new_col.column_info = table.GetColumnInfo(local_change.field_index);
-			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
-			result.new_columns.push_back(std::move(new_col));
+				// Insert the new column with the updated info and register it.
+				DuckLakeNewColumn new_col;
+				new_col.table_id = committed_table_id;
+				new_col.column_info = std::move(column_info);
+				txn_added_fields[local_change.field_index.index] = result.new_columns.size();
+				result.new_columns.push_back(std::move(new_col));
+			}
 
 			transaction_changes.altered_tables.insert(table_id);
 			transaction_changes.altered_tables_with_schema_version_changes.insert(table_id);
