@@ -75,12 +75,12 @@ public:
 
 	//! Stands in for the name of the catalog in the stored SQL of its views and macros
 	static constexpr const char *CATALOG_PLACEHOLDER = "{DUCKLAKE_CATALOG}";
-	//! Calls the callbacks for every expression and table reference, including those of subqueries and pivots
+	//! Calls the callbacks for every expression and table reference, also those the parsed expression iterator skips
 	static void VisitQuery(QueryNode &node, const std::function<void(ParsedExpression &)> &expr_callback,
 	                       const std::function<void(TableRef &)> &ref_callback);
 	static void VisitQuery(ParsedExpression &expr, const std::function<void(ParsedExpression &)> &expr_callback,
 	                       const std::function<void(TableRef &)> &ref_callback);
-	//! Replaces the catalog `from` by `to` in the table and function names of a query
+	//! Replaces the catalog `from` by `to` in the table, function and column names of a query
 	static void ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to);
 	static void ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to);
 

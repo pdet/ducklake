@@ -31,11 +31,14 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/window_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/query_node.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
+#include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/parser/tableref/pivotref.hpp"
 
 #include <cmath>
@@ -455,16 +458,25 @@ void DuckLakeUtil::VisitQuery(QueryNode &node, const std::function<void(ParsedEx
 	};
 	auto visit_ref = [&](TableRef &ref) {
 		ref_callback(ref);
-		if (ref.type != TableReferenceType::PIVOT) {
-			return;
-		}
-		for (auto &pivot : ref.Cast<PivotRef>().pivots) {
-			for (auto &expr : pivot.pivot_expressions) {
-				VisitQuery(*expr, expr_callback, ref_callback);
+		if (ref.type == TableReferenceType::BASE_TABLE) {
+			auto &at_clause = ref.Cast<BaseTableRef>().at_clause;
+			if (at_clause) {
+				VisitQuery(*at_clause->ExpressionMutable(), expr_callback, ref_callback);
 			}
-			for (auto &entry : pivot.entries) {
-				if (entry.expr) {
-					VisitQuery(*entry.expr, expr_callback, ref_callback);
+		} else if (ref.type == TableReferenceType::JOIN) {
+			auto &ranking = ref.Cast<JoinRef>().ranking_expression;
+			if (ranking) {
+				VisitQuery(*ranking, expr_callback, ref_callback);
+			}
+		} else if (ref.type == TableReferenceType::PIVOT) {
+			for (auto &pivot : ref.Cast<PivotRef>().pivots) {
+				for (auto &expr : pivot.pivot_expressions) {
+					VisitQuery(*expr, expr_callback, ref_callback);
+				}
+				for (auto &entry : pivot.entries) {
+					if (entry.expr) {
+						VisitQuery(*entry.expr, expr_callback, ref_callback);
+					}
 				}
 			}
 		}
@@ -476,17 +488,35 @@ static QualifiedName ReplaceCatalogInName(const QualifiedName &name, const Ident
 	if (name.Catalog() == from) {
 		return name.WithCatalog(to);
 	}
-	// a two-part name can hold the catalog in the place of the schema
+	// a two-part name can hold the catalog in the place of the schema, so the schema is left unset
 	if (name.Path().size() == 2 && name.Schema() == from) {
-		return QualifiedName::FromPath({to, name.Name()});
+		return QualifiedName(to, Identifier(), name.Name());
 	}
 	return name;
 }
 
 static void ReplaceCatalogInExpression(ParsedExpression &expr, const Identifier &from, const Identifier &to) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::FUNCTION: {
 		auto &function = expr.Cast<FunctionExpression>();
 		function.SetQualifiedName(ReplaceCatalogInName(function.GetQualifiedName(), from, to));
+		break;
+	}
+	case ExpressionClass::WINDOW: {
+		auto &window = expr.Cast<WindowExpression>();
+		window.SetQualifiedName(ReplaceCatalogInName(window.GetQualifiedName(), from, to));
+		break;
+	}
+	case ExpressionClass::COLUMN_REF: {
+		// a column reference of two names is a table and a column, more names can start with the catalog
+		auto &names = expr.Cast<ColumnRefExpression>().ColumnNamesMutable();
+		if (names.size() >= 3 && names[0] == from) {
+			names[0] = to;
+		}
+		break;
+	}
+	default:
+		break;
 	}
 }
 

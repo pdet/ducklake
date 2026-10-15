@@ -46,6 +46,27 @@ CREATE MACRO dl.calls_m(i) AS dl.main.scalar_m() + i
 statement ok
 CREATE MACRO dl.calls_table_m() AS TABLE SELECT x + 1 AS x FROM dl.main.table_m()
 
+statement ok
+CREATE MACRO dl.first_version() AS 1
+
+statement ok
+CREATE MACRO dl.total(v) AS sum(v)
+
+statement ok
+CREATE MACRO dl.dist(a, b) AS abs(a - b)
+
+statement ok
+CREATE MACRO dl.column_m() AS (SELECT max(dl.main.t.x) + max(dl.t.x) FROM dl.main.t)
+
+statement ok
+CREATE MACRO dl.window_m() AS TABLE SELECT dl.main.total(x) OVER () AS y FROM dl.main.t
+
+statement ok
+CREATE MACRO dl.at_m() AS (SELECT max(x) FROM dl.main.t AT (VERSION => dl.main.first_version()))
+
+statement ok
+CREATE MACRO dl.nearest_m() AS TABLE SELECT q.x FROM dl.main.t q INNER JOIN dl.main.t r EXACT NEAREST 1 BY DISTANCE dl.main.dist(q.x, r.x)
+
 # a table alias or a string that reads like the catalog is not a reference to it, and other catalogs keep their name
 statement ok
 CREATE MACRO dl.untouched_m() AS (SELECT 'dl.main.t:' || dl.x || ':' || (SELECT max(x) FROM memory.main.t) FROM dl.main.t AS dl)
@@ -59,30 +80,44 @@ SELECT sql FROM macro_catalog_alias_meta.ducklake_macro_impl ORDER BY macro_id
 SELECT x FROM "{DUCKLAKE_CATALOG}".main.t
 ("{DUCKLAKE_CATALOG}".main.scalar_m() + i)
 SELECT (x + 1) AS x FROM "{DUCKLAKE_CATALOG}".main.table_m()
+1
+sum(v)
+abs((a - b))
+(SELECT (max("{DUCKLAKE_CATALOG}".main.t.x) + max("{DUCKLAKE_CATALOG}".t.x)) FROM "{DUCKLAKE_CATALOG}".main.t)
+SELECT "{DUCKLAKE_CATALOG}".main.total(x) OVER () AS y FROM "{DUCKLAKE_CATALOG}".main.t
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".main.t AT (VERSION => "{DUCKLAKE_CATALOG}".main.first_version()))
+SELECT q.x FROM ("{DUCKLAKE_CATALOG}".main.t AS q INNER JOIN "{DUCKLAKE_CATALOG}".main.t AS r EXACT NEAREST 1 BY DISTANCE "{DUCKLAKE_CATALOG}".main.dist(q.x, r.x))
 (SELECT ((('dl.main.t:' || dl.x) || ':') || (SELECT max(x) FROM memory.main.t)) FROM "{DUCKLAKE_CATALOG}".main.t AS dl)
 
 statement ok
 DETACH dl
 
+# a schema of the default database named like the new alias does not make the references ambiguous
+statement ok
+CREATE SCHEMA memory.other
+
+statement ok
+CREATE TABLE memory.other.t AS SELECT -5 AS x
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/macro_catalog_alias', DUCKLAKE_VERSION '1.1-dev1')
 
-query IIII
-SELECT other.scalar_m(), other.two_part_m(), other.nested_m(), other.calls_m(1)
+query IIIIII
+SELECT other.main.scalar_m(), other.main.two_part_m(), other.main.nested_m(), other.main.calls_m(1), other.main.column_m(), other.main.at_m()
 ----
-42	42	7	43
+42	42	7	43	84	42
+
+query III
+SELECT (SELECT x FROM other.main.table_m()), (SELECT x FROM other.main.calls_table_m()), (SELECT y FROM other.main.window_m())
+----
+42	43	42
 
 query I
-SELECT x FROM other.table_m()
+SELECT x FROM other.main.nearest_m()
 ----
 42
 
-query I
-SELECT x FROM other.calls_table_m()
-----
-43
-
 query T
-SELECT other.untouched_m()
+SELECT other.main.untouched_m()
 ----
 dl.main.t:42:-1
