@@ -41,6 +41,10 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
 	const auto table_name = StringValue::Get(input.inputs[1]);
 	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
+	if (catalog.IsEncrypted()) {
+		// every data file of an encrypted catalog is read with its own key, which an added file does not have
+		throw NotImplementedException("ducklake_add_data_files is not supported for an encrypted DuckLake catalog");
+	}
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
 	auto &file_list = input.inputs[2];
