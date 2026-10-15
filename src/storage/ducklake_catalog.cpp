@@ -566,8 +566,15 @@ static LogicalType ParseMacroParameterType(const string &type) {
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
+//! Gives the references of a stored macro to its own catalog the name the catalog is attached under
+template <class T>
+static unique_ptr<T> ResolveCatalogPlaceholder(unique_ptr<T> node, const Identifier &catalog_name) {
+	DuckLakeUtil::ReplaceCatalogName(*node, DuckLakeUtil::CATALOG_PLACEHOLDER, catalog_name);
+	return node;
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
-                                                        string schema_name) {
+                                                        string schema_name, const Identifier &catalog_name) {
 	CatalogType type;
 	if (macro.implementations.front().type == "scalar") {
 		type = CatalogType::MACRO_ENTRY;
@@ -581,12 +588,15 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	macro_info->SetSchema(Identifier(schema_name));
 	macro_info->temporary = false;
 	macro_info->internal = false;
+	auto parser = Parser::GetBuiltinParser();
 	for (auto &impl : macro.implementations) {
 		unique_ptr<MacroFunction> macro_function;
 		if (impl.type == "scalar") {
-			macro_function = make_uniq<ScalarMacroFunction>(Parser::GetBuiltinParser().ParseSingleExpression(impl.sql));
+			macro_function = make_uniq<ScalarMacroFunction>(
+			    ResolveCatalogPlaceholder(parser.ParseSingleExpression(impl.sql), catalog_name));
 		} else if (impl.type == "table") {
-			macro_function = make_uniq<TableMacroFunction>(Parser::GetBuiltinParser().ParseSelectNode(impl.sql));
+			macro_function = make_uniq<TableMacroFunction>(
+			    ResolveCatalogPlaceholder(parser.ParseSelectNode(impl.sql), catalog_name));
 		} else {
 			throw InternalException("Unrecognized macro type %s in CreateMacroInfoFromDucklake", impl.type);
 		}
@@ -596,7 +606,7 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 			if (param.default_value_type == "expression") {
 				macro_function->default_parameters.insert(
 				    Identifier(param.parameter_name),
-				    Parser::GetBuiltinParser().ParseSingleExpression(param.default_value.GetValue<string>()));
+				    parser.ParseSingleExpression(param.default_value.GetValue<string>()));
 				continue;
 			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
@@ -815,8 +825,8 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			continue;
 		}
 		auto &schema_entry = *schema;
-		auto create_macro =
-		    CreateMacroInfoFromDucklake(*transaction.context.lock(), macro, schema_entry.name.GetIdentifierName());
+		auto create_macro = CreateMacroInfoFromDucklake(*transaction.context.lock(), macro,
+		                                                schema_entry.name.GetIdentifierName(), GetName());
 		unique_ptr<CatalogEntry> macro_catalog_entry;
 		if (create_macro->type == CatalogType::MACRO_ENTRY) {
 			macro_catalog_entry =

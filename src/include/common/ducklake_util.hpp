@@ -29,6 +29,8 @@ class DuckLakeTransaction;
 class FileSystem;
 class Expression;
 class LogicalType;
+class QueryNode;
+class TableRef;
 
 struct ParsedCatalogEntry {
 	vector<string> schema_path;
@@ -70,6 +72,17 @@ public:
 	//! Replace occurrences of `from` with `to`, skipping content inside
 	//! single-quoted string literals and double-quoted identifiers.
 	static string ReplaceSkippingQuotes(const string &sql, const string &from, const string &to);
+
+	//! Stands in for the name of the catalog in the stored SQL of its views and macros
+	static constexpr const char *CATALOG_PLACEHOLDER = "{DUCKLAKE_CATALOG}";
+	//! Calls the callbacks for every expression and table reference, including those of subqueries and pivots
+	static void VisitQuery(QueryNode &node, const std::function<void(ParsedExpression &)> &expr_callback,
+	                       const std::function<void(TableRef &)> &ref_callback);
+	static void VisitQuery(ParsedExpression &expr, const std::function<void(ParsedExpression &)> &expr_callback,
+	                       const std::function<void(TableRef &)> &ref_callback);
+	//! Replaces the catalog `from` by `to` in the table and function names of a query
+	static void ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to);
+	static void ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to);
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns);

@@ -1,0 +1,88 @@
+# name: test/sql/macros/macro_catalog_alias.test
+# description: A macro that names its own catalog keeps working when the lake is attached under another name
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_catalog_alias.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/macro_catalog_alias', METADATA_CATALOG 'macro_catalog_alias_meta', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.main.t AS SELECT 42 AS x
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE SCHEMA dl.s.nested
+
+statement ok
+CREATE TABLE dl.s.nested.t AS SELECT 7 AS x
+
+statement ok
+CREATE TABLE memory.main.t AS SELECT -1 AS x
+
+statement ok
+CREATE MACRO dl.scalar_m() AS (SELECT max(x) FROM dl.main.t)
+
+statement ok
+CREATE MACRO dl.two_part_m() AS (SELECT max(x) FROM DL.t)
+
+statement ok
+CREATE MACRO dl.nested_m() AS (SELECT max(x) FROM dl.s.nested.t)
+
+statement ok
+CREATE MACRO dl.table_m() AS TABLE SELECT x FROM dl.main.t
+
+statement ok
+CREATE MACRO dl.calls_m(i) AS dl.main.scalar_m() + i
+
+statement ok
+CREATE MACRO dl.calls_table_m() AS TABLE SELECT x + 1 AS x FROM dl.main.table_m()
+
+# a table alias or a string that reads like the catalog is not a reference to it, and other catalogs keep their name
+statement ok
+CREATE MACRO dl.untouched_m() AS (SELECT 'dl.main.t:' || dl.x || ':' || (SELECT max(x) FROM memory.main.t) FROM dl.main.t AS dl)
+
+query T
+SELECT sql FROM macro_catalog_alias_meta.ducklake_macro_impl ORDER BY macro_id
+----
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".main.t)
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".t)
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".s.nested.t)
+SELECT x FROM "{DUCKLAKE_CATALOG}".main.t
+("{DUCKLAKE_CATALOG}".main.scalar_m() + i)
+SELECT (x + 1) AS x FROM "{DUCKLAKE_CATALOG}".main.table_m()
+(SELECT ((('dl.main.t:' || dl.x) || ':') || (SELECT max(x) FROM memory.main.t)) FROM "{DUCKLAKE_CATALOG}".main.t AS dl)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/macro_catalog_alias', DUCKLAKE_VERSION '1.1-dev1')
+
+query IIII
+SELECT other.scalar_m(), other.two_part_m(), other.nested_m(), other.calls_m(1)
+----
+42	42	7	43
+
+query I
+SELECT x FROM other.table_m()
+----
+42
+
+query I
+SELECT x FROM other.calls_table_m()
+----
+43
+
+query T
+SELECT other.untouched_m()
+----
+dl.main.t:42:-1
