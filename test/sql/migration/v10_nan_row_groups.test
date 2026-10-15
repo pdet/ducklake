@@ -37,24 +37,43 @@ SELECT count(contains_nan) FROM meta.ducklake_file_variant_stats
 ----
 0
 
-# the NaN flags of files written after the migration are kept when it runs again
+# a rewrite of a file written after the migration recomputes the table statistics from the legacy file statistics
 unzip data/old_ducklake/nan_row_groups.db.gz {TEST_DIR}/v10_nan_row_groups_rerun.db
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/v10_nan_row_groups_rerun.db' AS rerun (DATA_PATH '{TEST_DIR}/v10_nan_row_groups_rerun/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'rerun_meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
-INSERT INTO rerun.t VALUES (3000, 1, 1, {'x': 1}, 1::DOUBLE::VARIANT)
+INSERT INTO rerun.t VALUES (3000, 1, 1, {'x': 1}, 1::DOUBLE::VARIANT), (3001, 2, 2, {'x': 2}, 2::DOUBLE::VARIANT)
 
+statement ok
+DELETE FROM rerun.t WHERE i = 3000
+
+statement ok
+CALL ducklake_rewrite_data_files('rerun', 't', delete_threshold => 0)
+
+query III
+SELECT (SELECT record_count FROM rerun_meta.ducklake_table_stats), count(contains_nan), bool_or(contains(extra_stats, 'contains_nan')) FROM rerun_meta.ducklake_table_column_stats
+----
+3001	0	false
+
+# the NaN flags of files written after the migration are kept when it runs again
 statement ok
 DETACH rerun
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/v10_nan_row_groups_rerun.db' AS rerun (DATA_PATH '{TEST_DIR}/v10_nan_row_groups_rerun/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'rerun_meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
 
-query II
-SELECT data_file_id, contains_nan FROM rerun_meta.ducklake_file_column_stats WHERE contains_nan IS NOT NULL ORDER BY ALL
+query III
+SELECT data_file_id, count(*) FILTER (WHERE contains_nan = false), count(*) FILTER (WHERE contains_nan IS NULL) FROM rerun_meta.ducklake_file_column_stats GROUP BY ALL ORDER BY ALL
 ----
-1	false
-1	false
-1	false
+0	0	5
+1	3	2
+3	3	2
+
+query III
+SELECT data_file_id, count(*) FILTER (WHERE contains_nan = false), count(*) FILTER (WHERE contains_nan IS NULL) FROM rerun_meta.ducklake_file_variant_stats GROUP BY ALL ORDER BY ALL
+----
+0	0	1
+1	1	0
+3	1	0
