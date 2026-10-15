@@ -509,7 +509,9 @@ FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
 WHERE NOT EXISTS (
 	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
-))");
+) AND (
+	SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_schema_versions sv WHERE sv.table_id = idt.table_id
+) > 1)");
 	missing->ThrowIfError(
 	    "Failed to list the inlined-data tables without a schema version while migrating to v1.1-dev1: ");
 	DuckLakeInlinedColNames col_names(true);
