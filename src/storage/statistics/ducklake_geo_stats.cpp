@@ -39,7 +39,6 @@ static constexpr GeoStatsBound GEO_STATS_BOUNDS[] = {{"xmin", &GeometryExtent::x
                                                      {"mmin", &GeometryExtent::m_min, GeometryExtent::EMPTY_MIN},
                                                      {"mmax", &GeometryExtent::m_max, GeometryExtent::EMPTY_MAX}};
 
-//! The unit of the last decimal of a bound rounded to six decimals
 static constexpr double ROUNDED_BOUND_UNIT = 1e-6;
 
 bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
