@@ -20,6 +20,12 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'nostats', 'data/parquet/geometry_point_no_stats.parquet')
 
 statement ok
+CREATE TABLE ducklake.empty_types (g GEOMETRY)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'empty_types', 'data/parquet/geometry_point_empty_types.parquet')
+
+statement ok
 CREATE TABLE ducklake.infinite (g GEOMETRY)
 
 statement ok
@@ -38,6 +44,11 @@ loop i 0 2
 
 query II
 SELECT vertex_extract(g, 'x'), (SELECT count(*) FROM ducklake.nostats WHERE vertex_extract(g, 'x') = 1) FROM ducklake.nostats
+----
+1.0	1
+
+query II
+SELECT vertex_extract(g, 'x'), (SELECT count(*) FROM ducklake.empty_types WHERE vertex_extract(g, 'x') = 1) FROM ducklake.empty_types
 ----
 1.0	1
 
