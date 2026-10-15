@@ -33,6 +33,7 @@
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/lambda_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
@@ -490,7 +491,7 @@ struct CatalogNameReplacer {
 
 	const Identifier &from;
 	const Identifier &to;
-	//! Whether a table or parameter is known by either catalog name, which then qualifies its methods and fields
+	//! Whether a table, parameter or lambda parameter is known by either catalog name, which then qualifies methods
 	bool binds_catalog_name = false;
 	//! The catalog, schema path and name of every table the query reads from the catalog
 	vector<vector<Identifier>> tables;
@@ -543,7 +544,21 @@ struct CatalogNameReplacer {
 			auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
 			if (name.Catalog() == from) {
 				tables.push_back(name.Path());
+			} else if (name.Path().size() == 2 && name.Schema() == from) {
+				// a two-part name reads from the default schema
+				tables.push_back({from, Identifier::DefaultSchema(), name.Name()});
 			}
+		}
+	}
+
+	void AddBinding(ParsedExpression &expr) {
+		if (expr.GetExpressionClass() != ExpressionClass::LAMBDA) {
+			return;
+		}
+		string error;
+		for (auto &parameter : expr.Cast<LambdaExpression>().ExtractColumnRefExpressions(error)) {
+			auto &name = parameter.get().Cast<ColumnRefExpression>().GetColumnName();
+			binds_catalog_name = binds_catalog_name || IsCatalogName(name);
 		}
 	}
 
@@ -623,7 +638,7 @@ struct CatalogNameReplacer {
 	template <class T>
 	void Apply(T &query) {
 		Visit(
-		    query, [](ParsedExpression &) {}, [&](TableRef &ref) { AddBinding(ref); });
+		    query, [&](ParsedExpression &expr) { AddBinding(expr); }, [&](TableRef &ref) { AddBinding(ref); });
 		Visit(
 		    query, [&](ParsedExpression &expr) { ReplaceInExpression(expr); },
 		    [&](TableRef &ref) { ReplaceInRef(ref); });

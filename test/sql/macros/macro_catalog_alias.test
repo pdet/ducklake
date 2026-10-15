@@ -70,6 +70,9 @@ CREATE MACRO dl.star_m() AS TABLE SELECT * EXCLUDE (dl.main.t.x), * RENAME (dl.m
 statement ok
 CREATE MACRO dl.column_m() AS (SELECT max(dl.main.t.x) FROM dl.main.t)
 
+statement ok
+CREATE MACRO dl.two_part_column_m() AS (SELECT max(dl.main.t.x) FROM dl.t)
+
 # with a table known by a name of the catalog, a qualified call can be a method of that table
 statement ok
 CREATE MACRO dl.method_m() AS (SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) dl)
@@ -82,6 +85,9 @@ CREATE MACRO dl.new_alias_m() AS (SELECT dl.main.first_version() + other.x FROM 
 
 statement ok
 CREATE MACRO dl.parameter_m(dl, other) AS dl.x.lower()
+
+statement ok
+CREATE MACRO dl.lambda_m() AS list_transform([{'x': 'ABC'}], lambda dl: dl.x.lower())
 
 statement ok
 CREATE MACRO dl.ranking_m() AS TABLE SELECT r.x FROM (VALUES (0)) q(x) INNER JOIN (VALUES (1), (2)) r(x) EXACT NEAREST 1 BY DISTANCE (SELECT dl.s.abs() FROM (SELECT r.x AS s) dl, (SELECT 3 - r.x AS s) other)
@@ -107,10 +113,12 @@ SELECT "{DUCKLAKE_CATALOG}".main.total(x) OVER () AS y FROM "{DUCKLAKE_CATALOG}"
 SELECT q.x FROM ("{DUCKLAKE_CATALOG}".main.t AS q INNER JOIN "{DUCKLAKE_CATALOG}".main.t AS r EXACT NEAREST 1 BY DISTANCE "{DUCKLAKE_CATALOG}".main.dist(q.x, r.x))
 SELECT * EXCLUDE ("{DUCKLAKE_CATALOG}".main.t.x), * RENAME ("{DUCKLAKE_CATALOG}".main.t.x AS y) FROM "{DUCKLAKE_CATALOG}".main.t
 (SELECT max("{DUCKLAKE_CATALOG}".main.t.x) FROM "{DUCKLAKE_CATALOG}".main.t)
+(SELECT max("{DUCKLAKE_CATALOG}".main.t.x) FROM "{DUCKLAKE_CATALOG}".t)
 (SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) AS dl)
 (SELECT dl.main.first_version() FROM (SELECT * FROM (VALUES (0)) AS valueslist) AS "{DUCKLAKE_CATALOG}"(x))
 (SELECT ("{DUCKLAKE_CATALOG}".main.first_version() + other.x) FROM (SELECT 1 AS x) AS other)
 dl.x.lower()
+list_transform(list_value(struct_pack(x := 'ABC')), (lambda dl: dl.x.lower()))
 SELECT r.x FROM ((SELECT * FROM (VALUES (0)) AS valueslist) AS q(x) INNER JOIN (SELECT * FROM (VALUES (1), (2)) AS valueslist) AS r(x) EXACT NEAREST 1 BY DISTANCE (SELECT dl.s.abs() FROM (SELECT r.x AS s) AS dl , (SELECT (3 - r.x) AS s) AS other))
 (SELECT ((('dl.main.t:' || dl.s.x) || ':') || (SELECT max(x) FROM memory.main.t)) FROM (SELECT struct_pack(x := 42) AS s) AS dl)
 
@@ -132,10 +140,10 @@ CREATE TABLE memory.other.t AS SELECT -5 AS x
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/macro_catalog_alias', DUCKLAKE_VERSION '1.1-dev1')
 
-query IIIIII
-SELECT other.main.scalar_m(), other.main.two_part_m(), other.main.nested_m(), other.main.calls_m(1), other.main.at_m(), other.main.column_m()
+query IIIIIII
+SELECT other.main.scalar_m(), other.main.two_part_m(), other.main.nested_m(), other.main.calls_m(1), other.main.at_m(), other.main.column_m(), other.main.two_part_column_m()
 ----
-42	42	7	43	42	42
+42	42	7	43	42	42	42
 
 query IIII
 SELECT (SELECT x FROM other.main.table_m()), (SELECT x FROM other.main.calls_table_m()), (SELECT y FROM other.main.window_m()), (SELECT y FROM other.main.star_m())
@@ -147,10 +155,10 @@ SELECT x FROM other.main.nearest_m()
 ----
 42
 
-query TTTI
-SELECT other.main.method_m(), other.main.untouched_m(), other.main.parameter_m({'x': 'ABC'}, {'x': 'DEF'}), (SELECT x FROM other.main.ranking_m())
+query TTTIT
+SELECT other.main.method_m(), other.main.untouched_m(), other.main.parameter_m({'x': 'ABC'}, {'x': 'DEF'}), (SELECT x FROM other.main.ranking_m()), other.main.lambda_m()
 ----
-abc	dl.main.t:42:-1	abc	1
+abc	dl.main.t:42:-1	abc	1	[abc]
 
 # a table known by the new name keeps the placeholder in the calls, which then fail instead of calling a method of it
 statement error
