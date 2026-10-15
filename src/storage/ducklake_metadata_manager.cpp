@@ -479,9 +479,35 @@ bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
 	return !Query(probe)->HasError();
 }
 
+void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
+	// the commit of an inlined table is only known while the snapshot before that commit exists
+	auto result = Execute(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
+SELECT DISTINCT commits.snapshot_id, idt.schema_version, idt.table_id
+FROM (
+	SELECT snapshot_id, schema_version, LAG(snapshot_id) OVER (ORDER BY snapshot_id) AS previous_snapshot_id,
+		LAG(schema_version) OVER (ORDER BY snapshot_id) AS previous_schema_version
+	FROM {METADATA_CATALOG}.ducklake_snapshot
+) commits
+JOIN {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	ON idt.schema_version > commits.previous_schema_version AND idt.schema_version <= commits.schema_version
+WHERE commits.previous_snapshot_id = commits.snapshot_id - 1
+AND commits.previous_schema_version < commits.schema_version
+AND NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+) AND (
+	SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.begin_snapshot <= commits.snapshot_id
+) > 1;
+)");
+	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedSchemaVersions();
 	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
@@ -858,6 +884,16 @@ WHERE {SNAPSHOT_ID} >= %s
   AND ({SNAPSHOT_ID} < %s OR %s IS NULL))",
 	                          inlined_table_name, col_names.begin_snapshot, col_names.end_snapshot,
 	                          col_names.end_snapshot);
+}
+
+string DuckLakeMetadataManager::GetInlinedRowCountsSql(const string &inlined_table_name,
+                                                       const DuckLakeInlinedColNames &col_names) {
+	return StringUtil::Format(R"(
+SELECT COUNT(*), COUNT(CASE WHEN {SNAPSHOT_ID} < %s OR %s IS NULL THEN 1 END)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= %s)",
+	                          col_names.end_snapshot, col_names.end_snapshot, inlined_table_name,
+	                          col_names.begin_snapshot);
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
@@ -2163,7 +2199,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			if (dynamic_filter_data) {
 				ExpressionType comparison_type;
 				{
-					lock_guard<mutex> l(dynamic_filter_data->lock);
+					annotated_shared_lock<annotated_shared_mutex> l(dynamic_filter_data->lock);
 					comparison_type = dynamic_filter_data->comparison_type;
 				}
 				dynamic_filter_columns.push_back(
@@ -2223,21 +2259,28 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
                                                                           DuckLakeSnapshot start_snapshot,
                                                                           DuckLakeSnapshot end_snapshot) {
 	auto table_id = table.GetTableId();
-	string select_list =
-	    GetDataFileSelectList("data") + ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id";
+	string select_list = GetDataFileSelectList("data") +
+	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
+	                     GetDeleteFileSelectList("del");
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
-	auto query =
-	    StringUtil::Format(R"(
+	// Rows deleted in the snapshot that inserted them were never visible
+	auto query = StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
+LEFT JOIN (
+	SELECT *
+	FROM {METADATA_CATALOG}.ducklake_delete_file
+	WHERE table_id=%d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+) del ON del.data_file_id = data.data_file_id AND del.begin_snapshot = data.begin_snapshot AND data.partial_max IS NULL
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                       select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id);
+	                                select_list, table_id.index, start_snapshot.snapshot_id, table_id.index,
+	                                start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = Query(end_snapshot, query);
 	result->ThrowIfError("Failed to get table insertion file list from DuckLake: ");
@@ -2263,6 +2306,8 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		if (!row.IsNull(col_idx)) {
 			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
+		col_idx++;
+		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -2273,8 +2318,9 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
                                                                            DuckLakeSnapshot end_snapshot,
                                                                            bool include_local_changes) {
 	auto table_id = table.GetTableId();
+	string insert_snapshot = "CASE WHEN data.partial_max IS NULL THEN data.begin_snapshot END";
 	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
-	                     ", data.row_id_start, data.record_count, data.mapping_id, " +
+	                     ", data.row_id_start, data.record_count, data.mapping_id, " + insert_snapshot + ", " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 
 	// Check if we have an inlined deletion table for this table (usually cached, no DB hit)
@@ -2377,7 +2423,7 @@ USING (data_file_id), (
 		query += StringUtil::Format(R"(
 UNION ALL
 
-SELECT data.data_file_id, %s, data.row_id_start, data.record_count, data.mapping_id,
+SELECT data.data_file_id, %s, data.row_id_start, data.record_count, data.mapping_id, %s,
        %s,
        %s,
        inlined_dels.min_snapshot, false
@@ -2390,8 +2436,8 @@ WHERE data.table_id = %d
   )
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID})
 )",
-		                            GetDataFileSelectList("data"), null_file_cols, null_file_cols, table_id.index,
-		                            table_id.index, start_snapshot.snapshot_id);
+		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
+		                            table_id.index, table_id.index, start_snapshot.snapshot_id);
 	}
 
 	// Close the main_results CTE and do the final SELECT with LEFT JOIN on inlined_dels
@@ -2427,6 +2473,7 @@ FROM main_results
 			entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
 		col_idx++;
+		entry.insert_snapshot = OptIdx(row, col_idx++);
 		entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		entry.previous_delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
@@ -2696,14 +2743,8 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				file.has_inlined_deletions = true;
 			}
 		}
-	} else {
-		// Cheap existence-only check — avoids fetching every deleted row_id for non-rewrite paths.
-		vector<idx_t> file_ids;
-		file_ids.reserve(files.size());
-		for (auto &file : files) {
-			file_ids.push_back(file.file.id.index);
-		}
-		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
+	} else if (!files.empty()) {
+		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot);
 		for (auto &file : files) {
 			if (files_with_deletions.count(file.file.id.index)) {
 				file.has_inlined_deletions = true;
@@ -3076,7 +3117,11 @@ static string ChunkValuesStatements(const vector<string> &tuples,
 }
 
 string DuckLakeMetadataManager::InsertValuesSql(const string &table_name, const vector<string> &values) {
-	auto insert_prefix = "INSERT INTO {METADATA_CATALOG}." + table_name + " VALUES ";
+	return InsertValuesIntoSql("{METADATA_CATALOG}." + table_name, values);
+}
+
+string DuckLakeMetadataManager::InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values) {
+	auto insert_prefix = "INSERT INTO " + qualified_table_name + " VALUES ";
 	return ChunkValuesStatements(values, [&](const string &tuples) { return insert_prefix + tuples + ";"; });
 }
 
@@ -3118,12 +3163,14 @@ string DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot commit_s
 }
 
 string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
-                                                      const vector<DuckLakeTableInfo> &new_tables) {
+                                                      const vector<DuckLakeTableInfo> &new_tables,
+                                                      const set<TableIndex> &replaced_tables) {
 	auto &catalog = transaction.GetCatalog();
 	auto context_ref = transaction.context.lock();
 	auto &context = *context_ref;
 	vector<string> inlined_tables;
 	string inlined_table_queries;
+	string drop_queries;
 	for (auto &table : new_tables) {
 		if (catalog.DataInliningRowLimit(context, table.schema_id, table.id) == 0 || IsTransactionLocal(table.id)) {
 			// not inlining for this table or inlining is for a table on this transaction, hence handled there - skip it
@@ -3147,8 +3194,48 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 			continue;
 		}
 		GetInlinedTableQueries(commit_snapshot, *table_ptr, inlined_tables, inlined_table_queries);
+		if (replaced_tables.count(table.id) && DroppedTablesStayReadable()) {
+			auto replaced_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.id);
+			if (replaced_entry) {
+				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>());
+			}
+		}
 	}
-	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries;
+	return InsertValuesSql("ducklake_inlined_data_tables", inlined_tables) + inlined_table_queries + drop_queries;
+}
+
+string DuckLakeMetadataManager::InlinedTableHasRowsQuery(const string &table_name) {
+	return StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s LIMIT 1;", SQLIdentifier(table_name));
+}
+
+string DuckLakeMetadataManager::DropInlinedTableSql(idx_t table_id, idx_t schema_version, const string &table_name) {
+	return StringUtil::Format(
+	    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;\n"
+	    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;\n",
+	    table_id, schema_version, SQLIdentifier(table_name));
+}
+
+string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table) {
+	auto &inlined_tables = table.GetInlinedDataTables();
+	if (inlined_tables.empty()) {
+		return string();
+	}
+	auto &current = *std::max_element(inlined_tables.begin(), inlined_tables.end(),
+	                                  [](const DuckLakeInlinedTableInfo &a, const DuckLakeInlinedTableInfo &b) {
+		                                  return a.schema_version < b.schema_version;
+	                                  });
+	// the batch of a flush still writes to the table it flushes
+	if (transaction.InlinedTableFlushed(current.table_name)) {
+		return string();
+	}
+	auto query = InlinedTableHasRowsQuery(current.table_name);
+	auto result = Query(query);
+	result->ThrowIfError("Failed to check emptiness of an inlined data table in DuckLake: ");
+	if (result->begin() != result->end()) {
+		return string();
+	}
+	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
+	return DropInlinedTableSql(table_id.index, current.schema_version, current.table_name);
 }
 
 string DuckLakeMetadataManager::WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros) {
@@ -3419,12 +3506,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		for (auto &type : entry.data->data->Types()) {
 			needs_encoding |= DuckLakeUtil::GetInlinedStorageType(*this, type) != type;
 		}
-		if (needs_encoding) {
+		if (needs_encoding || InsertsInlinedRowsAfterBatch(entry.data->data->Count())) {
 			inlined_inserts.push_back(InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name));
 			continue;
 		}
-		// Build one cell list per row, then defer formatting to the shared helper.
-		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data);
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
@@ -3569,23 +3654,15 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	return result;
 }
 
-// FIXME: We should probably cache this..
 unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(TableIndex table_id,
-                                                                             DuckLakeSnapshot snapshot,
-                                                                             const vector<idx_t> &file_ids) {
+                                                                             DuckLakeSnapshot snapshot) {
 	unordered_set<idx_t> result;
-	if (file_ids.empty()) {
-		return result;
-	}
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto file_id_list =
-	    StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t file_id) { return to_string(file_id); });
-	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
-	                                "begin_snapshot <= {SNAPSHOT_ID}",
-	                                inlined_table_name, file_id_list);
+	auto query = StringUtil::Format(
+	    "SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= {SNAPSHOT_ID}", inlined_table_name);
 	auto query_result = Query(snapshot, query);
 	query_result->ThrowIfError("Failed to read inlined file deletion IDs from DuckLake: ");
 	for (auto &row : *query_result) {
@@ -4649,18 +4726,21 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	return snapshot;
 }
 
-unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound) {
+unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
+                                                                  idx_t newest_snapshot_id) {
 	auto &unit = at_clause.Unit();
 	auto &val = at_clause.GetValue();
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
+	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
 	if (unit == "version") {
-		result = Query(StringUtil::Format(R"(
+		result =
+		    Query(StringUtil::Format(R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = %llu;)",
-		                                  val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>()));
+WHERE snapshot_id = %llu%s;)",
+		                             val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>(), visible_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
@@ -4674,10 +4754,11 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time::TIMESTAMPTZ %s= %s
+	WHERE snapshot_time::TIMESTAMPTZ %s= %s%s
 	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1);)",
-		    timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), timestamp_order));
+		    timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), visible_condition,
+		    timestamp_order));
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
@@ -5389,6 +5470,11 @@ WHERE table_id IN (%s);)",
 			                                         delete_tbl, deleted_table_ids));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		}
+		auto options_result = Execute(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE scope = 'table' AND scope_id IN (%s);)",
+		                                                 deleted_table_ids));
+		options_result->ThrowIfError("Failed to delete table options in DuckLake: ");
 
 		// Drop orphaned inlined tables
 		for (auto &inlined_table_name : inlined_tables_to_drop) {
@@ -5403,6 +5489,7 @@ WHERE table_id IN (%s);)",
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
 	}
+	bool deleted_schemas = false;
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5413,6 +5500,23 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
 );)",
 		                                         delete_tbl));
 		result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
+		if (delete_tbl == "ducklake_schema") {
+			// a result without a row count is treated as a deletion
+			deleted_schemas = true;
+			for (auto &row : *result) {
+				deleted_schemas = row.GetValue<int64_t>(0) > 0;
+			}
+		}
+	}
+	if (deleted_schemas) {
+		auto options_result = Execute(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE scope = 'schema' AND NOT EXISTS(
+    SELECT schema_id
+    FROM {METADATA_CATALOG}.ducklake_schema
+    WHERE schema_id = scope_id
+);)");
+		options_result->ThrowIfError("Failed to delete schema options in DuckLake: ");
 	}
 
 	// A v1.1 catalog prefixes the bound column names, so inlined tables cannot share the statement
@@ -5496,6 +5600,10 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
                                                                  const DuckLakeInlinedColNames &col_names) {
 	string result;
 	for (auto &flushed : flushed_tables) {
+		if (!flushed.wrote_files) {
+			// a concurrent schema change can drop an inlined table without rows
+			continue;
+		}
 		// rows that ended after the flush were deleted by this transaction and are not flushed
 		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s <= %d AND (%s IS NULL OR %s <= %d);\n",
 		                             SQLIdentifier(flushed.inlined_table.table_name), col_names.begin_snapshot,

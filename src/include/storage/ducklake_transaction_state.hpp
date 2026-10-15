@@ -66,8 +66,8 @@ struct DuckLakeCommitContext {
 		    return false;
 	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables =
-	    [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &)>
+	    write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &) {
 		    return string();
 	    };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
@@ -105,10 +105,6 @@ struct DuckLakeCommitContext {
 	};
 	//! Net (delete-adjusted) row count of a table's regular data files.
 	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
-		return 0;
-	};
-	//! Net (delete-adjusted) row count of a table's inlined-data tables.
-	std::function<idx_t(TableIndex)> get_net_inlined_row_count = [](TableIndex) {
 		return 0;
 	};
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
