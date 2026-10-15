@@ -3368,12 +3368,16 @@ WHERE retyped.column_type = %s AND original.column_type <> %s)",
 		bool from_float = row.GetValue<bool>(3);
 		bool widen = from_float && DuckLakeColumnStats::DefaultSurvivesFloatWidening(
 		                               row.IsNull(4) ? Value() : Value(row.GetValue<string>(4)));
-		// whether a row of the column was valid when the data was written
+		// whether a row of the column was valid when the data was written, outside of a commit that changed its type
 		auto written_as = [&](const string &snapshot, const string &type_filter) {
-			return StringUtil::Format("EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_column col WHERE col.table_id "
-			                          "= %d AND col.column_id = %d%s AND col.begin_snapshot <= %s AND "
-			                          "(col.end_snapshot IS NULL OR col.end_snapshot > %s))",
-			                          table_id, column_id, type_filter, snapshot, snapshot);
+			return StringUtil::Format(
+			    "EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_column col "
+			    "WHERE col.table_id = %d AND col.column_id = %d%s AND col.begin_snapshot <= %s "
+			    "AND (col.end_snapshot IS NULL OR col.end_snapshot > %s) AND NOT (col.begin_snapshot = %s AND EXISTS ("
+			    "SELECT 1 FROM {METADATA_CATALOG}.ducklake_column previous WHERE previous.table_id = col.table_id "
+			    "AND previous.column_id = col.column_id AND previous.end_snapshot = col.begin_snapshot "
+			    "AND previous.column_type <> col.column_type)))",
+			    table_id, column_id, type_filter, snapshot, snapshot, snapshot);
 		};
 		auto float_filter = " AND col.column_type = " + float_type;
 		auto files = [&](const string &filter) {
@@ -3388,7 +3392,8 @@ WHERE retyped.column_type = %s AND original.column_type <> %s)",
 		};
 		auto float_files = files(StringUtil::Format("df.begin_snapshot < %d AND %s", retype_snapshot,
 		                                            written_as("df.begin_snapshot", float_filter)));
-		// the files of the retype commit, or of a FLOAT column written with a type whose row expired, can hold either
+		// the files of the retype commit, or of a FLOAT column written in another type change or with a type whose
+		// row expired, can hold either type
 		auto unknown_files = files(
 		    StringUtil::Format("df.begin_snapshot = %d OR (%s AND df.begin_snapshot < %d AND NOT %s)", retype_snapshot,
 		                       from_float ? "true" : "false", retype_snapshot, written_as("df.begin_snapshot", "")));
@@ -3404,9 +3409,7 @@ WHERE retyped.column_type = %s AND original.column_type <> %s)",
 			exact_table_bounds = !other_files->Fetch();
 		}
 		if (exact_table_bounds) {
-			auto inlined_tables = Query(StringUtil::Format(
-			    "SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d",
-			    table_id));
+			auto inlined_tables = Query(GetInlinedTableNamesSql(TableIndex(table_id)));
 			inlined_tables->ThrowIfError("Failed to list the inlined-data tables of a column retyped to DOUBLE: ");
 			DuckLakeInlinedColNames col_names(true);
 			for (auto &inlined_table : *inlined_tables) {

@@ -59,7 +59,6 @@ void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id, map<FieldIndex
 	}
 }
 
-//! Whether the default of a widened FLOAT column reads as its FLOAT value widened to DOUBLE
 DuckLakeTransactionState::DuckLakeTransactionState(DatabaseInstance &db, bool require_commit_message,
                                                    DuckLakeNameMapSet &new_name_maps, string data_path,
                                                    string separator)

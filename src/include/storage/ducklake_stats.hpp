@@ -96,7 +96,7 @@ public:
 	void ClearBounds();
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
 	void WidenFloatBounds();
-	//! Whether a column default stored as text reads the same as FLOAT widened to DOUBLE and as DOUBLE
+	//! Whether the default of a widened FLOAT column reads as its FLOAT value widened to DOUBLE
 	static bool DefaultSurvivesFloatWidening(const Value &initial_default);
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
