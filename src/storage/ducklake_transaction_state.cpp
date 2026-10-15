@@ -429,19 +429,14 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
-//! Returns the nested fields of a column added in this transaction that is re-added
-vector<DuckLakeColumnInfo> CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded,
-                                             NewTableInfo &result, unordered_map<idx_t, idx_t> &txn_added_fields) {
-	vector<DuckLakeColumnInfo> children;
+void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, NewTableInfo &result,
+                       unordered_map<idx_t, idx_t> &txn_added_fields) {
 	auto it = txn_added_fields.find(field_id.index);
 	if (it != txn_added_fields.end()) {
 		auto erased_idx = it->second;
-		auto &cancelled = result.new_columns[erased_idx];
-		if (readded) {
-			children = std::move(cancelled.column_info.children);
-		} else {
+		if (!readded) {
 			// files written in this transaction can hold the field ids, so they stay taken
-			result.dropped_new_columns.push_back(std::move(cancelled));
+			result.dropped_new_columns.push_back(std::move(result.new_columns[erased_idx]));
 		}
 		result.new_columns.erase(result.new_columns.begin() + erased_idx);
 		txn_added_fields.erase(it);
@@ -450,14 +445,13 @@ vector<DuckLakeColumnInfo> CancelOrDropField(TableIndex table_id, FieldIndex fie
 				entry.second--;
 			}
 		}
-		return children;
+		return;
 	}
 	// Column was not added in the same transaction, we emit a drop.
 	DuckLakeDroppedColumn dropped_col;
 	dropped_col.table_id = table_id;
 	dropped_col.field_id = field_id;
 	result.dropped_columns.push_back(dropped_col);
-	return children;
 }
 
 template <typename T>
@@ -473,29 +467,36 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
 	auto &new_fields = change_info.new_fields;
-	for (auto &dropped_field_id : change_info.dropped_fields) {
-		bool readded = std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
-			return new_col.column_info.id.index == dropped_field_id.index;
+	auto is_readded = [&](const FieldIndex &field_id) {
+		return std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
+			return new_col.column_info.id.index == field_id.index;
 		});
-		CancelOrDropField(table_id, dropped_field_id, readded, result, txn_added_fields);
-		if (readded) {
-			continue;
-		}
-		// a dropped field loses its queued tags, its committed tags expire when the drop is written
-		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
-		                                            [&](const DuckLakeColumnTagInfo &tag) {
-			                                            return tag.table_id.index == table_id.index &&
-			                                                   tag.field_index.index == dropped_field_id.index;
-		                                            }),
-		                             result.new_column_tags.end());
+	};
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		CancelOrDropField(table_id, dropped_field_id, is_readded(dropped_field_id), result, txn_added_fields);
 	}
-	for (auto &new_col_info : new_fields) {
+	for (auto &new_col_info : change_info.new_fields) {
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
 		new_column.parent_idx = new_col_info.parent_idx;
 		txn_added_fields[new_col_info.column_info.id.index] = result.new_columns.size();
 		result.new_columns.push_back(std::move(new_column));
+	}
+	// A field that is dropped without being re-added under the same field id in the same change
+	// (i.e. an actual DROP COLUMN, not a rename/alter type) ceases to exist - discard any column
+	// tags queued for it in this transaction; already-committed tags are expired when writing the
+	// dropped columns (GH #1310).
+	for (auto &dropped_field_id : change_info.dropped_fields) {
+		if (is_readded(dropped_field_id)) {
+			continue;
+		}
+		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
+		                                            [&](const DuckLakeColumnTagInfo &tag) {
+			                                            return tag.table_id.index == table_id.index &&
+			                                                   tag.field_index.index == dropped_field_id.index;
+		                                            }),
+		                             result.new_column_tags.end());
 	}
 }
 
@@ -1691,14 +1692,12 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			auto committed_table_id = commit_state.GetTableId(table);
 
 			// Cancel the previous txn-local add for this field, or drop the committed column.
-			auto children =
-			    CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
+			CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
 
 			// Insert the new column with the updated info and register it.
 			DuckLakeNewColumn new_col;
 			new_col.table_id = committed_table_id;
 			new_col.column_info = table.GetColumnInfo(local_change.field_index);
-			new_col.column_info.children = std::move(children);
 			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
 			result.new_columns.push_back(std::move(new_col));
 

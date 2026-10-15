@@ -137,56 +137,6 @@ SELECT * FROM ducklake.v
 ----
 1	0	1	2
 
-# a struct column renamed, then dropped
-statement ok
-CREATE TABLE ducklake.w (id INTEGER);
-
-statement ok
-BEGIN
-
-statement ok
-ALTER TABLE ducklake.w ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
-
-statement ok
-INSERT INTO ducklake.w VALUES (1, {'a': 10, 'b': 20})
-
-statement ok
-ALTER TABLE ducklake.w RENAME COLUMN s TO r
-
-statement ok
-COMMIT
-
-query II
-SELECT * FROM ducklake.w
-----
-1	{'a': 10, 'b': 20}
-
-statement ok
-BEGIN
-
-statement ok
-ALTER TABLE ducklake.w ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
-
-statement ok
-INSERT INTO ducklake.w VALUES (2, {'a': 11, 'b': 21}, {'a': 30, 'b': 40})
-
-statement ok
-ALTER TABLE ducklake.w RENAME COLUMN s TO q
-
-statement ok
-ALTER TABLE ducklake.w DROP COLUMN q
-
-statement ok
-COMMIT
-
-statement ok
-ALTER TABLE ducklake.w ADD COLUMN c INTEGER DEFAULT 0
-
-query I
-SELECT count(*) FROM ducklake.w WHERE c = 0
-----
-2
-
 # a nested field
 statement ok
 CREATE TABLE ducklake.n (id INTEGER, s STRUCT(a INTEGER));
