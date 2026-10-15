@@ -1,5 +1,4 @@
 #include "common/ducklake_util.hpp"
-#include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "common/ducklake_types.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -193,7 +192,6 @@ string ToByteaHexLiteral(const string &raw_bytes) {
 }
 
 string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val) {
-	// FIXME: this should be upstreamed
 	if (val.IsNull()) {
 		return val.ToString();
 	}
@@ -374,6 +372,54 @@ void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, bool pre
 			    table_name, col.Name().GetIdentifierName(), col.Name().GetIdentifierName());
 		}
 	}
+}
+
+string DuckLakeUtil::ReplacePlaceholders(const string &sql, const vector<pair<string, string>> &replacements) {
+	string result;
+	result.reserve(sql.size());
+	idx_t pos = 0;
+	while (pos < sql.size()) {
+		auto next = sql.find_first_of("'\"{", pos);
+		if (next == string::npos) {
+			result.append(sql, pos, string::npos);
+			break;
+		}
+		result.append(sql, pos, next - pos);
+		pos = next;
+		auto c = sql[pos];
+		if (c == '{') {
+			bool replaced = false;
+			for (auto &replacement : replacements) {
+				if (sql.compare(pos, replacement.first.size(), replacement.first) == 0) {
+					result += replacement.second;
+					pos += replacement.first.size();
+					replaced = true;
+					break;
+				}
+			}
+			if (!replaced) {
+				result += c;
+				pos++;
+			}
+			continue;
+		}
+		// copy the quoted text up to its closing quote, a doubled quote does not close it
+		idx_t end = pos + 1;
+		while (end < sql.size()) {
+			if (sql[end] == c) {
+				if (end + 1 < sql.size() && sql[end + 1] == c) {
+					end += 2;
+					continue;
+				}
+				break;
+			}
+			end++;
+		}
+		end = MinValue<idx_t>(end + 1, sql.size());
+		result.append(sql, pos, end - pos);
+		pos = end;
+	}
+	return result;
 }
 
 string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
@@ -573,14 +619,6 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 	}
 }
 
-void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
-	ExtensionOption option;
-	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
-		return;
-	}
-	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
-}
-
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
 
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
@@ -638,6 +676,9 @@ static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Valu
 	auto row_group_size_bytes = DBConfig::ParseMemoryLimitOrMaximum(val.ToString());
 	if (row_group_size_bytes == 0) {
 		throw NotImplementedException("Row group size bytes cannot be 0");
+	}
+	if (row_group_size_bytes == NumericLimits<idx_t>::Maximum()) {
+		throw InvalidInputException("Row group size bytes must be a finite size, not \"%s\"", val.ToString());
 	}
 	return to_string(row_group_size_bytes);
 }
