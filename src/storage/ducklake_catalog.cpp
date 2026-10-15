@@ -691,6 +691,14 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 	auto catalog = metadata_manager.GetCatalogForSnapshot(snapshot);
 	// schemas with invisible parents count as dropped
 	auto skipped_schemas = FindUnreachableSchemas(catalog.schemas);
+	{
+		lock_guard<mutex> guard(config_lock);
+		for (auto &schema : catalog.schemas) {
+			if (schema.parent_id.IsValid()) {
+				schema_parents[schema.id] = schema.parent_id;
+			}
+		}
+	}
 	set<TableIndex> skipped_tables;
 	map<SchemaIndex, unique_ptr<DuckLakeSchemaEntry>> loaded_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> loaded_schema_refs;
@@ -1214,9 +1222,18 @@ bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &res
 		}
 	}
 	lock_guard<mutex> guard(config_lock);
-	// search options in-order: table scope, then schema scope
-	return TryGetOptionInScope(options.table_options, table_id, option, result) ||
-	       TryGetOptionInScope(options.schema_options, schema_id, option, result);
+	// search options in-order: table scope, then the schema and its parents
+	if (TryGetOptionInScope(options.table_options, table_id, option, result)) {
+		return true;
+	}
+	while (schema_id.IsValid()) {
+		if (TryGetOptionInScope(options.schema_options, schema_id, option, result)) {
+			return true;
+		}
+		auto parent = schema_parents.find(schema_id);
+		schema_id = parent == schema_parents.end() ? SchemaIndex() : parent->second;
+	}
+	return false;
 }
 
 bool DuckLakeCatalog::TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id,

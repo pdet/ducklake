@@ -1,0 +1,111 @@
+# name: test/sql/catalog/nested_schema/nested_schema_options.test
+# description: The options of a schema apply to the tables of its nested schemas
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_schema_options', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE SCHEMA dl.a;
+
+statement ok
+CREATE SCHEMA dl.a.b;
+
+statement ok
+CREATE SCHEMA dl.a.b.c;
+
+statement ok
+CREATE SCHEMA dl.other;
+
+statement ok
+CALL dl.set_option('parquet_compression', 'gzip', schema => 'a')
+
+statement ok
+CREATE TABLE dl.a.t1 AS SELECT 1 AS x
+
+statement ok
+CREATE TABLE dl.a.b.t2 AS SELECT 1 AS x
+
+statement ok
+CREATE TABLE dl.a.b.c.t3 AS SELECT 1 AS x
+
+statement ok
+CREATE TABLE dl.other.t4 AS SELECT 1 AS x
+
+query II
+SELECT regexp_extract(file_name, '/(t[0-9])/[^/]*$', 1) AS tbl, compression
+FROM parquet_metadata('{DATA_PATH}/nested_schema_options/**/*.parquet')
+ORDER BY ALL
+----
+t1	GZIP
+t2	GZIP
+t3	GZIP
+t4	SNAPPY
+
+# the nearest schema with the option wins, and a table option wins over every schema
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd', schema => 'a.b')
+
+statement ok
+CALL dl.set_option('parquet_compression', 'uncompressed', schema => 'a.b.c', table_name => 't3')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_schema_options', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+INSERT INTO dl.a.t1 VALUES (2)
+
+statement ok
+INSERT INTO dl.a.b.t2 VALUES (2)
+
+statement ok
+INSERT INTO dl.a.b.c.t3 VALUES (2)
+
+statement ok
+CREATE TABLE dl.a.b.c.t5 AS SELECT 2 AS x
+
+query II
+SELECT regexp_extract(file_name, '/(t[0-9])/[^/]*$', 1) AS tbl, compression
+FROM parquet_metadata('{DATA_PATH}/nested_schema_options/**/*.parquet')
+ORDER BY ALL
+----
+t1	GZIP
+t1	GZIP
+t2	GZIP
+t2	ZSTD
+t3	GZIP
+t3	UNCOMPRESSED
+t4	SNAPPY
+t5	ZSTD
+
+# inlining that only a parent schema enables applies to the nested tables
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, schema => 'a')
+
+statement ok
+INSERT INTO dl.a.b.c.t5 VALUES (3)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't5', schema => 'a.b.c')
+----
+1
+
+query I
+SELECT x FROM dl.a.b.c.t5 ORDER BY x
+----
+2
+3

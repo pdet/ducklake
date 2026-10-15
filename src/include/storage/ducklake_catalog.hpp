@@ -199,7 +199,7 @@ public:
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Look up a config option in the table scope only, without falling back to schema or global
 	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
-	//! Check if a config option has a table-level or schema-level override (excluding global scope)
+	//! Check if a config option is set on the table, its schema or a parent schema (excluding global scope)
 	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                              optional_ptr<const map<string, string>> table_options = nullptr) const;
 	template <class T>
@@ -429,6 +429,8 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	//! The parent of every loaded nested schema, so that schema options can be inherited
+	map<SchemaIndex, SchemaIndex> schema_parents;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.
