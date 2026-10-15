@@ -133,3 +133,23 @@ query II
 SELECT min(iv), max(iv) FROM bounds_legacy.t
 ----
 00:01:00	1 day
+
+# a rewrite of another file keeps the null counts unknown, the file written by DuckDB 1.5.6 is not read
+unzip data/old_ducklake/interval_null_counts.db.gz {TEST_DIR}/issue_1665_rewrite.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1665_rewrite.db' AS rewrite_legacy (DATA_PATH '{TEST_DIR}/issue_1665_rewrite/', OVERRIDE_DATA_PATH TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO rewrite_legacy.t VALUES (4, INTERVAL 2 DAY), (5, INTERVAL 3 DAY)
+
+statement ok
+DELETE FROM rewrite_legacy.t WHERE i = 4
+
+statement ok
+CALL ducklake_rewrite_data_files('rewrite_legacy', 't', delete_threshold => 0)
+
+query IIII
+SELECT (SELECT record_count FROM __ducklake_metadata_rewrite_legacy.ducklake_table_stats), contains_null, min_value, max_value FROM __ducklake_metadata_rewrite_legacy.ducklake_table_column_stats WHERE column_id = 2
+----
+4	NULL	NULL	NULL
