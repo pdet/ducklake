@@ -1,5 +1,5 @@
 # name: test/sql/comments/comment_on_view_column_v10.test
-# description: COMMENT ON COLUMN for views is rejected on DuckLake 1.0 catalogs
+# description: View column comments are rejected on DuckLake 1.0 catalogs
 # group: [comments]
 
 require ducklake
@@ -23,7 +23,45 @@ CREATE VIEW ducklake.v10 AS SELECT 1 AS c
 statement error
 COMMENT ON COLUMN ducklake.v10.c IS 'unsupported'
 ----
-DuckLake 1.0 does not support COMMENT ON COLUMN for views
+DuckLake 1.0 does not support view column comments - attach with AUTOMATIC_MIGRATION set to TRUE
+
+statement ok
+ATTACH ':memory:' AS src
+
+statement ok
+CREATE TABLE src.t (x INTEGER, y INTEGER)
+
+statement ok
+CREATE VIEW src.v AS SELECT x, y FROM src.t
+
+# a view without column comments is copied
+statement ok
+COPY FROM DATABASE src TO ducklake
+
+query I
+SELECT count(*) FROM ducklake.v
+----
+0
+
+statement ok
+DROP VIEW ducklake.v
+
+statement ok
+DROP TABLE ducklake.t
+
+# a view with column comments is refused instead of losing them
+statement ok
+COMMENT ON COLUMN src.v.y IS 'the y'
+
+statement error
+COPY FROM DATABASE src TO ducklake
+----
+DuckLake 1.0 does not support view column comments - attach with AUTOMATIC_MIGRATION set to TRUE
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name = 'ducklake'
+----
+v10
 
 statement ok
 DETACH ducklake

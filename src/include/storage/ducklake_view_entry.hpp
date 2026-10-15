@@ -20,6 +20,7 @@ namespace duckdb {
 struct SetCommentInfo;
 struct SetColumnCommentInfo;
 class DuckLakeTransaction;
+class DuckLakeCatalog;
 
 class DuckLakeViewEntry : public ViewCatalogEntry {
 public:
@@ -57,6 +58,8 @@ public:
 	DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change);
 
 	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
+	//! Refuse comments on view columns in catalogs that cannot store them
+	static void CheckColumnCommentsSupported(const DuckLakeCatalog &catalog);
 
 private:
 	unique_ptr<SelectStatement> ParseSelectStatement() const;
