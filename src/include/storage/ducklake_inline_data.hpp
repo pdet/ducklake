@@ -50,6 +50,8 @@ public:
 	string GetName() const override;
 
 	static void RecomputeColumnStats(DuckLakeTableEntry &table, DuckLakeInlinedData &inlined_data);
+	//! Refuse a value whose VARIANT members a data file cannot store
+	static void VerifyParquetVariantValue(const Value &value);
 };
 
 } // namespace duckdb

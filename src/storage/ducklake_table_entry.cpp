@@ -9,6 +9,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_inline_data.hpp"
 
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -795,8 +796,15 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	}
 	table_info.columns = std::move(new_columns);
 
-	return make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChange::RenameColumn(field_id.GetFieldIndex()),
-	                                     info.new_name.GetIdentifierName());
+	auto new_entry = make_uniq<DuckLakeTableEntry>(
+	    *this, table_info, LocalChange::RenameColumn(field_id.GetFieldIndex()), info.new_name.GetIdentifierName());
+	if (transaction.HasTransactionInlinedData(GetTableId()) &&
+	    !transaction.GetMetadataManager().CanInlineColumns(new_entry->GetTableColumns())) {
+		throw NotImplementedException("Cannot rename column \"%s\" to \"%s\" in a table with rows inlined in this "
+		                              "transaction, the metadata catalog cannot inline the column",
+		                              info.old_name.GetIdentifierName(), info.new_name.GetIdentifierName());
+	}
+	return std::move(new_entry);
 }
 
 void DuckLakeTableEntry::RequireNextColumnId(DuckLakeTransaction &transaction) {
@@ -828,17 +836,24 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
-		if (!transaction.GetMetadataManager().InlinedTableFits(new_table.columns.LogicalColumnCount())) {
+		auto &metadata_manager = transaction.GetMetadataManager();
+		if (!metadata_manager.InlinedTableFits(new_table.columns.LogicalColumnCount())) {
 			throw NotImplementedException(
 			    "Cannot add column \"%s\" to a table with rows inlined in this transaction, the "
 			    "inlined data table would exceed the column limit of the metadata catalog",
 			    info.new_column.Name().GetIdentifierName());
 		}
+		if (!metadata_manager.CanInlineColumns(new_table.GetTableColumns())) {
+			throw NotImplementedException("Cannot add column \"%s\" to a table with rows inlined in this transaction, "
+			                              "the metadata catalog cannot inline the column",
+			                              info.new_column.Name().GetIdentifierName());
+		}
 		LogicalIndex new_col_idx(new_table.columns.LogicalColumnCount() - 1);
 		auto &new_col = new_table.GetColumn(new_col_idx);
 		auto &field_id = new_table.GetFieldData().GetByRootIndex(new_col.Physical());
-		transaction.AddColumnToLocalInlinedData(GetTableId(), new_col.Type(), field_id.GetFieldIndex(),
-		                                        field_id.GetColumnData().initial_default);
+		auto &default_value = field_id.GetColumnData().initial_default;
+		DuckLakeInlineData::VerifyParquetVariantValue(default_value);
+		transaction.AddColumnToLocalInlinedData(GetTableId(), new_col.Type(), field_id.GetFieldIndex(), default_value);
 	}
 
 	return std::move(new_entry);

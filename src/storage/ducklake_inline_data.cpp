@@ -388,6 +388,15 @@ static void VerifyParquetVariants(Vector &data, idx_t count) {
 	}
 }
 
+void DuckLakeInlineData::VerifyParquetVariantValue(const Value &value) {
+	if (value.IsNull() || !TypeVisitor::Contains(value.type(), LogicalTypeId::VARIANT)) {
+		return;
+	}
+	Vector data(value.type(), 1);
+	data.SetValue(0, value);
+	VerifyParquetVariants(data, 1);
+}
+
 static void VerifyParquetVariants(ColumnDataCollection &data) {
 	vector<column_t> variant_columns;
 	for (idx_t c = 0; c < data.ColumnCount(); c++) {
