@@ -46,6 +46,11 @@ CREATE TABLE ducklake.c (s VARCHAR) PARTITIONED BY (year(s))
 ----
 Column "s" has type VARCHAR and cannot be partitioned by year
 
+statement error
+CREATE TABLE ducklake.c PARTITIONED BY (day(s)) AS SELECT 'x' s
+----
+Column "s" has type VARCHAR and cannot be partitioned by day
+
 query I
 SELECT count(*) FROM meta.ducklake_partition_info
 ----
