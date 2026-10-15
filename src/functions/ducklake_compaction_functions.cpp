@@ -22,6 +22,7 @@
 #include "functions/ducklake_compaction_functions.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
@@ -773,8 +774,11 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		compactions[0]->Cast<DuckLakeLogicalCompaction>().table_index = bind_index;
 		return std::move(compactions[0]);
 	}
-	return input.binder->UnionOperators(std::move(compactions), DuckLakeLogicalCompaction::GetResultTypes().size(),
-	                                    bind_index);
+	auto result = input.binder->UnionOperators(std::move(compactions),
+	                                           DuckLakeLogicalCompaction::GetResultTypes().size(), bind_index);
+	// the compactions are independent, so their pipelines may run concurrently
+	result->Cast<LogicalSetOperation>().allow_out_of_order = true;
+	return result;
 }
 
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,
