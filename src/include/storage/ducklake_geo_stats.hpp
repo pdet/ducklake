@@ -26,6 +26,10 @@ struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
 	void Deserialize(const string &stats) override;
 
 	unique_ptr<BaseStatistics> ToStats() const;
+	//! Cover every finite coordinate, which older clients read too, unlike an infinite extent
+	void SetUnknownExtent();
+	//! Allow every geometry type, for files whose types are unknown
+	void SetUnknownTypes();
 
 public:
 	GeometryExtent extent = GeometryExtent::Empty();

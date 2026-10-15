@@ -105,6 +105,17 @@ bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<V
 	return false;
 }
 
+void DuckLakeColumnGeoStats::SetUnknownExtent() {
+	auto max = std::numeric_limits<double>::max();
+	extent = GeometryExtent {-max, -max, -max, -max, max, max, max, max};
+}
+
+void DuckLakeColumnGeoStats::SetUnknownTypes() {
+	for (auto &type : GeometryTypeSet::Unknown().ToString(true)) {
+		geo_types.insert(type);
+	}
+}
+
 unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
 	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
 

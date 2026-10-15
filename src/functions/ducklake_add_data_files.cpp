@@ -418,25 +418,31 @@ FROM parquet_full_metadata(%s)
 				stats.column_size_bytes = compressed_size.GetValue();
 			}
 
-			auto geo_bbox = stats_entry.GetChildValue<6>();
-			if (geo_bbox.IsValid() && stats.extra_stats) {
-				auto &extent = stats.extra_stats->Cast<DuckLakeColumnGeoStats>().extent;
-				double *bounds[] = {&extent.x_min, &extent.x_max, &extent.y_min, &extent.y_max,
-				                    &extent.z_min, &extent.z_max, &extent.m_min, &extent.m_max};
-				idx_t bound_idx = 0;
-				geo_bbox.ForEach([&](const VectorIterator<double>::ValueEntry &bound) {
-					if (bound.IsValid()) {
-						*bounds[bound_idx] = bound.GetValue();
-					}
-					bound_idx++;
-				});
-			}
-
-			auto geo_types = stats_entry.GetChildValue<7>();
-			if (geo_types.IsValid() && stats.extra_stats) {
+			if (stats.extra_stats && stats.extra_stats->GetStatsType() == DuckLakeExtraStatsType::GEOMETRY) {
+				// writers may leave out geospatial statistics, then the file can hold any geometry
 				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-				for (auto geo_type : geo_types.GetChildValues()) {
-					geo_stats.geo_types.insert(geo_type.GetValue().GetString());
+				auto geo_bbox = stats_entry.GetChildValue<6>();
+				if (geo_bbox.IsValid()) {
+					auto &extent = geo_stats.extent;
+					double *bounds[] = {&extent.x_min, &extent.x_max, &extent.y_min, &extent.y_max,
+					                    &extent.z_min, &extent.z_max, &extent.m_min, &extent.m_max};
+					idx_t bound_idx = 0;
+					geo_bbox.ForEach([&](const VectorIterator<double>::ValueEntry &bound) {
+						if (bound.IsValid()) {
+							*bounds[bound_idx] = bound.GetValue();
+						}
+						bound_idx++;
+					});
+				} else {
+					geo_stats.SetUnknownExtent();
+				}
+				auto geo_types = stats_entry.GetChildValue<7>();
+				if (geo_types.IsValid()) {
+					for (auto geo_type : geo_types.GetChildValues()) {
+						geo_stats.geo_types.insert(geo_type.GetValue().GetString());
+					}
+				} else {
+					geo_stats.SetUnknownTypes();
 				}
 			}
 
