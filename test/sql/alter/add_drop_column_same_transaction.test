@@ -104,6 +104,39 @@ SELECT * FROM ducklake.u
 ----
 1	0
 
+# a struct column
+statement ok
+CREATE TABLE ducklake.v (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.v VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.v DROP COLUMN s
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c1 INTEGER DEFAULT 0
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c2 INTEGER DEFAULT 1
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c3 INTEGER DEFAULT 2
+
+query IIII
+SELECT * FROM ducklake.v
+----
+1	0	1	2
+
 # a nested field
 statement ok
 CREATE TABLE ducklake.n (id INTEGER, s STRUCT(a INTEGER));
