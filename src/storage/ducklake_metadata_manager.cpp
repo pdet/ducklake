@@ -480,7 +480,7 @@ bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
 }
 
 void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
-	// the commit of an inlined table is only known while the snapshot before that commit exists
+	// an inlined table belongs to the commit that reached its schema version, if the snapshot before it exists
 	auto result = Execute(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
 SELECT DISTINCT commits.snapshot_id, idt.schema_version, idt.table_id
@@ -501,6 +501,38 @@ AND NOT EXISTS (
 	WHERE sv.table_id = idt.table_id AND sv.begin_snapshot <= commits.snapshot_id
 ) > 1;
 )");
+	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
+	// otherwise the oldest rows of the inlined table date its commit
+	auto missing = Query(R"(
+SELECT idt.table_id, idt.table_name, idt.schema_version
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+WHERE NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+))");
+	missing->ThrowIfError(
+	    "Failed to list the inlined-data tables without a schema version while migrating to v1.1-dev1: ");
+	DuckLakeInlinedColNames col_names(true);
+	vector<string> first_rows;
+	for (auto &row : *missing) {
+		first_rows.push_back(StringUtil::Format("SELECT %d AS table_id, %d AS schema_version, (SELECT MIN(%s) FROM "
+		                                        "{METADATA_CATALOG}.%s) AS begin_snapshot",
+		                                        row.GetValue<idx_t>(0), row.GetValue<idx_t>(2),
+		                                        col_names.begin_snapshot, SQLIdentifier(row.GetValue<string>(1))));
+	}
+	if (first_rows.empty()) {
+		return;
+	}
+	result = Execute(StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
+SELECT first_rows.begin_snapshot, first_rows.schema_version, first_rows.table_id
+FROM (%s) first_rows
+WHERE first_rows.begin_snapshot IS NOT NULL AND (
+	SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = first_rows.table_id AND sv.begin_snapshot <= first_rows.begin_snapshot
+) > 1;
+)",
+	                                    StringUtil::Join(first_rows, " UNION ALL ")));
 	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
 }
 
