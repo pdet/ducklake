@@ -30,6 +30,18 @@ SELECT count(*) FROM meta.ducklake_data_file
 ----
 0
 
+# a NULL partition above a value
+statement ok
+COPY (SELECT 6 AS id, NULL::INTEGER AS year) TO '{DATA_PATH}/nulls' (FORMAT parquet, PARTITION_BY (year))
+
+statement ok
+COPY (SELECT 7 AS id, 2020 AS year) TO '{DATA_PATH}/nulls/year=__HIVE_DEFAULT_PARTITION__' (FORMAT parquet, PARTITION_BY (year), OVERWRITE_OR_IGNORE)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/nulls/year=__HIVE_DEFAULT_PARTITION__/year=2020/*.parquet', hive_partitioning => true)
+----
+Hive partition key "year" has different values in the directories of
+
 # the same value in both directories
 statement ok
 COPY (SELECT 3 AS id, 2020 AS year) TO '{DATA_PATH}/year=2020' (FORMAT parquet, PARTITION_BY (year))
