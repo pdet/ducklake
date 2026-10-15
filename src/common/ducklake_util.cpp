@@ -496,6 +496,8 @@ struct CatalogNameReplacer {
 	const Identifier &to;
 	//! The schema path and name of every table the query reads from the catalog
 	vector<vector<Identifier>> tables;
+	//! Whether a table of the query is known by the name of the catalog, which then also qualifies columns and methods
+	bool binds_catalog_name = false;
 
 	bool IsCatalog(const QualifiedName &name) const {
 		// a two-part name can hold the catalog in the place of the schema
@@ -538,10 +540,16 @@ struct CatalogNameReplacer {
 	}
 
 	void AddTable(TableRef &ref) {
+		if (ref.alias == from) {
+			binds_catalog_name = true;
+		}
 		if (ref.type != TableReferenceType::BASE_TABLE) {
 			return;
 		}
 		auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
+		if (ref.alias.empty() && name.Name() == from) {
+			binds_catalog_name = true;
+		}
 		if (IsCatalog(name)) {
 			tables.emplace_back(name.Path().begin() + 1, name.Path().end());
 		}
@@ -561,6 +569,9 @@ struct CatalogNameReplacer {
 	}
 
 	void ReplaceInExpression(ParsedExpression &expr) {
+		if (binds_catalog_name) {
+			return;
+		}
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::FUNCTION: {
 			auto &function = expr.Cast<FunctionExpression>();

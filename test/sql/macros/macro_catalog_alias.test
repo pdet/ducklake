@@ -73,8 +73,15 @@ CREATE MACRO dl.row_m() AS TABLE SELECT dl.t AS r FROM dl.main.t
 statement ok
 CREATE MACRO dl.star_m() AS TABLE SELECT * EXCLUDE (dl.main.t.x), * RENAME (dl.main.t.x AS y) FROM dl.main.t
 
+# with a table known by the name of the catalog, its columns and methods keep that name
 statement ok
 CREATE MACRO dl.struct_alias_m() AS (SELECT dl.s.x FROM (SELECT {'x': 42} AS s) dl)
+
+statement ok
+CREATE MACRO dl.method_m() AS (SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) dl)
+
+statement ok
+CREATE MACRO dl.unused_cte_m() AS TABLE WITH unused AS (SELECT * FROM dl.main.t) SELECT dl.t FROM (SELECT 42 AS t) dl, (SELECT 99 AS t) other
 
 # a table alias or a string that reads like the catalog is not a reference to it, and other catalogs keep their name
 statement ok
@@ -99,6 +106,8 @@ SELECT q.x FROM ("{DUCKLAKE_CATALOG}".main.t AS q INNER JOIN "{DUCKLAKE_CATALOG}
 SELECT "{DUCKLAKE_CATALOG}".t AS r FROM "{DUCKLAKE_CATALOG}".main.t
 SELECT * EXCLUDE ("{DUCKLAKE_CATALOG}".main.t.x), * RENAME ("{DUCKLAKE_CATALOG}".main.t.x AS y) FROM "{DUCKLAKE_CATALOG}".main.t
 (SELECT dl.s.x FROM (SELECT struct_pack(x := 42) AS s) AS dl)
+(SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) AS dl)
+WITH unused AS (SELECT * FROM "{DUCKLAKE_CATALOG}".main.t) SELECT dl.t FROM (SELECT 42 AS t) AS dl , (SELECT 99 AS t) AS other
 (SELECT ((('dl.main.t:' || dl.x) || ':') || (SELECT max(x) FROM memory.main.t)) FROM "{DUCKLAKE_CATALOG}".main.t AS dl)
 
 statement ok
@@ -129,10 +138,10 @@ SELECT x FROM other.main.nearest_m()
 ----
 42
 
-query TII
-SELECT (SELECT r FROM other.main.row_m()), (SELECT y FROM other.main.star_m()), other.main.struct_alias_m()
+query TIITI
+SELECT (SELECT r FROM other.main.row_m()), (SELECT y FROM other.main.star_m()), other.main.struct_alias_m(), other.main.method_m(), (SELECT t FROM other.main.unused_cte_m())
 ----
-{'x': 42}	42	42
+{'x': 42}	42	42	abc	42
 
 query T
 SELECT other.main.untouched_m()
