@@ -4827,7 +4827,8 @@ static unordered_map<idx_t, T> GetChangedSpecs(const vector<T> &old_specs, const
 }
 
 string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
-                                                      const vector<DuckLakePartitionInfo> &new_partitions) {
+                                                      const vector<DuckLakePartitionInfo> &new_partitions,
+                                                      map<idx_t, idx_t> &committed_partition_ids) {
 	if (new_partitions.empty()) {
 		return {};
 	}
@@ -4865,6 +4866,20 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 		if (partition.replaces_equal_spec) {
 			// a bucket column changed type, so the last spec replaces the current one even with the same fields
 			changed_specs[partition.table_id.index] = new_partitions[last_partition_index[partition.table_id.index]];
+		}
+	}
+	// the files of a last spec that equals the existing one reference the existing spec
+	for (auto &existing : existing_partitions) {
+		auto last = last_partition_index.find(existing.table_id.index);
+		if (last == last_partition_index.end() || changed_specs.count(existing.table_id.index) ||
+		    !existing.id.IsValid() || !new_partitions[last->second].id.IsValid()) {
+			continue;
+		}
+		auto unchanged_id = new_partitions[last->second].id.GetIndex();
+		for (auto &committed_id : committed_partition_ids) {
+			if (committed_id.second == unchanged_id) {
+				committed_id.second = existing.id.GetIndex();
+			}
 		}
 	}
 	set<TableIndex> altered_tables;
