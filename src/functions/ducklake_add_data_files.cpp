@@ -436,15 +436,13 @@ FROM parquet_full_metadata(%s)
 					geo_stats.SetUnknownExtent();
 				}
 				auto geo_types = stats_entry.GetChildValue<7>();
-				bool has_types = false;
 				if (geo_types.IsValid()) {
 					for (auto geo_type : geo_types.GetChildValues()) {
 						geo_stats.geo_types.insert(geo_type.GetValue().GetString());
-						has_types = true;
 					}
 				}
 				// an empty list of types means that they are unknown
-				if (!has_types) {
+				if (geo_stats.geo_types.empty()) {
 					geo_stats.SetUnknownTypes();
 				}
 			}
