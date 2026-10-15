@@ -82,6 +82,7 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	optional_idx type_length;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
 	//! A root group that the Parquet reader reads as VARIANT
@@ -253,7 +254,8 @@ SELECT
         "scale" := x."scale",
         "precision" := x."precision",
         field_id := x.field_id,
-        logical_type := x.logical_type
+        logical_type := x.logical_type,
+        type_length := TRY_CAST(x.type_length AS BIGINT)
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
@@ -265,7 +267,7 @@ FROM parquet_full_metadata(%s)
 	using ParquetStatsRow = VectorStructType<int64_t, string_t, string_t, int64_t, int64_t, int64_t, ParquetBBoxRow,
 	                                         VectorListType<string_t>, bool, bool>;
 	using ParquetSchemaRow =
-	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t>;
+	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t, int64_t>;
 	for (auto &row : *result) {
 		auto &chunk = row.GetChunk();
 		auto row_idx = row.GetRowInChunk();
@@ -335,6 +337,7 @@ FROM parquet_full_metadata(%s)
 			column->precision = GetOptionalIndex(schema_entry.GetChildValue<5>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<6>());
 			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<7>());
+			column->type_length = GetOptionalIndex(schema_entry.GetChildValue<8>());
 
 			if (child_count == 0) {
 				column->column_id = next_column_id++;
@@ -473,6 +476,7 @@ private:
 	void CheckUnsignedInteger();
 	void CheckFloatingPoints();
 	void CheckTimestamp();
+	void CheckTimestampWithTimeZone();
 	void CheckDecimal();
 
 	//! Called when a check fails
@@ -508,6 +512,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		if (s_ele.logical_type ==
 		    "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIME;
+		} else if (s_ele.logical_type ==
+		           "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, NANOS=NanoSeconds()))") {
+			return LogicalType::TIME_NS;
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, "
 		                                 "MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIMESTAMP;
@@ -517,6 +524,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
 		                                 "NANOS=NanoSeconds()))") {
 			return LogicalType::TIMESTAMP_NS;
+		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
+		                                 "NANOS=NanoSeconds()))") {
+			return LogicalType::TIMESTAMP_TZ_NS;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
 			return LogicalType::TIMESTAMP_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimeType(isAdjustedToUTC=1")) {
@@ -525,8 +535,12 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
 			return LogicalType::SQLNULL;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry") && s_ele.type == "BYTE_ARRAY") {
 			return LogicalType::GEOMETRY();
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Float16Type()") &&
+		           s_ele.type == "FIXED_LEN_BYTE_ARRAY" && s_ele.type_length.IsValid() &&
+		           s_ele.type_length.GetIndex() == 2) {
+			return LogicalType::FLOAT;
 		}
 	}
 	if (!s_ele.converted_type.empty()) {
@@ -704,6 +718,12 @@ void DuckLakeParquetTypeChecker::CheckTimestamp() {
 	}
 }
 
+void DuckLakeParquetTypeChecker::CheckTimestampWithTimeZone() {
+	if (!CheckTypes({LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS})) {
+		Fail();
+	}
+}
+
 void DuckLakeParquetTypeChecker::CheckDecimal() {
 	if (source_type.id() != LogicalTypeId::DECIMAL) {
 		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" but found type \"%s\"", source_type));
@@ -774,6 +794,9 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::TIMESTAMP_NS:
 		CheckTimestamp();
 		break;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		CheckTimestampWithTimeZone();
+		break;
 	case LogicalTypeId::DECIMAL:
 		CheckDecimal();
 		break;
@@ -782,7 +805,6 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
 	default:
 		// by default just verify that the type matches exactly
 		if (!CheckType(type)) {
