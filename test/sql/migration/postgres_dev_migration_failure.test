@@ -30,6 +30,10 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 statement ok
 DETACH dl
 
+# A catalog of an older development build misses an addition, so the migration runs
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev_migration_failure.ducklake_delete_file DROP COLUMN row_group_count')
+
 # Reject migration writes while keeping existing metadata readable
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev_migration_failure.ducklake_metadata ADD CONSTRAINT reject_version_update CHECK (key <> ''version'') NOT VALID')
