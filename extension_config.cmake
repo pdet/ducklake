@@ -33,7 +33,7 @@ if($ENV{ENABLE_QUACK})
     duckdb_extension_load(quack
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-quack.git
-            GIT_TAG 525d41ad4e76d637ca0dbb2b7ebde23fbbdbf5db
+            GIT_TAG f6a5d8216dcf54dc1410cb46ac3af3e964fd4988
             SUBMODULES "extension-ci-tools"
     )
     duckdb_extension_statically_link(quack)
