@@ -39,3 +39,48 @@ query I
 SELECT count(*) FROM ducklake.t1 WHERE g && 'POLYGON((0.1234560 0.1234560, 0.1234568 0.1234560, 0.1234568 0.1234568, 0.1234560 0.1234568, 0.1234560 0.1234560))'::GEOMETRY
 ----
 1
+
+# written by DuckDB 1.5.6, whose bounds are rounded to six decimals
+unzip data/old_ducklake/geo_bbox_precision.db.gz {TEST_DIR}/geo_bbox_precision_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/geo_bbox_precision_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/geo_bbox_precision/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query I
+SELECT extra_stats FROM __ducklake_metadata_legacy.ducklake_table_column_stats ORDER BY table_id
+----
+{"bbox": {"xmin": 0.123457, "xmax": 0.123457, "ymin": 0.123457, "ymax": 0.123457, "zmin": null, "zmax": null, "mmin": null, "mmax": null}, "types": ["point"]}
+{"bbox": {"xmin": 1.000000, "xmax": 1.000000, "ymin": 2.000000, "ymax": 2.000000, "zmin": 3.000000, "zmax": 3.000000, "mmin": null, "mmax": null}, "types": ["point_z"]}
+
+query II
+SELECT (SELECT count(*) FROM legacy.t WHERE g && 'POLYGON((0.1234560 0.1234560, 0.1234568 0.1234560, 0.1234568 0.1234568, 0.1234560 0.1234568, 0.1234560 0.1234560))'::GEOMETRY), (SELECT count(*) FROM legacy.z WHERE vertex_extract(g, 'z') > 3.0000001)
+----
+1	1
+
+# the widened bounds are kept when the table statistics are written again
+unzip data/old_ducklake/geo_bbox_precision.db.gz {TEST_DIR}/geo_bbox_precision_migrated.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/geo_bbox_precision_migrated.db' AS migrated (DATA_PATH 'data/old_ducklake/geo_bbox_precision/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+COPY (SELECT 'POINT Z (1 2 0)'::GEOMETRY AS g) TO '{TEST_DIR}/geo_bbox_precision_origin.parquet' (GEOPARQUET_VERSION 'V2')
+
+statement ok
+CALL ducklake_add_data_files('migrated', 'z', '{TEST_DIR}/geo_bbox_precision_origin.parquet')
+
+query II
+SELECT (SELECT count(*) FROM migrated.t WHERE g && 'POLYGON((0.1234560 0.1234560, 0.1234568 0.1234560, 0.1234568 0.1234568, 0.1234560 0.1234568, 0.1234560 0.1234560))'::GEOMETRY), (SELECT count(*) FROM migrated.z WHERE vertex_extract(g, 'z') > 3.0000001)
+----
+1	1
+
+statement ok
+DETACH migrated
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/geo_bbox_precision_migrated.db' AS migrated (DATA_PATH 'data/old_ducklake/geo_bbox_precision/', OVERRIDE_DATA_PATH TRUE)
+
+query I
+SELECT count(*) FROM migrated.z WHERE vertex_extract(g, 'z') > 3.0000001
+----
+1
