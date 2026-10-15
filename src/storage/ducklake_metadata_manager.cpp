@@ -1054,7 +1054,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
-	// child indexes from the root column to each column of the current table - stable since we only append
+	// child indexes from the root column to each column, stable since children are only appended
 	unordered_map<idx_t, vector<idx_t>> column_paths;
 	for (auto &row : *result) {
 		auto table_id = TableIndex(row.GetValue<uint64_t>(1));
