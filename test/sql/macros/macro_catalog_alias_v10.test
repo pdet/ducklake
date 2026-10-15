@@ -27,6 +27,24 @@ SELECT sql FROM __ducklake_metadata_dl.ducklake_macro_impl ORDER BY macro_id
 SELECT * FROM dl.main.t
 (SELECT (max(x) + 1) FROM dl.main.t)
 
+# a 1.0 catalog holds no placeholder, so a catalog named like it keeps its name
+statement ok
+ATTACH ':memory:' AS "{DUCKLAKE_CATALOG}"
+
+statement ok
+CREATE MACRO "{DUCKLAKE_CATALOG}".main.f() AS 7
+
+statement ok
+CREATE MACRO dl.m_external() AS "{DUCKLAKE_CATALOG}".main.f()
+
+query I
+SELECT dl.m_external()
+----
+7
+
+statement ok
+DROP MACRO dl.m_external
+
 statement ok
 DETACH dl
 
@@ -42,7 +60,9 @@ SELECT dl.m(), dl.m_new(), dl.m_migrated()
 42	43	44
 
 query T
-SELECT sql FROM __ducklake_metadata_dl.ducklake_macro_impl ORDER BY macro_id
+SELECT sql FROM __ducklake_metadata_dl.ducklake_macro_impl
+WHERE macro_id IN (SELECT macro_id FROM __ducklake_metadata_dl.ducklake_macro WHERE end_snapshot IS NULL)
+ORDER BY macro_id
 ----
 (SELECT max(x) FROM dl.main.t)
 SELECT * FROM dl.main.t

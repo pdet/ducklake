@@ -31,6 +31,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
@@ -478,15 +479,21 @@ void DuckLakeUtil::VisitQuery(QueryNode &node, const std::function<void(ParsedEx
 
 namespace {
 
-//! Replaces a catalog in the table and function names of a query
+//! Replaces a catalog in the table and function names of a query, and in the columns qualified by such a table
 struct CatalogNameReplacer {
-	CatalogNameReplacer(const Identifier &from, const Identifier &to) : from(from), to(to) {
+	CatalogNameReplacer(const Identifier &from, const Identifier &to, const vector<Identifier> &bound_names)
+	    : from(from), to(to) {
+		for (auto &name : bound_names) {
+			binds_catalog_name = binds_catalog_name || IsCatalogName(name);
+		}
 	}
 
 	const Identifier &from;
 	const Identifier &to;
-	//! Whether a table of the query is known by either catalog name, which then qualifies its methods instead
+	//! Whether a table or parameter is known by either catalog name, which then qualifies its methods and fields
 	bool binds_catalog_name = false;
+	//! The catalog, schema path and name of every table the query reads from the catalog
+	vector<vector<Identifier>> tables;
 
 	bool IsCatalogName(const Identifier &name) const {
 		return name == from || name == to;
@@ -509,6 +516,16 @@ struct CatalogNameReplacer {
 		}
 	}
 
+	//! Whether the names start with the full name of a table the query reads from the catalog
+	bool QualifiesTable(const vector<Identifier> &names) const {
+		for (auto &table : tables) {
+			if (names.size() > table.size() && std::equal(table.begin(), table.end(), names.begin())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void AddBinding(TableRef &ref) {
 		if (!ref.alias.empty()) {
 			binds_catalog_name = binds_catalog_name || IsCatalogName(ref.alias);
@@ -522,20 +539,18 @@ struct CatalogNameReplacer {
 				binds_catalog_name = binds_catalog_name || IsCatalogName(name);
 			}
 		}
+		if (ref.type == TableReferenceType::BASE_TABLE) {
+			auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
+			if (name.Catalog() == from) {
+				tables.push_back(name.Path());
+			}
+		}
 	}
 
 	void ReplaceInRef(TableRef &ref) {
 		if (ref.type == TableReferenceType::BASE_TABLE) {
 			auto &table = ref.Cast<BaseTableRef>();
 			table.SetQualifiedName(Replace(table.GetQualifiedName()));
-			if (table.at_clause) {
-				Run(*table.at_clause->ExpressionMutable());
-			}
-		} else if (ref.type == TableReferenceType::JOIN) {
-			auto &ranking = ref.Cast<JoinRef>().ranking_expression;
-			if (ranking) {
-				Run(*ranking);
-			}
 		}
 	}
 
@@ -552,6 +567,13 @@ struct CatalogNameReplacer {
 			if (!binds_catalog_name) {
 				auto &window = expr.Cast<WindowExpression>();
 				window.SetQualifiedName(Replace(window.GetQualifiedName()));
+			}
+			break;
+		}
+		case ExpressionClass::COLUMN_REF: {
+			auto &names = expr.Cast<ColumnRefExpression>().ColumnNamesMutable();
+			if (!binds_catalog_name && QualifiesTable(names)) {
+				names[0] = to;
 			}
 			break;
 		}
@@ -578,29 +600,46 @@ struct CatalogNameReplacer {
 		}
 	}
 
+	//! Visits the query and also the AT clauses and NEAREST rankings that the query traversal does not reach
 	template <class T>
-	void Run(T &query) {
-		DuckLakeUtil::VisitQuery(
-		    query, [&](ParsedExpression &expr) { ReplaceInExpression(expr); },
-		    [&](TableRef &ref) { ReplaceInRef(ref); });
+	void Visit(T &query, const std::function<void(ParsedExpression &)> &expr_callback,
+	           const std::function<void(TableRef &)> &ref_callback) {
+		DuckLakeUtil::VisitQuery(query, expr_callback, [&](TableRef &ref) {
+			ref_callback(ref);
+			if (ref.type == TableReferenceType::BASE_TABLE) {
+				auto &at_clause = ref.Cast<BaseTableRef>().at_clause;
+				if (at_clause) {
+					Visit(*at_clause->ExpressionMutable(), expr_callback, ref_callback);
+				}
+			} else if (ref.type == TableReferenceType::JOIN) {
+				auto &ranking = ref.Cast<JoinRef>().ranking_expression;
+				if (ranking) {
+					Visit(*ranking, expr_callback, ref_callback);
+				}
+			}
+		});
 	}
 
 	template <class T>
 	void Apply(T &query) {
-		DuckLakeUtil::VisitQuery(
+		Visit(
 		    query, [](ParsedExpression &) {}, [&](TableRef &ref) { AddBinding(ref); });
-		Run(query);
+		Visit(
+		    query, [&](ParsedExpression &expr) { ReplaceInExpression(expr); },
+		    [&](TableRef &ref) { ReplaceInRef(ref); });
 	}
 };
 
 } // namespace
 
-void DuckLakeUtil::ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to) {
-	CatalogNameReplacer(from, to).Apply(node);
+void DuckLakeUtil::ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to,
+                                      const vector<Identifier> &bound_names) {
+	CatalogNameReplacer(from, to, bound_names).Apply(node);
 }
 
-void DuckLakeUtil::ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to) {
-	CatalogNameReplacer(from, to).Apply(expr);
+void DuckLakeUtil::ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to,
+                                      const vector<Identifier> &bound_names) {
+	CatalogNameReplacer(from, to, bound_names).Apply(expr);
 }
 
 string DuckLakeUtil::OptionalIdxOrNull(const optional_idx &v) {

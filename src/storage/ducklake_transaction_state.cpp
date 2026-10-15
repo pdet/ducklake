@@ -508,12 +508,16 @@ static string MacroParameterTypeToString(const LogicalType &type) {
 
 //! The SQL of a macro, with its own catalog written as the placeholder on catalogs that support 1.1 metadata
 template <class T>
-static string MacroSQL(const T &node, const DuckLakeCatalog &catalog) {
+static string MacroSQL(const T &node, const MacroFunction &macro, const DuckLakeCatalog &catalog) {
 	if (!catalog.SupportsV1_1Metadata()) {
 		return node.ToString();
 	}
+	vector<Identifier> parameter_names;
+	for (auto &parameter : macro.parameters) {
+		parameter_names.push_back(parameter->GetName());
+	}
 	auto copy = node.Copy();
-	DuckLakeUtil::ReplaceCatalogName(*copy, catalog.GetName(), DuckLakeUtil::CATALOG_PLACEHOLDER);
+	DuckLakeUtil::ReplaceCatalogName(*copy, catalog.GetName(), DuckLakeUtil::CATALOG_PLACEHOLDER, parameter_names);
 	return copy->ToString();
 }
 
@@ -535,13 +539,13 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 		case MacroType::SCALAR_MACRO: {
 			macro_impl.type = "scalar";
 			auto &scalar_macro = impl->Cast<ScalarMacroFunction>();
-			macro_impl.sql = MacroSQL(*scalar_macro.expression, catalog);
+			macro_impl.sql = MacroSQL(*scalar_macro.expression, *impl, catalog);
 			break;
 		}
 		case MacroType::TABLE_MACRO: {
 			macro_impl.type = "table";
 			auto &table_macro = impl->Cast<TableMacroFunction>();
-			macro_impl.sql = MacroSQL(*table_macro.query_node, catalog);
+			macro_impl.sql = MacroSQL(*table_macro.query_node, *impl, catalog);
 			break;
 		}
 		default:

@@ -80,9 +80,11 @@ public:
 	                       const std::function<void(TableRef &)> &ref_callback);
 	static void VisitQuery(ParsedExpression &expr, const std::function<void(ParsedExpression &)> &expr_callback,
 	                       const std::function<void(TableRef &)> &ref_callback);
-	//! Replaces the catalog `from` by `to` in the table and function names of a query
-	static void ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to);
-	static void ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to);
+	//! Replaces the catalog `from` by `to` in the names of a query, where bound_names are known before its tables
+	static void ReplaceCatalogName(QueryNode &node, const Identifier &from, const Identifier &to,
+	                               const vector<Identifier> &bound_names);
+	static void ReplaceCatalogName(ParsedExpression &expr, const Identifier &from, const Identifier &to,
+	                               const vector<Identifier> &bound_names);
 
 	//! Returns true if the given column name conflicts with inlined data system columns
 	static bool IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns);
