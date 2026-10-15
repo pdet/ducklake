@@ -102,7 +102,7 @@ SELECT min(t) FROM ducklake.ms
 ----
 2020-01-01 12:34:56.124
 
-# a bound that does not print in the type of the table is dropped
+# a bound that does not cast to the type of the table is dropped
 statement ok
 COPY (FROM (VALUES (TIMESTAMP '2020-01-01'), (TIMESTAMP '294247-01-10 04:00:54.775806')) v(t)) TO '{DATA_PATH}/retyped_ts_max.parquet'
 
@@ -113,9 +113,14 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'ms_max', '{DATA_PATH}/retyped_ts_max.parquet')
 
 query I
+SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2019-01-01'
+----
+0
+
+statement error
 SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2021-01-01'
 ----
-1
+can't be cast to the destination type
 
 # the bounds are stored as values of the table type
 query III

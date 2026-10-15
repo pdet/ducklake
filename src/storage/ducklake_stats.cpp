@@ -4,7 +4,6 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
-#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -192,12 +191,7 @@ static bool TryCastBound(string &bound, const LogicalType &source, const Logical
 	if (!target_value) {
 		return false;
 	}
-	try {
-		bound = target_value->ToString();
-	} catch (ConversionException &) {
-		// a timestamp outside the range its type can print
-		return false;
-	}
+	bound = target_value->ToString();
 	return true;
 }
 
