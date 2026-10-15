@@ -1,0 +1,65 @@
+# name: test/sql/partitioning/epoch_timestamp_ns_minimum.test
+# description: epoch partition transforms floor the smallest nanosecond timestamps without an overflow
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/epoch_timestamp_ns_minimum', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE ducklake.t (ts TIMESTAMP_NS, tz TIMESTAMPTZ_NS)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_year(ts), epoch_month(ts), epoch_day(tz), epoch_hour(tz))
+
+statement ok
+INSERT INTO ducklake.t VALUES
+	(make_timestamp_ns(-9223372036854775806), make_timestamp_ns(-9223372036854775806)::TIMESTAMPTZ_NS),
+	(make_timestamp_ns(-9223372036854775001), make_timestamp_ns(-9223372036854775001)::TIMESTAMPTZ_NS)
+
+query II
+SELECT count(*), list(DISTINCT partition_value ORDER BY partition_value) FROM meta.ducklake_file_partition_value
+GROUP BY partition_key_index ORDER BY partition_key_index
+----
+1	[-293]
+1	[-3508]
+1	[-106752]
+1	[-2562048]
+
+query I
+SELECT list(epoch_ns(ts) ORDER BY ts) FROM ducklake.t
+----
+[-9223372036854775806, -9223372036854775001]
+
+# the smallest value that did not overflow and its neighbours keep their partitions
+statement ok
+CREATE TABLE ducklake.u (ts TIMESTAMP_NS, tz TIMESTAMPTZ_NS)
+
+statement ok
+ALTER TABLE ducklake.u SET PARTITIONED BY (epoch_year(ts), epoch_month(ts), epoch_day(tz), epoch_hour(tz))
+
+statement ok
+INSERT INTO ducklake.u VALUES
+	(make_timestamp_ns(-9223372036854775000), NULL), (make_timestamp_ns(-1), make_timestamp_ns(-1)::TIMESTAMPTZ_NS),
+	(make_timestamp_ns(0), make_timestamp_ns(0)::TIMESTAMPTZ_NS)
+
+query I
+SELECT list(partition_value ORDER BY partition_key_index) l FROM meta.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+GROUP BY data_file_id ORDER BY l
+----
+[-1, -1, -1, -1]
+[-293, -3508, NULL, NULL]
+[0, 0, 0, 0]

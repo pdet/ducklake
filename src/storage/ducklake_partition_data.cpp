@@ -222,12 +222,12 @@ static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_
 		return make_uniq<BoundConstantExpression>(Value::BIGINT(val));
 	};
 	auto nanos = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_ns", std::move(column_expr));
-	auto nanos_copy = nanos->Copy();
-	auto remainder = BindBinaryOp(context, "%", std::move(nanos_copy), bigint_const(1000));
-	auto shifted = BindBinaryOp(context, "+", std::move(remainder), bigint_const(1000));
-	auto nonneg_remainder = BindBinaryOp(context, "%", std::move(shifted), bigint_const(1000));
-	auto floored = BindBinaryOp(context, "-", std::move(nanos), std::move(nonneg_remainder));
-	auto micros = BindBinaryOp(context, "//", std::move(floored), bigint_const(1000));
+	// integer division truncates, so a negative remainder borrows one more microsecond
+	auto remainder = BindBinaryOp(context, "%", nanos->Copy(), bigint_const(1000));
+	auto borrow = BindBinaryOp(context, "//", BindBinaryOp(context, "-", bigint_const(999), std::move(remainder)),
+	                           bigint_const(1000));
+	auto truncated = BindBinaryOp(context, "//", std::move(nanos), bigint_const(1000));
+	auto micros = BindBinaryOp(context, "-", std::move(truncated), std::move(borrow));
 	return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(micros));
 }
 
