@@ -686,6 +686,10 @@ void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeD
 				// If a file already exists we remove it
 				auto &fs = FileSystem::GetFileSystem(context);
 				for (auto &old_file : existing_entry->second) {
+					// the committed delete file that the old file replaced is the one this commit replaces
+					if (old_file.overwritten_delete_file.delete_file_id.IsValid()) {
+						file.overwritten_delete_file = old_file.overwritten_delete_file;
+					}
 					fs.RemoveFile(old_file.file_name);
 				}
 				existing_entry->second.clear();
@@ -854,12 +858,11 @@ Connection &DuckLakeTransaction::GetConnection() {
 		Settings::Set<CatalogErrorMaxSchemasSetting>(*connection->context, SetScope::SESSION, Value::UBIGINT(0));
 		// metadata queries rely on ascending ORDER BY, which a global SET default_order would change
 		Settings::Set<DefaultOrderSetting>(*connection->context, SetScope::SESSION, Value("ASC"));
-		// FIXME: disable postgres_scanner experimental filter pushdown for metadata queries
+		// FIXME: disable postgres_scanner filter pushdown for metadata queries
 		// it does not support all filter types DuckDB may push down (e.g. EXPRESSION_FILTER)
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "postgres" || metadata_type == "postgres_scanner") {
-			DuckLakeUtil::SetExtensionSetting(*connection->context, "pg_experimental_filter_pushdown",
-			                                  Value::BOOLEAN(false));
+			DuckLakeUtil::SetExtensionSetting(*connection->context, "pg_enable_filter_pushdown", Value::BOOLEAN(false));
 		} else if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
 			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
 			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
@@ -938,6 +941,9 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 			if (!IsTransactionLocal(table_id)) {
 				changes.altered_tables.insert(table_id);
 				changes.altered_tables_with_schema_version_changes.insert(table_id);
+				if (table.GetLocalChange().type == LocalChangeType::SET_NULL) {
+					changes.tables_set_not_null.insert(table_id);
+				}
 			}
 			break;
 		}
@@ -1404,6 +1410,14 @@ void DuckLakeTransaction::FlushChanges() {
 	state->local_changes.RecomputeOutdatedStats(*context.lock());
 	auto retry_config = DuckLakeRetryConfig::FromContext(*context.lock());
 	auto transaction_changes = GetTransactionChanges();
+	// deleted rows may be the values a commit found, also a concurrent one
+	auto forget_columns_with_values = [&]() {
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_from);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.tables_deleted_inlined);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.altered_tables);
+		ducklake_catalog.ForgetColumnsWithValues(transaction_changes.dropped_tables);
+	};
+	forget_columns_with_values();
 	if (metadata_manager->CanSkipSnapshotFetch(transaction_changes)) {
 		lock_guard<mutex> guard(snapshot_lock);
 		auto transaction_snapshot = snapshot ? *snapshot : DuckLakeSnapshot();
@@ -1416,6 +1430,7 @@ void DuckLakeTransaction::FlushChanges() {
 			RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		}
 	}
+	forget_columns_with_values();
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
@@ -1527,8 +1542,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
-	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
-		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
+	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables,
+	                                   const set<TableIndex> &replaced_tables) {
+		return metadata_manager->WriteNewInlinedTables(snapshot, tables, replaced_tables);
 	};
 	context.write_inlined_file_deletes = [&](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
 		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(new_deletes);
@@ -1541,6 +1557,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
+	};
+	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);
+	};
+	context.set_column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		ducklake_catalog.SetColumnHoldsValues(table_id, column_id, snapshot_id);
 	};
 	auto get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
 		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
@@ -1589,10 +1611,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		auto table = get_table_entry(table_id);
 		return table ? table->GetNetDataFileRowCount(*this) : 0;
 	};
-	context.get_net_inlined_row_count = [&](TableIndex table_id) -> idx_t {
-		auto table = get_table_entry(table_id);
-		return table ? table->GetNetInlinedRowCount(*this) : 0;
-	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
@@ -1605,6 +1623,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
+		ducklake_catalog.AdvanceColumnsWithValues(snapshot_id);
 	};
 	context.set_entry_oids = [&](const ducklake_entry_oids_t &oids) {
 		ducklake_catalog.SetEntryOids(oids);
@@ -1661,9 +1680,10 @@ void DuckLakeTransaction::DeleteInlinedData(const DuckLakeInlinedTableInfo &inli
 	metadata_manager.DeleteInlinedData(inlined_table);
 }
 
-void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id) {
+void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
+                                                     bool wrote_files) {
 	lock_guard<mutex> guard(flushed_inlined_lock);
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id});
+	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id, wrote_files});
 }
 
 bool DuckLakeTransaction::InlinedTableFlushed(const string &table_name) {
@@ -1718,12 +1738,7 @@ Identifier DuckLakeTransaction::GetDefaultSchemaName() {
 	return *default_schema;
 }
 
-DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
-	auto catalog_snapshot = ducklake_catalog.CatalogSnapshot();
-	if (catalog_snapshot) {
-		// the catalog was opened at a specific snapshot - load that snapshot
-		return GetSnapshot(catalog_snapshot);
-	}
+DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	lock_guard<mutex> guard(snapshot_lock);
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
@@ -1732,11 +1747,26 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 	return *snapshot;
 }
 
+DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
+	auto catalog_snapshot = ducklake_catalog.CatalogSnapshot();
+	if (catalog_snapshot) {
+		// the catalog was opened at a specific snapshot - load that snapshot
+		return GetSnapshot(catalog_snapshot);
+	}
+	return GetLatestSnapshot();
+}
+
+idx_t DuckLakeTransaction::GetNewestVisibleSnapshotId() {
+	return GetLatestSnapshot().snapshot_id;
+}
+
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {
 	if (!at_clause) {
 		// no AT-clause - get the latest snapshot
 		return GetSnapshot();
 	}
+	// snapshots committed after the transaction started are not visible to it
+	auto newest_snapshot_id = GetNewestVisibleSnapshotId();
 	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
 	// this is used as a caching key for the snapshot
 	child_list_t<Value> values;
@@ -1750,7 +1780,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		return entry->second;
 	}
 	// find the snapshot and cache it
-	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound);
+	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound, newest_snapshot_id);
 	snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
 	return result_snapshot;
 }
@@ -2293,9 +2323,13 @@ optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(SchemaIndex sc
 
 optional_ptr<CatalogEntry> DuckLakeTransaction::GetLocalEntryById(TableIndex table_id) {
 	for (auto &schema_entry : state->new_tables) {
-		auto entry = schema_entry.second->GetEntryById(table_id);
-		if (entry) {
-			return entry;
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			if (entry.second->type != CatalogType::TABLE_ENTRY) {
+				continue;
+			}
+			if (entry.second->Cast<DuckLakeTableEntry>().GetTableId() == table_id) {
+				return entry.second.get();
+			}
 		}
 	}
 	return nullptr;
