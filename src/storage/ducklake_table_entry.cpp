@@ -1131,7 +1131,14 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	table_info.columns.SetAllowDuplicates(false);
 
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_field_id));
-	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
+	auto result = AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
+	if (transaction.HasTransactionInlinedData(GetTableId()) &&
+	    !transaction.GetMetadataManager().CanInlineColumns(result->Cast<DuckLakeTableEntry>().GetTableColumns())) {
+		throw NotImplementedException("Cannot change the type of column \"%s\" of a table with rows inlined in this "
+		                              "transaction, the metadata catalog cannot inline the new type",
+		                              info.column_path[0].GetIdentifierName());
+	}
+	return result;
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
@@ -1139,11 +1146,6 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
                                                              shared_ptr<DuckLakeFieldData> new_field_data) {
 	auto result = make_uniq<DuckLakeTableEntry>(*this, info, LocalChangeType::CHANGE_COLUMN_TYPE,
 	                                            std::move(change_info), std::move(new_field_data));
-	if (transaction.HasTransactionInlinedData(GetTableId()) &&
-	    !transaction.GetMetadataManager().CanInlineColumns(result->GetTableColumns())) {
-		throw NotImplementedException("Cannot change the type of a column of a table with rows inlined in this "
-		                              "transaction, the metadata catalog cannot inline the new type");
-	}
 	auto &partition = result->partition_data;
 	if (!partition) {
 		return std::move(result);
