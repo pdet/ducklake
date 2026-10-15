@@ -208,6 +208,8 @@ public:
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
 	virtual bool SupportsInlining(const LogicalType &type);
+	//! Check if the inlined data tables of this metadata backend can store the values of the chunk
+	virtual bool CanInlineValues(DataChunk &chunk);
 	//! Check if this metadata manager supports the DuckDB Appender API for fast inserts
 	//! Returns true for DuckDB metadata, false for external databases (Postgres, SQLite)
 	virtual bool SupportsAppender() const {

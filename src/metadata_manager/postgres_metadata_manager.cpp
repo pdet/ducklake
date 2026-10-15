@@ -6,6 +6,9 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "common/ducklake_types.hpp"
+#include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 
 namespace duckdb {
 
@@ -196,6 +199,54 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	default:
 		return true;
 	}
+}
+
+static bool ContainsNulByte(Vector &vector, idx_t offset, idx_t count) {
+	vector.Flatten();
+	auto &validity = FlatVector::Validity(vector);
+	switch (vector.GetType().id()) {
+	case LogicalTypeId::VARCHAR: {
+		auto strings = FlatVector::GetData<string_t>(vector);
+		for (idx_t i = offset; i < offset + count; i++) {
+			if (validity.RowIsValid(i) && memchr(strings[i].GetData(), '\0', strings[i].GetSize())) {
+				return true;
+			}
+		}
+		return false;
+	}
+	case LogicalTypeId::STRUCT:
+		for (auto &child : StructVector::GetEntries(vector)) {
+			if (ContainsNulByte(child, offset, count)) {
+				return true;
+			}
+		}
+		return false;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP: {
+		auto entries = FlatVector::GetData<list_entry_t>(vector);
+		auto &child = ListVector::GetChildMutable(vector);
+		for (idx_t i = offset; i < offset + count; i++) {
+			if (validity.RowIsValid(i) && ContainsNulByte(child, entries[i].offset, entries[i].length)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	default:
+		return false;
+	}
+}
+
+bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
+	// nested values are stored as text, which cannot hold a NUL byte
+	for (auto &column : chunk.data) {
+		auto &type = column.GetType();
+		if (DuckLakeTypes::IsNested(type) && TypeVisitor::Contains(type, LogicalTypeId::VARCHAR) &&
+		    ContainsNulByte(column, 0, chunk.size())) {
+			return false;
+		}
+	}
+	return true;
 }
 
 string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
