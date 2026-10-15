@@ -21,6 +21,7 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -533,6 +534,10 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	}
 
 	auto child = input.binder->UnionOperators(std::move(flushes), 3);
+	if (child->type == LogicalOperatorType::LOGICAL_UNION) {
+		// the flushes are independent, so their pipelines may run concurrently
+		child->Cast<LogicalSetOperation>().allow_out_of_order = true;
+	}
 	// We want to construct the query tree equivalent to the SQL query below.
 	// That way we can return the number of rows that were flushed for each table
 	//

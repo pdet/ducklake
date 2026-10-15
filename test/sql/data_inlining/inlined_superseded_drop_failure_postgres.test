@@ -66,7 +66,7 @@ SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER
 ducklake_inlined_data_1_2
 
 statement ok
-CALL pg_clear_cache()
+CALL postgres_clear_cache()
 
 statement error
 SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_1_1
