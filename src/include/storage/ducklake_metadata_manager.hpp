@@ -208,6 +208,8 @@ public:
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
 	virtual bool SupportsInlining(const LogicalType &type);
+	//! Check if the inlined data tables of this metadata backend can store the values of the chunk
+	virtual bool CanInlineValues(DataChunk &chunk);
 	//! Check if this metadata manager supports the DuckDB Appender API for fast inserts
 	//! Returns true for DuckDB metadata, false for external databases (Postgres, SQLite)
 	virtual bool SupportsAppender() const {
@@ -531,7 +533,7 @@ public:
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
 	static string SnapshotAndStatsAndChangesQuery(bool include_exactness);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
-	virtual string GetSnapshotAndStatsAndChangesQuery(bool include_exactness) const;
+	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
@@ -591,6 +593,8 @@ public:
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
+	//! Restores the defaults that older versions dropped when they renamed a struct field
+	void MigrateRenamedFieldDefaults();
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}
@@ -609,7 +613,9 @@ protected:
 
 	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                             const string &metadata_table_prefix);
-	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+	//! The snapshot placeholders of the query are replaced later, unless an override does it
+	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                                     const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                                     const vector<idx_t> &runtime_filter_stats_columns,
 	                                     FileListType file_list_type = FileListType::SCAN,
