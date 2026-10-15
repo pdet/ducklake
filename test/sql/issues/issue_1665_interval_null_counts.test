@@ -111,3 +111,25 @@ statement error
 ALTER TABLE alter_legacy.t ALTER COLUMN iv SET NOT NULL
 ----
 the column has NULL values
+
+# the zero counts of the file written by DuckDB 1.5.6 do not show that the column holds no values
+unzip data/old_ducklake/interval_null_counts.db.gz {TEST_DIR}/issue_1665_bounds.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1665_bounds.db' AS bounds_legacy (DATA_PATH 'data/old_ducklake/interval_null_counts/', OVERRIDE_DATA_PATH TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO bounds_legacy.t VALUES (4, NULL)
+
+statement ok
+INSERT INTO bounds_legacy.t VALUES (5, INTERVAL 1 MINUTE)
+
+query III
+SELECT contains_null, min_value, max_value FROM __ducklake_metadata_bounds_legacy.ducklake_table_column_stats WHERE column_id = 2
+----
+true	NULL	NULL
+
+query II
+SELECT min(iv), max(iv) FROM bounds_legacy.t
+----
+00:01:00	1 day
