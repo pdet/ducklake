@@ -615,6 +615,10 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (copy_input.partition_data) {
 		// we are partitioning - generate partition expressions (if any)
 		GeneratePartitionExpressions(context, copy_input, result);
+		// a partitioned copy does not keep the order of its input
+		for (auto &order : copy_input.sort_orders) {
+			copy.order_columns.push_back(order.Copy());
+		}
 	}
 	return result;
 }
@@ -686,11 +690,21 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
+void DuckLakeInsert::ResolveSortOrders(vector<BoundOrderByNode> &orders, TableIndex table_index,
+                                       const vector<LogicalType> &types) {
+	auto bindings = LogicalOperator::GenerateColumnBindings(table_index, types.size());
+	ColumnBindingResolver resolver(std::move(bindings), types);
+	for (auto &order : orders) {
+		resolver.VisitExpression(&order.expression);
+	}
+}
+
 //! Wrap the plan in an ORDER BY on the sort keys, usable before the table entry exists (CTAS)
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      PhysicalOperator &plan, SchemaCatalogEntry &schema,
                                                      const ColumnList &columns, const Identifier &table_name,
-                                                     const DuckLakeSort &sort_data) {
+                                                     const DuckLakeSort &sort_data,
+                                                     vector<BoundOrderByNode> &sort_orders) {
 	auto binder = Binder::CreateBinder(context);
 	TableIndex table_index(0);
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
@@ -698,12 +712,13 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	if (orders.empty()) {
 		return nullptr;
 	}
-
-	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan
-	auto bindings = LogicalOperator::GenerateColumnBindings(table_index, plan.GetTypes().size());
-	ColumnBindingResolver resolver(std::move(bindings), plan.GetTypes());
+	DuckLakeInsert::ResolveSortOrders(orders, table_index, plan.GetTypes());
+	// a copy evaluates its sort keys again, so it only gets the keys before the first volatile one
 	for (auto &order : orders) {
-		resolver.VisitExpression(&order.expression);
+		if (order.expression->IsVolatile()) {
+			break;
+		}
+		sort_orders.push_back(order.Copy());
 	}
 
 	auto projection_map = PhysicalJoin::FillProjectionMap(plan, {});
@@ -720,7 +735,8 @@ DuckLakeInsertPipeline DuckLakeInsert::PlanInsertPipeline(ClientContext &context
                                                           idx_t data_inlining_row_limit) {
 	DuckLakeInsertPipeline result {plan, nullptr, false};
 	if (sort_data && sort_on_insert) {
-		auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name, *sort_data);
+		auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name, *sort_data,
+		                                  result.sort_orders);
 		if (sorted_plan) {
 			result.root = *sorted_plan;
 			result.sorted = true;
@@ -733,8 +749,8 @@ DuckLakeInsertPipeline DuckLakeInsert::PlanInsertPipeline(ClientContext &context
 		result.root = inline_data;
 		// with sort_on_insert off only the Parquet bound overflow rows are sorted, after inlining
 		if (sort_data && !sort_on_insert) {
-			auto sorted_plan =
-			    PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name, *sort_data);
+			auto sorted_plan = PlanInsertSort(context, planner, result.root.get(), schema, columns, table_name,
+			                                  *sort_data, result.sort_orders);
 			if (sorted_plan) {
 				result.root = *sorted_plan;
 				result.sorted = true;
@@ -809,6 +825,7 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 	DuckLakeCopyInput copy_input(context, ducklake_table);
 	copy_input.ordered_input = pipeline.sorted;
+	copy_input.sort_orders = std::move(pipeline.sort_orders);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 	auto &insert = DuckLakeInsert::PlanInsert(context, planner, ducklake_table, std::move(copy_input.encryption_key));
 	return pipeline.AttachInsert(insert, physical_copy);
@@ -852,6 +869,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	DuckLakeCopyInput copy_input(context, duck_schema, columns, table_data_path, *field_data, partition_data.get());
 	copy_input.table_options = table_options;
 	copy_input.ordered_input = pipeline.sorted;
+	copy_input.sort_orders = std::move(pipeline.sort_orders);
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 
 	auto &insert =

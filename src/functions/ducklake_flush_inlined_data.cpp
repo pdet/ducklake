@@ -35,6 +35,9 @@
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_sort_data.hpp"
 #include "common/parquet_file_scanner.hpp"
+#include "duckdb/common/bind_helpers.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/expression_binder.hpp"
 
 namespace duckdb {
 
@@ -315,6 +318,19 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	}
 
 	DuckLakeCopyInput copy_input(context, table);
+	if (!sort_order_sql.empty()) {
+		auto orders = Parser(context).ParseOrderList(sort_order_sql);
+		auto &columns = table.GetColumns();
+		auto sort_index = binder.GenerateTableIndex();
+		copy_input.sort_orders =
+		    BindOrderByNodes(binder, sort_index, Identifier("inlined_data"),
+		                     StringsToIdentifiers(columns.GetColumnNames()), columns.GetColumnTypes(), orders);
+		for (auto &order : copy_input.sort_orders) {
+			// the read of the inlined rows orders them with their collation, and so does the copy
+			ExpressionBinder::PushCollation(context, order.expression, order.expression->GetReturnType());
+		}
+		DuckLakeInsert::ResolveSortOrders(copy_input.sort_orders, sort_index, columns.GetColumnTypes());
+	}
 	unique_ptr<LogicalCopyToFile> copy;
 	auto root = DuckLakeCompactor::PlanRewriteScan(
 	    context, binder, table, copy_input, true, true,
