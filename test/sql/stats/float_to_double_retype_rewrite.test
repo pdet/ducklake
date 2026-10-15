@@ -102,13 +102,40 @@ SELECT count(*) FROM dl.s WHERE s.a > 0.2
 ----
 1
 
+# a column retyped and then dropped, merged after the drop, still reads with time travel
+statement ok
+CREATE TABLE dl.d(k INTEGER, v FLOAT)
+
+statement ok
+INSERT INTO dl.d VALUES (1, 0.1)
+
+statement ok
+INSERT INTO dl.d VALUES (2, 0.2)
+
+statement ok
+ALTER TABLE dl.d ALTER v TYPE DOUBLE
+
+statement ok
+SET VARIABLE retyped_snapshot = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+ALTER TABLE dl.d DROP COLUMN v
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+SELECT count(*) FROM dl.d AT (VERSION => getvariable('retyped_snapshot')) WHERE v > 0.2
+----
+1
+
 # the new files keep their FLOAT type, their bounds are the DOUBLE values read from them
 query III
 SELECT tbl.table_name, stats.min_value, stats.max_value
 FROM meta.ducklake_file_column_stats stats
 JOIN meta.ducklake_table tbl USING (table_id)
 JOIN meta.ducklake_data_file df USING (data_file_id)
-WHERE df.end_snapshot IS NULL
+WHERE df.end_snapshot IS NULL AND tbl.table_name <> 'd'
 ORDER BY ALL
 ----
 f	0.10000000149011612	0.20000000298023224

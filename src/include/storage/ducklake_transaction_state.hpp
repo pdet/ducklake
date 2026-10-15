@@ -273,6 +273,8 @@ public:
 	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
+	//! The columns other transactions retyped to DOUBLE after the snapshot of a retried commit
+	map<TableIndex, set<FieldIndex>> float_columns_retyped_by_others;
 };
 
 } // namespace duckdb

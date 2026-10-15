@@ -318,8 +318,9 @@ void DuckLakeInsert::WidenRetypedFloatBounds(DuckLakeTransaction &transaction, D
 			if (stats.type.id() != LogicalTypeId::FLOAT) {
 				continue;
 			}
+			// the DOUBLE text of a FLOAT bound also reads back as that FLOAT, so dropped fields are widened too
 			auto field = latest_fields.GetByFieldIndex(entry.first);
-			if (field && field->Type().id() == LogicalTypeId::DOUBLE) {
+			if (!field || field->Type().id() == LogicalTypeId::DOUBLE) {
 				stats.WidenFloatBounds();
 			}
 		}
