@@ -46,7 +46,43 @@ SELECT i FROM dl.t WHERE g && 'POINT(1 2)'::GEOMETRY ORDER BY i
 1
 2
 
-# a VARIANT default that a data file cannot store is refused like an inserted value
+# a struct field that cannot be inlined is not added through a type change either
+statement ok
+CREATE TABLE dl.s (s STRUCT(i INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES ({'i': 1})
+
+statement error
+ALTER TABLE dl.s ALTER s TYPE STRUCT(i INTEGER, g GEOMETRY)
+----
+the metadata catalog cannot inline the new type
+
+statement ok
+ROLLBACK
+
+# defaults that a data file cannot store are refused like inserted values
+statement ok
+CREATE TABLE dl.n (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.n VALUES (1)
+
+statement error
+ALTER TABLE dl.n ADD COLUMN x INTERVAL DEFAULT '-1 day'::INTERVAL
+----
+Parquet files do not support negative intervals
+
+statement ok
+ROLLBACK
+
+# a VARIANT default that a data file cannot store
 statement ok
 CREATE TABLE dl.v (i INTEGER)
 

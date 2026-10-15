@@ -33,6 +33,23 @@ statement ok
 ROLLBACK
 
 statement ok
+CREATE TABLE dl.s (s STRUCT(i INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES ({'i': 1})
+
+statement error
+ALTER TABLE dl.s ALTER s TYPE STRUCT(i INTEGER, v VARIANT)
+----
+the metadata catalog cannot inline the new type
+
+statement ok
+ROLLBACK
+
+statement ok
 INSERT INTO dl.t VALUES (1), (2)
 
 statement ok

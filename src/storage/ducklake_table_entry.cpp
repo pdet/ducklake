@@ -852,7 +852,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		auto &new_col = new_table.GetColumn(new_col_idx);
 		auto &field_id = new_table.GetFieldData().GetByRootIndex(new_col.Physical());
 		auto &default_value = field_id.GetColumnData().initial_default;
-		DuckLakeInlineData::VerifyParquetVariantValue(default_value);
+		DuckLakeInlineData::VerifyFlushableValue(default_value);
 		transaction.AddColumnToLocalInlinedData(GetTableId(), new_col.Type(), field_id.GetFieldIndex(), default_value);
 	}
 
@@ -1139,6 +1139,11 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
                                                              shared_ptr<DuckLakeFieldData> new_field_data) {
 	auto result = make_uniq<DuckLakeTableEntry>(*this, info, LocalChangeType::CHANGE_COLUMN_TYPE,
 	                                            std::move(change_info), std::move(new_field_data));
+	if (transaction.HasTransactionInlinedData(GetTableId()) &&
+	    !transaction.GetMetadataManager().CanInlineColumns(result->GetTableColumns())) {
+		throw NotImplementedException("Cannot change the type of a column of a table with rows inlined in this "
+		                              "transaction, the metadata catalog cannot inline the new type");
+	}
 	auto &partition = result->partition_data;
 	if (!partition) {
 		return std::move(result);
