@@ -6,6 +6,10 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
 # DuckLake 1.0 kept one spec when it changed the type of a bucket column, so the files written before the change hold
 # the buckets of the old type
 unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype.db
@@ -31,6 +35,12 @@ EXPLAIN ANALYZE SELECT k FROM legacy.d WHERE c = 9
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 4\s.*
 
+# the spec, an insert, the type change and another insert in one transaction of DuckLake 1.0
+query I
+SELECT list(k ORDER BY k) FROM legacy.s WHERE c = 9
+----
+[9, 109]
+
 # the same after the migration
 unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype_migrated.db
 
@@ -41,3 +51,27 @@ query II
 SELECT (SELECT list(k ORDER BY k) FROM migrated.d WHERE c = 9), (SELECT list(k ORDER BY k) FROM migrated.big WHERE c = 9)
 ----
 [9, 109]	[9, 109]
+
+# a table created and partitioned in one transaction keeps pruning
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_legacy_type_change', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.n (c INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE ducklake.n SET PARTITIONED BY (bucket(2, c))
+
+statement ok
+INSERT INTO ducklake.n SELECT i, i FROM range(16) t(i)
+
+statement ok
+COMMIT
+
+query II
+EXPLAIN ANALYZE SELECT k FROM ducklake.n WHERE c = 9
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*

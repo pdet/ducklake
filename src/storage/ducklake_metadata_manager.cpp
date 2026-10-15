@@ -983,13 +983,13 @@ static void
 LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
                       const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
                       const vector<DuckLakeTableInfo> &tables, vector<DuckLakePartitionInfo> &partitions) {
-	map<pair<idx_t, idx_t>, reference<const DuckLakeColumnInfo>> columns;
+	map<pair<idx_t, idx_t>, pair<reference<const DuckLakeTableInfo>, reference<const DuckLakeColumnInfo>>> columns;
 	for (auto &table : tables) {
 		for (auto &column : table.columns) {
-			columns.emplace(make_pair(table.id.index, column.id.index), column);
+			columns.emplace(make_pair(table.id.index, column.id.index), make_pair(std::ref(table), std::ref(column)));
 		}
 	}
-	// only a column defined again after its spec began needs the type it had then
+	// a column defined again in or after the snapshot of its spec needs the type it had before
 	set<TableIndex> table_ids;
 	set<FieldIndex> column_ids;
 	for (auto &partition : partitions) {
@@ -1001,9 +1001,12 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 			if (entry == columns.end()) {
 				continue;
 			}
-			auto &column = entry->second.get();
-			if (column.begin_snapshot.IsValid() && partition.begin_snapshot.IsValid() &&
-			    column.begin_snapshot.GetIndex() <= partition.begin_snapshot.GetIndex()) {
+			auto &table = entry->second.first.get();
+			auto &column = entry->second.second.get();
+			auto column_begin = column.begin_snapshot;
+			if (column_begin.IsValid() && partition.begin_snapshot.IsValid() &&
+			    (column_begin.GetIndex() < partition.begin_snapshot.GetIndex() ||
+			     column_begin == table.begin_snapshot)) {
 				field.bucket_source_type = column.type;
 				continue;
 			}
@@ -1017,24 +1020,30 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 	auto table_id_list = GenerateIDList(table_ids);
 	auto result =
 	    query_executor(snapshot, StringUtil::Format(R"(
-SELECT part.partition_id, col.column_id, col.column_type
+SELECT part.partition_id, col.column_id, col.column_type, col.begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = part.table_id
 WHERE {SNAPSHOT_ID} >= part.begin_snapshot AND ({SNAPSHOT_ID} < part.end_snapshot OR part.end_snapshot IS NULL)
   AND part.table_id IN (%s) AND col.table_id IN (%s) AND col.column_id IN (%s) AND col.parent_column IS NULL
-  AND part.begin_snapshot >= col.begin_snapshot AND (part.begin_snapshot < col.end_snapshot OR col.end_snapshot IS NULL)
+  AND part.begin_snapshot >= col.begin_snapshot AND (part.begin_snapshot <= col.end_snapshot OR col.end_snapshot IS NULL)
 )",
 	                                                table_id_list, table_id_list, GenerateIDList(column_ids)));
 	result->ThrowIfError("Failed to get the bucket column types of the partition specs from DuckLake: ");
-	map<pair<idx_t, idx_t>, string> source_types;
+	// the definition that ended in the snapshot of the spec precedes the one that began in it
+	map<pair<idx_t, idx_t>, pair<idx_t, string>> source_types;
 	for (auto &row : *result) {
-		source_types[make_pair(row.GetValue<uint64_t>(0), row.GetValue<uint64_t>(1))] = row.GetValue<string>(2);
+		auto key = make_pair(row.GetValue<uint64_t>(0), row.GetValue<uint64_t>(1));
+		auto begin_snapshot = row.GetValue<uint64_t>(3);
+		auto entry = source_types.find(key);
+		if (entry == source_types.end() || begin_snapshot < entry->second.first) {
+			source_types[key] = make_pair(begin_snapshot, row.GetValue<string>(2));
+		}
 	}
 	for (auto &partition : partitions) {
 		for (auto &field : partition.fields) {
 			auto entry = source_types.find(make_pair(partition.id.GetIndex(), field.field_id.index));
 			if (entry != source_types.end()) {
-				field.bucket_source_type = entry->second;
+				field.bucket_source_type = entry->second.second;
 			}
 		}
 	}
@@ -1109,7 +1118,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND
 		      {SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)
-	) AS column_tags, default_value_type, col.begin_snapshot
+	) AS column_tags, default_value_type, col.begin_snapshot, tbl.begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_table tbl
 LEFT JOIN {METADATA_CATALOG}.ducklake_column col USING (table_id)
 WHERE {SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL)
@@ -1154,6 +1163,9 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			} else {
 				// path is provided - load it
 				table_info.path = FromRelativePath(ReadPath(row, 6), schema.path, separator);
+			}
+			if (!row.IsNull(COLUMN_INDEX_START + 10)) {
+				table_info.begin_snapshot = row.GetValue<uint64_t>(COLUMN_INDEX_START + 10);
 			}
 			tables.push_back(std::move(table_info));
 		}

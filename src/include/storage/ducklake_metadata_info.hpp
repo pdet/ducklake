@@ -115,6 +115,8 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	//! The snapshot of the table row loaded from the catalog
+	optional_idx begin_snapshot;
 };
 
 //! Stores the information on macro parameters
