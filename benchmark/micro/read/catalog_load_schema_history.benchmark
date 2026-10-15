@@ -10,20 +10,33 @@ require ducklake
 
 cache_file catalog_load_schema_history_ready.marker
 
-# Line k of the generated schema.sql commits one or two snapshots
+# Each iteration commits one or two snapshots
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/catalog_load_schema_history_gen';
-COPY (SELECT CASE
-WHEN k < 10 THEN 'CREATE TABLE lake.t' || k || ' (' || cols || ');'
-WHEN k < 310 THEN 'DROP TABLE lake.t0; COMMIT; BEGIN; CREATE TABLE lake.t0 (' || cols || ');'
-ELSE 'ALTER TABLE lake.t1 ADD COLUMN x INTEGER; COMMIT; BEGIN; ALTER TABLE lake.t1 DROP COLUMN x;'
-END || ' COMMIT; BEGIN;'
-FROM range(410) t(k), (SELECT string_agg('c' || j || ' INTEGER', ', ' ORDER BY j) AS cols FROM range(40) t(j))
-ORDER BY k)
-TO '${BENCHMARK_DIR}/catalog_load_schema_history_gen/schema.sql' (HEADER false, QUOTE '');
 @create catalog_load_schema_history
 @attach catalog_load_schema_history AS lake (DATA_PATH '${BENCHMARK_DIR}/catalog_load_schema_history_files')
-IMPORT DATABASE '${BENCHMARK_DIR}/catalog_load_schema_history_gen';
+BEGIN;
+@for k in range(310)
+@if k < 10
+CREATE TABLE lake.t@{k} (
+@end
+@if k >= 10
+DROP TABLE lake.t0;
+COMMIT; BEGIN;
+CREATE TABLE lake.t0 (
+@end
+@for j in range(39)
+c@{j} INTEGER,
+@end
+c39 INTEGER);
+COMMIT; BEGIN;
+@end
+@for k in range(100)
+ALTER TABLE lake.t1 ADD COLUMN x INTEGER;
+COMMIT; BEGIN;
+ALTER TABLE lake.t1 DROP COLUMN x;
+COMMIT; BEGIN;
+@end
+COMMIT;
 SELECT CASE WHEN (SELECT count(*) <> 811 FROM lake.snapshots())
 THEN error('catalog_load_schema_history: expected 811 snapshots') END;
 DETACH lake;
