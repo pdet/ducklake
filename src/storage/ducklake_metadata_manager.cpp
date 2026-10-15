@@ -3394,7 +3394,8 @@ string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &ne
 }
 
 static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transaction, const DuckLakeSnapshot &snapshot,
-                                                  const DuckLakeInlinedDataInfo &entry, const string &table_name) {
+                                                  const DuckLakeInlinedDataInfo &entry, const string &table_name,
+                                                  const vector<bool> &native_columns) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto &catalog = transaction.GetCatalog();
 	auto context = transaction.context.lock();
@@ -3427,8 +3428,10 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 
 	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id), "NULL"};
 	for (idx_t c = 0; c < data.ColumnCount(); c++) {
+		auto column = "col" + to_string(c + 1);
+		bool native = c < native_columns.size() && native_columns[c];
 		projections.push_back(
-		    DuckLakeUtil::InlinedStorageExpression(metadata_manager, "col" + to_string(c + 1), data.Types()[c]));
+		    native ? column : DuckLakeUtil::InlinedStorageExpression(metadata_manager, column, data.Types()[c]));
 	}
 	auto select = make_uniq<SelectNode>();
 	select->select_list = Parser::GetBuiltinParser().ParseExpressionList(StringUtil::Join(projections, ", "));
@@ -3464,9 +3467,12 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 				break;
 			}
 		}
+		auto &types = entry.data->data->Types();
+		vector<bool> native_columns;
 		auto it = insert_inlined_table_name_cache.find(entry.table_id.index);
 		if (it != insert_inlined_table_name_cache.end()) {
 			inlined_table_name = it->second;
+			native_columns = GetNativeInlinedColumns(inlined_table_name, types, false);
 		}
 		DuckLakeTableSchemaVersions schema_versions;
 		if (!new_inlined_table) {
@@ -3482,6 +3488,7 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 				}
 				inlined_table_name = row.GetValue<string>(0);
 				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
+				native_columns = GetNativeInlinedColumns(inlined_table_name, types, true);
 			}
 		}
 
@@ -3537,15 +3544,16 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		}
 
 		bool needs_encoding = false;
-		for (auto &type : entry.data->data->Types()) {
+		for (auto &type : types) {
 			needs_encoding |= DuckLakeUtil::GetInlinedStorageType(*this, type) != type;
 		}
 		if (needs_encoding || InsertsInlinedRowsAfterBatch(entry.data->data->Count())) {
-			inlined_inserts.push_back(InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name));
+			inlined_inserts.push_back(
+			    InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name, native_columns));
 			continue;
 		}
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
-		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data);
+		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data, native_columns);
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
 		                                       has_preserved_row_ids ? &entry.data->row_ids : nullptr, cells_per_row);
 	}

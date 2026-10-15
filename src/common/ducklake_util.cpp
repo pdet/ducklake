@@ -455,14 +455,30 @@ string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
+//! A value for a column of the native type of the value, which takes text as is
+static string NativeValueToSQL(const Value &val) {
+	if (val.IsNull()) {
+		return "NULL";
+	}
+	if (val.type().id() == LogicalTypeId::VARCHAR) {
+		return EscapeVarcharForSQL(StringValue::Get(val));
+	}
+	return StringUtil::Format("CAST(%s AS %s)", SQLString::ToString(val.ToString()), LogicalType(val.type().id()));
+}
+
 static string ChunkRowToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, DataChunk &chunk,
-                            idx_t row) {
+                            idx_t row, const vector<bool> &native_columns) {
 	string result;
 	for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
 		if (c > 0) {
 			result += ", ";
 		}
-		result += DuckLakeUtil::ValueToSQL(metadata_manager, context, chunk.GetValue(c, row));
+		auto value = chunk.GetValue(c, row);
+		if (c < native_columns.size() && native_columns[c]) {
+			result += NativeValueToSQL(value);
+		} else {
+			result += DuckLakeUtil::ValueToSQL(metadata_manager, context, value);
+		}
 	}
 	return result;
 }
@@ -538,14 +554,15 @@ string DuckLakeUtil::InlinedStorageExpression(DuckLakeMetadataManager &metadata_
 	return expression;
 }
 
-vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data) {
+vector<string> DuckLakeUtil::InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data,
+                                              const vector<bool> &native_columns) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto context = transaction.context.lock();
 	vector<string> rows;
 	rows.reserve(data.Count());
 	for (auto &chunk : data.Chunks()) {
 		for (idx_t r = 0; r < chunk.size(); r++) {
-			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r));
+			rows.push_back(ChunkRowToSQL(metadata_manager, *context, chunk, r, native_columns));
 		}
 	}
 	return rows;

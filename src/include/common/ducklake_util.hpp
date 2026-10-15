@@ -113,8 +113,10 @@ public:
 	//! SQL expression converting a value of the given type to the representation stored in an inlined column
 	static string InlinedStorageExpression(DuckLakeMetadataManager &metadata_manager, string expression,
 	                                       const LogicalType &type);
-	//! Formats inlined rows as comma separated cell literals in storage types
-	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
+	//! Formats inlined rows as comma separated cell literals in storage types, or in the native types of the columns
+	//! that hold them
+	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data,
+	                                       const vector<bool> &native_columns = vector<bool>());
 };
 
 } // namespace duckdb

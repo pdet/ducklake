@@ -1349,6 +1349,21 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	}
 }
 
+bool DuckLakeCatalog::TryGetNativeInlinedColumns(const string &table_name, vector<bool> &result) {
+	lock_guard<mutex> guard(native_inlined_columns_lock);
+	auto entry = native_inlined_columns.find(table_name);
+	if (entry == native_inlined_columns.end()) {
+		return false;
+	}
+	result = entry->second;
+	return true;
+}
+
+void DuckLakeCatalog::CacheNativeInlinedColumns(const string &table_name, vector<bool> native_columns) {
+	lock_guard<mutex> guard(native_inlined_columns_lock);
+	native_inlined_columns[table_name] = std::move(native_columns);
+}
+
 DuckLakeTableSchemaVersions DuckLakeCatalog::GetTableSchemaVersions(DuckLakeTransaction &transaction,
                                                                     TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();

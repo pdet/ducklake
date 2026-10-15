@@ -376,6 +376,9 @@ public:
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+	//! The columns of an inlined table that hold the native type of their values, as GetNativeInlinedColumns found
+	bool TryGetNativeInlinedColumns(const string &table_name, vector<bool> &result);
+	void CacheNativeInlinedColumns(const string &table_name, vector<bool> native_columns);
 
 	//! The schema versions of the table at the snapshot of the transaction
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
@@ -450,6 +453,9 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	//! The columns of inlined tables are never retyped while the catalog stays at its version
+	mutex native_inlined_columns_lock;
+	unordered_map<string, vector<bool>> native_inlined_columns;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
