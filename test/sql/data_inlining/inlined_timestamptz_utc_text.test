@@ -1,0 +1,90 @@
+# name: test/sql/data_inlining/inlined_timestamptz_utc_text.test
+# description: inlined TIMESTAMPTZ values are stored as UTC text, whatever the time zone of the session
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_timestamptz_utc_text', DATA_INLINING_ROW_LIMIT 1000)
+
+# in 1677 the Europe/Amsterdam zone is 17 minutes and 30 seconds ahead of UTC
+statement ok
+SET TimeZone = 'Europe/Amsterdam'
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, v TIMESTAMPTZ, s STRUCT(v TIMESTAMPTZ))
+
+# more rows than a commit sends as VALUES text on Postgres
+statement ok
+INSERT INTO dl.t SELECT i, w, {'v': w} FROM (
+    SELECT i, CASE i WHEN 0 THEN TIMESTAMPTZ '1677-09-22 00:00:00+00' WHEN 1 THEN TIMESTAMPTZ 'infinity'
+        WHEN 2 THEN TIMESTAMPTZ '294247-01-10 04:00:54.775806+00' ELSE TIMESTAMPTZ '2020-06-01 00:00:00+00' END AS w
+    FROM range(150) r(i))
+
+statement ok
+SET TimeZone = 'UTC'
+
+query III
+SELECT id, v, s FROM dl.t WHERE id < 4 ORDER BY id
+----
+0	1677-09-22 00:00:00+00	{'v': '1677-09-22 00:00:00+00'}
+1	infinity	{'v': infinity}
+2	294247-01-10 04:00:54.775806+00	{'v': '294247-01-10 04:00:54.775806+00'}
+3	2020-06-01 00:00:00+00	{'v': '2020-06-01 00:00:00+00'}
+
+query II
+SELECT count(*), count(*) FILTER (WHERE s.v = v) FROM dl.t WHERE v = TIMESTAMPTZ '2020-06-01 00:00:00+00'
+----
+147	147
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query III
+SELECT id, v, s FROM dl.t WHERE id < 4 ORDER BY id
+----
+0	1677-09-22 00:00:00+00	{'v': '1677-09-22 00:00:00+00'}
+1	infinity	{'v': infinity}
+2	294247-01-10 04:00:54.775806+00	{'v': '294247-01-10 04:00:54.775806+00'}
+3	2020-06-01 00:00:00+00	{'v': '2020-06-01 00:00:00+00'}
+
+# the bounds that a rewrite computes from inlined rows do not depend on the session time zone either
+statement ok
+CREATE TABLE dl.r (id INTEGER, v TIMESTAMPTZ)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0, table_name => 'r')
+
+statement ok
+INSERT INTO dl.r SELECT i, TIMESTAMPTZ '2020-06-01 00:00:00+00' FROM range(3) r(i)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'r')
+
+statement ok
+SET TimeZone = 'Europe/Amsterdam'
+
+statement ok
+INSERT INTO dl.r VALUES (10, TIMESTAMPTZ '1677-09-22 00:00:00+00')
+
+statement ok
+DELETE FROM dl.r WHERE id = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'r', delete_threshold => 0)
+
+statement ok
+SET TimeZone = 'UTC'
+
+query II
+SELECT id, v FROM dl.r WHERE v < TIMESTAMPTZ '1677-09-22 00:00:10+00'
+----
+10	1677-09-22 00:00:00+00

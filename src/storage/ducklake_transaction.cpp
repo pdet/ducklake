@@ -1492,6 +1492,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
 		auto result = metadata_manager->Execute(snapshot, query);
+		DuckLakeUTCTimeZone utc_time_zone(*connection->context);
 		for (auto &insert : inlined_inserts) {
 			if (result->HasError()) {
 				break;

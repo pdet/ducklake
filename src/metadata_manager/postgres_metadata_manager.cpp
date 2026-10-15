@@ -265,6 +265,7 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
+	DuckLakeUTCTimeZone utc_time_zone(*transaction.GetConnection().context);
 	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<string, case_insensitive_map_t<string>> inlined_tables;

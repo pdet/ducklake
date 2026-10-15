@@ -1,0 +1,45 @@
+# name: test/sql/data_inlining/inlined_timestamptz_ns_utc_text.test
+# description: inlined TIMESTAMPTZ_NS values are stored as UTC text, whatever the time zone of the session
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_timestamptz_ns_utc_text', DATA_INLINING_ROW_LIMIT 1000, DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+SET TimeZone = 'Europe/Amsterdam'
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, v TIMESTAMPTZ_NS)
+
+# more rows than a commit sends as VALUES text on Postgres
+statement ok
+INSERT INTO dl.t SELECT i, CASE i WHEN 0 THEN TIMESTAMPTZ_NS '1677-09-22 00:00:00.123456789+00'
+    ELSE TIMESTAMPTZ_NS '2020-06-01 00:00:00.123456789+00' END FROM range(150) r(i)
+
+statement ok
+SET TimeZone = 'UTC'
+
+query II
+SELECT id, v FROM dl.t WHERE id < 2 ORDER BY id
+----
+0	1677-09-22 00:00:00.123456789+00
+1	2020-06-01 00:00:00.123456789+00
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT id, v FROM dl.t WHERE id < 2 ORDER BY id
+----
+0	1677-09-22 00:00:00.123456789+00
+1	2020-06-01 00:00:00.123456789+00

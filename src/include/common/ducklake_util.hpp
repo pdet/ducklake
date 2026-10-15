@@ -117,4 +117,16 @@ public:
 	static vector<string> InlinedDataToSQL(DuckLakeTransaction &transaction, ColumnDataCollection &data);
 };
 
+//! Casts TIMESTAMPTZ values of a connection to text in UTC while it lives, as text in the session time zone drops
+//! the seconds of historic offsets
+class DuckLakeUTCTimeZone {
+public:
+	explicit DuckLakeUTCTimeZone(ClientContext &context);
+	~DuckLakeUTCTimeZone();
+
+private:
+	ClientContext &context;
+	Value previous_time_zone;
+};
+
 } // namespace duckdb
