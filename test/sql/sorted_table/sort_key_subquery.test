@@ -35,7 +35,7 @@ CREATE MACRO ducklake.sort_key(x) AS x + (SELECT 0)
 statement error
 CALL ducklake_flush_inlined_data('ducklake')
 ----
-Cannot export DuckLake sort expression for inline flush
+subqueries are not allowed in ORDER_BY
 
 query I
 SELECT i FROM ducklake.t ORDER BY i
@@ -53,7 +53,7 @@ ALTER TABLE ducklake.w SET SORTED BY (row_number() OVER ())
 statement error
 INSERT INTO ducklake.w VALUES (1)
 ----
-Window functions are not supported here
+window functions are not allowed in ORDER_BY
 
 statement ok
 CREATE TABLE ducklake.s (i INTEGER)
@@ -61,15 +61,10 @@ CREATE TABLE ducklake.s (i INTEGER)
 statement ok
 ALTER TABLE ducklake.s SET SORTED BY (i + (SELECT 0))
 
-# FIXME: an insert into a table sorted by a key with a subquery fails with "Serialization Error: Cannot copy BoundSubqueryExpression" instead of a binder error, see https://github.com/pdet/ducklake_internal/issues/118
-mode skip
-
 statement error
 INSERT INTO ducklake.s VALUES (1)
 ----
 Binder Error
-
-mode unskip
 
 statement ok
 ALTER TABLE ducklake.s RESET SORTED BY
