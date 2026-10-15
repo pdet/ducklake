@@ -989,7 +989,7 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 			columns.emplace(make_pair(table.id.index, column.id.index), make_pair(std::ref(table), std::ref(column)));
 		}
 	}
-	// a column defined again in or after the snapshot of its spec needs the type it had before
+	// unless it came with its table and spec, a column defined again since its spec began needs its earlier type
 	set<TableIndex> table_ids;
 	set<FieldIndex> column_ids;
 	for (auto &partition : partitions) {
@@ -1004,9 +1004,10 @@ LoadBucketSourceTypes(DuckLakeSnapshot snapshot,
 			auto &table = entry->second.first.get();
 			auto &column = entry->second.second.get();
 			auto column_begin = column.begin_snapshot;
-			if (column_begin.IsValid() && partition.begin_snapshot.IsValid() &&
-			    (column_begin.GetIndex() < partition.begin_snapshot.GetIndex() ||
-			     column_begin == table.begin_snapshot)) {
+			auto spec_begin = partition.begin_snapshot;
+			if (column_begin.IsValid() && spec_begin.IsValid() &&
+			    (column_begin.GetIndex() < spec_begin.GetIndex() ||
+			     (column_begin == spec_begin && column_begin == table.begin_snapshot))) {
 				field.bucket_source_type = column.type;
 				continue;
 			}

@@ -41,6 +41,12 @@ SELECT list(k ORDER BY k) FROM legacy.s WHERE c = 9
 ----
 [9, 109]
 
+# a rename of the table and the type change in one transaction of DuckLake 1.0
+query I
+SELECT list(k ORDER BY k) FROM legacy.r2 WHERE c = 9
+----
+[9, 109]
+
 # the same after the migration
 unzip data/old_ducklake/bucket_retype.db.gz {TEST_DIR}/bucket_retype_migrated.db
 
