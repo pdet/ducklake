@@ -3392,8 +3392,7 @@ WHERE retyped.column_type = %s AND original.column_type <> %s)",
 		};
 		auto float_files = files(StringUtil::Format("df.begin_snapshot < %d AND %s", retype_snapshot,
 		                                            written_as("df.begin_snapshot", float_filter)));
-		// the files of the retype commit, or of a FLOAT column written in another type change or with a type whose
-		// row expired, can hold either type
+		// files of a commit that changed the type, or of a FLOAT column whose rows expired, can hold either type
 		auto unknown_files = files(
 		    StringUtil::Format("df.begin_snapshot = %d OR (%s AND df.begin_snapshot < %d AND NOT %s)", retype_snapshot,
 		                       from_float ? "true" : "false", retype_snapshot, written_as("df.begin_snapshot", "")));
