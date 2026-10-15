@@ -1,0 +1,45 @@
+# name: test/sql/migration/read_only_auto_migration.test
+# description: a read-only attach with AUTOMATIC_MIGRATION of an up to date 1.1-dev1 catalog runs no migration
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_auto_migration.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/read_only_auto_migration', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER);
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2);
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT value FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'version'
+----
+1.1-dev1
+
+statement error
+INSERT INTO dl.t VALUES (3)
+----
+read-only
+
+statement ok
+DETACH dl

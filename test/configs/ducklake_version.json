@@ -25,7 +25,8 @@
         "test/sql/partitioning/epoch_version_gate.test",
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
-        "test/sql/macros/null_default_version_gate.test"
+        "test/sql/macros/null_default_version_gate.test",
+        "test/sql/migration/read_only_auto_migration.test"
       ]
     },
     {
