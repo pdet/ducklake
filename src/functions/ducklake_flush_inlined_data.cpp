@@ -86,7 +86,12 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 // Sink
 //===--------------------------------------------------------------------===//
 unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<DuckLakeInsertGlobalState>(table);
+	auto result = make_uniq<DuckLakeInsertGlobalState>(table);
+	// rows inlined before a DROP NOT NULL share their table with the rows inserted after it
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	result->not_null_fields = DuckLakeCompactor::GetRewriteNotNullFields(catalog, transaction, table);
+	return std::move(result);
 }
 
 SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
