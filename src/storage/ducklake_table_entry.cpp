@@ -36,6 +36,7 @@
 #include "functions/ducklake_compaction_functions.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_partition_data.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 namespace duckdb {
 
@@ -573,8 +574,9 @@ void DuckLakeTableEntry::ValidateSortExpressionColumns(const ColumnList &columns
 	}
 }
 
-DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog, const ColumnList &columns,
-                                         DuckLakeFieldData &field_data, ParsedExpression &expr) {
+DuckLakePartitionField GetPartitionField(ClientContext &context, const DuckLakeCatalog &ducklake_catalog,
+                                         const ColumnList &columns, DuckLakeFieldData &field_data,
+                                         ParsedExpression &expr) {
 	string column_name;
 	DuckLakePartitionField field;
 
@@ -654,6 +656,18 @@ DuckLakePartitionField GetPartitionField(const DuckLakeCatalog &ducklake_catalog
 	if (col.Type().id() == LogicalTypeId::SQLNULL) {
 		throw InvalidInputException("Column \"%s\" has type NULL and cannot be used as a partition key", column_name);
 	}
+	// the transform has to bind to the column type as it does when the table is written
+	try {
+		DuckLakePartitionUtils::ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(col.Type(), 0ULL),
+		                                                field);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (error.Type() != ExceptionType::BINDER) {
+			throw;
+		}
+		throw InvalidInputException("Column \"%s\" has type %s and cannot be partitioned by %s", column_name,
+		                            col.Type(), DuckLakePartitionUtils::GetTransformName(field.transform.type));
+	}
 	PhysicalIndex column_index(col.StorageOid());
 	auto &field_id = field_data.GetByRootIndex(column_index);
 	field.field_id = field_id.GetFieldIndex();
@@ -676,9 +690,10 @@ DuckLakeTableEntry::BuildPartitionData(DuckLakeTransaction &transaction, const C
 	auto partition_data = make_uniq<DuckLakePartition>();
 	partition_data->partition_id = transaction.GetLocalCatalogId();
 	partition_data->local_partition_id = partition_data->partition_id;
+	auto context = transaction.context.lock();
 	for (idx_t expr_idx = 0; expr_idx < partition_keys.size(); expr_idx++) {
 		auto &expr = *partition_keys[expr_idx];
-		auto partition_field = GetPartitionField(transaction.GetCatalog(), columns, field_data, expr);
+		auto partition_field = GetPartitionField(*context, transaction.GetCatalog(), columns, field_data, expr);
 		// Reject duplicate keys: same (field_id, transform). (year(ts), month(ts)) is fine, (a, a) is not.
 		for (auto &existing : partition_data->fields) {
 			if (existing.field_id == partition_field.field_id && existing.transform == partition_field.transform) {

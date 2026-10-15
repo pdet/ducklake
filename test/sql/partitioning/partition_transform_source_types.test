@@ -1,0 +1,68 @@
+# name: test/sql/partitioning/partition_transform_source_types.test
+# description: a partition transform is refused for a column type it cannot transform
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/partition_transform_source_types', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE ducklake.t (s VARCHAR, tm TIME, i INTEGER, b BLOB, l INTEGER[], d DATE, ts TIMESTAMP)
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (year(s))
+----
+Column "s" has type VARCHAR and cannot be partitioned by year
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (d, month(i))
+----
+Column "i" has type INTEGER and cannot be partitioned by month
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (day(tm))
+----
+Column "tm" has type TIME and cannot be partitioned by day
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (hour(b))
+----
+Column "b" has type BLOB and cannot be partitioned by hour
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (year(l))
+----
+Column "l" has type INTEGER[] and cannot be partitioned by year
+
+statement error
+CREATE TABLE ducklake.c (s VARCHAR) PARTITIONED BY (year(s))
+----
+Column "s" has type VARCHAR and cannot be partitioned by year
+
+query I
+SELECT count(*) FROM meta.ducklake_partition_info
+----
+0
+
+# the table stays writable
+statement ok
+INSERT INTO ducklake.t VALUES ('x', '10:00:00', 1, 'ab'::BLOB, [1], DATE '2020-05-03', TIMESTAMP '2020-05-03 04:00:00')
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (year(d), month(ts), hour(tm), bucket(4, s), l)
+
+statement ok
+INSERT INTO ducklake.t VALUES ('y', '11:00:00', 2, 'cd'::BLOB, [2], DATE '2021-06-04', TIMESTAMP '2021-06-04 05:00:00')
+
+query II
+SELECT s, year(d) FROM ducklake.t ORDER BY s
+----
+x	2020
+y	2021

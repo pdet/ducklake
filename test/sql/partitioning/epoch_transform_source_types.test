@@ -1,0 +1,58 @@
+# name: test/sql/partitioning/epoch_transform_source_types.test
+# description: an epoch partition transform is refused for a column type it cannot transform
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/epoch_transform_source_types', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (s VARCHAR, tm TIME, i INTEGER, tz TIMETZ, d DATE, ts TIMESTAMPTZ)
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_year(s))
+----
+Column "s" has type VARCHAR and cannot be partitioned by epoch_year
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_hour(tm))
+----
+Column "tm" has type TIME and cannot be partitioned by epoch_hour
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_day(i))
+----
+Column "i" has type INTEGER and cannot be partitioned by epoch_day
+
+statement error
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_month(tz))
+----
+Column "tz" has type TIME WITH TIME ZONE and cannot be partitioned by epoch_month
+
+statement error
+CREATE TABLE ducklake.c (s VARCHAR) PARTITIONED BY (epoch_day(s))
+----
+Column "s" has type VARCHAR and cannot be partitioned by epoch_day
+
+query I
+SELECT count(*) FROM meta.ducklake_partition_info
+----
+0
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (epoch_day(d), epoch_hour(ts))
+
+statement ok
+INSERT INTO ducklake.t VALUES ('x', '10:00:00', 1, '10:00:00+02', DATE '1970-01-03', TIMESTAMPTZ '1970-01-01 05:00:00+00')
+
+query I
+SELECT list(partition_value ORDER BY partition_key_index) FROM meta.ducklake_file_partition_value
+----
+[2, 5]
