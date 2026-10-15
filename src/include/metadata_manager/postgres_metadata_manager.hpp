@@ -47,7 +47,6 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
-	string GetSnapshotColumnsQuery(DuckLakeSnapshot snapshot) const override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                             const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
