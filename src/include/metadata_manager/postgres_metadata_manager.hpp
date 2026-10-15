@@ -36,6 +36,7 @@ public:
 	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string GetSnapshotAndStatsAndChangesQuery(bool include_exactness) const override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;

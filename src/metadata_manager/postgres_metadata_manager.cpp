@@ -361,6 +361,14 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	)";
 }
 
+string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(bool include_exactness) const {
+	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
+	auto remote_query = StringUtil::Replace(SnapshotAndStatsAndChangesQuery(include_exactness), "{METADATA_CATALOG}",
+	                                        "{METADATA_SCHEMA_ESCAPED}");
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
+}
+
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
