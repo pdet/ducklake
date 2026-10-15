@@ -222,3 +222,48 @@ SELECT c FROM lake.r
 
 statement ok
 DETACH lake
+
+# written by DuckDB 1.5.6, t got its inlined table at schema version 4 without a row in snapshot 4 and deleted its row
+# in snapshot 5, n renamed a to c in snapshot 6, and t inserted another row into the same inlined table in snapshot 7
+unzip data/old_ducklake/inlined_schema_versions_retained.db.gz {TEST_DIR}/v10_inlined_schema_versions_retained.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+# removes the commit of t and its first row, while snapshot 5 keeps schema version 4
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [3, 4])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query III
+SELECT tbl.table_name, sv.begin_snapshot, sv.schema_version
+FROM meta.ducklake_schema_versions sv
+JOIN meta.ducklake_table tbl USING (table_id)
+WHERE sv.schema_version = 4
+----
+t	5	4
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query II
+SELECT a, b FROM lake.t
+----
+y	C
+
+# reading t cached the catalog of schema version 4, which snapshot 5 also reads n with
+query I
+SELECT count(*) FROM (SELECT a FROM lake.n AT (VERSION => 5))
+----
+0
+
+statement ok
+DETACH lake

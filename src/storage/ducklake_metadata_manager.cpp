@@ -519,22 +519,33 @@ WHERE idt.schema_version IN (
 	    "Failed to list the inlined-data tables without a schema version while migrating to v1.1-dev1: ");
 	DuckLakeInlinedColNames col_names(true);
 	vector<string> oldest_rows;
+	set<idx_t> schema_versions;
 	for (auto &row : *tables) {
+		auto schema_version = row.GetValue<idx_t>(1);
 		oldest_rows.push_back(StringUtil::Format(
 		    "SELECT %d AS schema_version, (SELECT MIN(%s) FROM {METADATA_CATALOG}.%s) AS begin_snapshot",
-		    row.GetValue<idx_t>(1), col_names.begin_snapshot, SQLIdentifier(row.GetValue<string>(0))));
+		    schema_version, col_names.begin_snapshot, SQLIdentifier(row.GetValue<string>(0))));
+		schema_versions.insert(schema_version);
 	}
 	if (oldest_rows.empty()) {
 		return;
 	}
-	// every table of a schema version gets the same snapshot, as the schema cache is keyed by the version
+	auto version_list =
+	    StringUtil::Join(schema_versions, ", ", [](idx_t schema_version) { return to_string(schema_version); });
+	// every table of a schema version gets its earliest known snapshot, as the schema cache is keyed by the version
 	result = Execute(StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
 SELECT commits.begin_snapshot, idt.schema_version, idt.table_id
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
 JOIN (
 	SELECT schema_version, MIN(begin_snapshot) AS begin_snapshot
-	FROM (SELECT schema_version, begin_snapshot FROM {METADATA_CATALOG}.ducklake_schema_versions UNION ALL %s) versions
+	FROM (
+		SELECT schema_version, begin_snapshot FROM {METADATA_CATALOG}.ducklake_schema_versions
+		WHERE schema_version IN (%s)
+		UNION ALL SELECT schema_version, snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot
+		WHERE schema_version IN (%s)
+		UNION ALL %s
+	) versions
 	GROUP BY schema_version
 ) commits ON commits.schema_version = idt.schema_version
 WHERE NOT EXISTS (
@@ -545,7 +556,7 @@ WHERE NOT EXISTS (
 	WHERE sv.table_id = idt.table_id AND sv.begin_snapshot <= commits.begin_snapshot
 ) > 1;
 )",
-	                                    StringUtil::Join(oldest_rows, " UNION ALL ")));
+	                                    version_list, version_list, StringUtil::Join(oldest_rows, " UNION ALL ")));
 	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
 }
 
