@@ -179,8 +179,6 @@ static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input,
 	delete_file.delete_count = result.delete_count;
 	delete_file.file_size_bytes = result.file_size_bytes;
 	delete_file.footer_size = result.footer_size;
-	// puffin files are written in plaintext
-	delete_file.encryption_key = input.encryption_key;
 	delete_file.source = input.source;
 	return delete_file;
 }
@@ -233,13 +231,18 @@ DuckLakeDeleteFileWriter::WriteDeletionVectorFileWithSnapshots(ClientContext &co
 
 DuckLakeDeleteFile DuckLakeDeleteFileWriter::Write(ClientContext &context, WriteDeleteFileInput &input,
                                                    bool use_deletion_vectors) {
-	return use_deletion_vectors ? WriteDeletionVectorFile(context, input) : WriteDeleteFile(context, input);
+	if (use_deletion_vectors && input.encryption_key.empty()) {
+		return WriteDeletionVectorFile(context, input);
+	}
+	return WriteDeleteFile(context, input);
 }
 
 DuckLakeDeleteFile DuckLakeDeleteFileWriter::Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
                                                    bool use_deletion_vectors) {
-	return use_deletion_vectors ? WriteDeletionVectorFileWithSnapshots(context, input)
-	                            : WriteDeleteFileWithSnapshots(context, input);
+	if (use_deletion_vectors && input.encryption_key.empty()) {
+		return WriteDeletionVectorFileWithSnapshots(context, input);
+	}
+	return WriteDeleteFileWithSnapshots(context, input);
 }
 
 void DuckLakeDeleteFileWriter::SetCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,

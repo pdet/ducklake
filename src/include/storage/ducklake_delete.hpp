@@ -79,7 +79,8 @@ struct DuckLakeDeleteFileWriter {
 	//! Write a puffin file with one cumulative deletion vector blob per snapshot
 	static DuckLakeDeleteFile WriteDeletionVectorFileWithSnapshots(ClientContext &context,
 	                                                               WriteDeleteFileWithSnapshotsInput &input);
-	//! Write a puffin deletion vector or a parquet delete file depending on use_deletion_vectors
+	//! Write a puffin deletion vector or a parquet delete file depending on use_deletion_vectors. Puffin files are
+	//! written in plaintext, so an encrypted delete file is always parquet
 	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileInput &input, bool use_deletion_vectors);
 	static DuckLakeDeleteFile Write(ClientContext &context, WriteDeleteFileWithSnapshotsInput &input,
 	                                bool use_deletion_vectors);
