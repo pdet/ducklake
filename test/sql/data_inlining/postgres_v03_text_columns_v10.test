@@ -1,0 +1,103 @@
+# name: test/sql/data_inlining/postgres_v03_text_columns_v10.test
+# description: a 1.0 Postgres catalog reads and flushes the text columns of inlined tables created by DuckLake 0.3
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_v03_text_columns_v10', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR, j JSON)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'back\slash \x62 é漢', '{"a": "é"}'), (2, '', NULL), (3, NULL, '[1]')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok
+INSERT INTO dl.t SELECT 100 + i, 'f' || i, NULL FROM range(3) r(i)
+
+# DuckLake 0.3 created these columns with their native Postgres types, and the 1.0 migration kept them
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ALTER COLUMN s TYPE VARCHAR USING convert_from(s, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON')
+
+# a table inlined by this version keeps BYTEA columns
+statement ok
+CREATE TABLE dl.b (id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.b VALUES (1, 'a' || chr(0) || 'é'), (2, '')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_v03_text_columns_v10', DATA_INLINING_ROW_LIMIT 10)
+
+query III
+SELECT id, s, j FROM dl.t WHERE id < 100 ORDER BY id
+----
+1	back\slash \x62 é漢	{"a": "é"}
+2	(empty)	NULL
+3	NULL	[1]
+
+query I
+SELECT id FROM dl.t WHERE s = 'back\slash \x62 é漢'
+----
+1
+
+query II
+SELECT id, s = 'a' || chr(0) || 'é' FROM dl.b ORDER BY id
+----
+1	true
+2	false
+
+# the stats of a rewrite read the inlined rows too
+statement ok
+DELETE FROM dl.t WHERE id = 100
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats WHERE table_id = 1 AND column_id = 2
+----
+(empty)	f2
+
+query III
+SELECT table_name, rows_flushed, schema_name FROM ducklake_flush_inlined_data('dl') ORDER BY table_name
+----
+b	2	main
+t	3	main
+
+query II
+SELECT id, s = 'a' || chr(0) || 'é' FROM dl.b ORDER BY id
+----
+1	true
+2	false
+
+query III
+SELECT id, s, j FROM dl.t WHERE id < 100 ORDER BY id
+----
+1	back\slash \x62 é漢	{"a": "é"}
+2	(empty)	NULL
+3	NULL	[1]
+
+query I
+SELECT value FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'version'
+----
+1.0
