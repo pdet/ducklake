@@ -593,6 +593,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
+	map<string, vector<pair<string, string>>> renames;
 	for (auto &inlined_table : inlined_tables) {
 		auto &table_name = inlined_table.first;
 		auto &user_table_name = inlined_table.second;
@@ -606,7 +607,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 		for (idx_t i = col_renames.size(); i < names.size(); i++) {
 			user_columns.insert(names[i].GetIdentifierName());
 		}
-		string renames;
+		vector<pair<string, string>> table_renames;
 		bool unexpected_layout = names.size() < col_renames.size();
 		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
 			auto &entry = col_renames[i];
@@ -625,8 +626,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 				    "ducklake_flush_inlined_data() before migrating",
 				    user_table_name, entry.second);
 			}
-			renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
-			                              SQLIdentifier(table_name), entry.first, entry.second);
+			table_renames.push_back(entry);
 		}
 		if (unexpected_layout) {
 			throw InvalidInputException(
@@ -634,13 +634,26 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 			    "an unexpected column layout",
 			    table_name);
 		}
-		if (renames.empty()) {
-			continue;
+		if (!table_renames.empty()) {
+			renames.emplace(table_name, std::move(table_renames));
 		}
-		auto result = Execute(renames);
-		result->ThrowIfError(StringUtil::Format(
-		    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
 	}
+	if (!renames.empty()) {
+		RenameInlinedColumns(renames);
+	}
+}
+
+void DuckLakeMetadataManager::RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) {
+	// one batch for all tables, as every metadata DDL statement can reload the catalog
+	string query;
+	for (auto &table : renames) {
+		for (auto &column : table.second) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+			                            SQLIdentifier(table.first), column.first, column.second);
+		}
+	}
+	auto result = Execute(query);
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: ");
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
