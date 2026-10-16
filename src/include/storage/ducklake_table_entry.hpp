@@ -74,6 +74,10 @@ public:
 	optional_ptr<const DuckLakePartition> GetPartitionData() const {
 		return partition_data.get();
 	}
+	//! The spec of the files written now, null when they are not partitioned as after RESET PARTITIONED BY
+	optional_ptr<DuckLakePartition> GetFilePartitionData() {
+		return partition_data && !partition_data->fields.empty() ? partition_data.get() : nullptr;
+	}
 	//! Whether this entry starts a new partition spec with the same fields
 	bool StartsPartitionSpec() const {
 		return starts_partition_spec;
