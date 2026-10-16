@@ -21,28 +21,39 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
-	bool SupportsInlining(const LogicalType &type) override;
+	bool CanInlineValues(DataChunk &chunk) override;
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool DroppedTablesStayReadable() const override {
+		return false;
+	}
+	bool InsertsInlinedRowsAfterBatch(idx_t row_count) const override;
 	idx_t MaxIdentifierLength() const override {
 		return 63;
 	}
+	idx_t MaxColumnCount() const override {
+		return 1600;
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
-	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result,
-	                                                     const vector<LogicalType> &expected_types) override;
+	bool InlinedDeletionTableExists(const string &table_name) override;
+	void MigrateInlinedDataTypes() override;
+	bool IsRetryableCommitError(const string &message) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
-	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query) override;
+	void ClearCache() override;
 
 protected:
 	string GetLatestSnapshotQuery() const override;
-	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
-
-private:
-	unique_ptr<QueryResult> ExecuteQuery(DuckLakeSnapshot snapshot, string &query, string command);
+	string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                             const FilterPushdownInfo *filter_info,
+	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
+	                             const string &metadata_table_prefix) override;
+	string CastValueToTarget(const Value &value, const LogicalType &type) override;
+	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 };
 
 } // namespace duckdb

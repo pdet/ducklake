@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/transaction/transaction_manager.hpp"
+#include "duckdb/main/attached_database.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 
@@ -23,6 +24,7 @@ public:
 	void RollbackTransaction(Transaction &transaction) override;
 
 	void Checkpoint(ClientContext &context, bool force = false) override;
+	void GetWrittenFiles(vector<string> &result);
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
