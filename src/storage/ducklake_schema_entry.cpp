@@ -277,25 +277,30 @@ static bool HasSameSpelling(const vector<Identifier> &left, const vector<Identif
 	return true;
 }
 
+//! Equal types can spell the names of their nested fields differently
+static bool HasSameTypes(const vector<LogicalType> &left, const vector<LogicalType> &right) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left.size(); i++) {
+		if (left[i] != right[i] || left[i].ToString() != right[i].ToString()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool IsIdenticalView(ClientContext &context, DuckLakeViewEntry &view, const CreateViewInfo &info,
                             const string &query_sql) {
 	if (view.GetQuerySQL() != query_sql || info.binding_mode != CreateViewBindingMode::BIND_ON_CREATE ||
 	    view.name.GetIdentifierName() != info.GetViewName().GetIdentifierName() ||
 	    !HasSameSpelling(view.aliases, info.aliases) || !Value::NotDistinctFrom(view.comment, info.comment) ||
-	    view.tags != info.tags || !info.column_comments_map.empty()) {
+	    view.tags != info.tags || view.HasColumnComments() || !info.column_comments_map.empty()) {
 		return false;
 	}
 	view.BindView(context);
 	auto columns = view.GetColumnInfo();
-	if (!columns || columns->types != info.types || !HasSameSpelling(columns->names, info.names)) {
-		return false;
-	}
-	for (idx_t column_idx = 0; column_idx < columns->names.size(); column_idx++) {
-		if (!view.GetColumnComment(column_idx).IsNull()) {
-			return false;
-		}
-	}
-	return true;
+	return columns && HasSameTypes(columns->types, info.types) && HasSameSpelling(columns->names, info.names);
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {

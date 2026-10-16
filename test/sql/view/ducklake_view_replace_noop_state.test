@@ -100,6 +100,32 @@ i	BIGINT
 statement ok
 COMMIT
 
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.st(s STRUCT(a INTEGER))
+
+statement ok
+CREATE VIEW ducklake.sv AS SELECT * FROM ducklake.st
+
+statement ok
+DROP TABLE ducklake.st
+
+statement ok
+CREATE TABLE ducklake.st(s STRUCT(A INTEGER))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.sv AS SELECT * FROM ducklake.st
+
+query I
+SELECT data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'sv'
+----
+STRUCT(A INTEGER)
+
+statement ok
+COMMIT
+
 # a view without a binding is replaced
 statement ok
 BEGIN
@@ -177,3 +203,30 @@ query I
 SELECT comment FROM duckdb_columns() WHERE database_name = 'commented' AND table_name = 'cv'
 ----
 NULL
+
+# also those of columns the view does not return under that name anymore
+statement ok
+CREATE TABLE commented.r(i INTEGER)
+
+statement ok
+CREATE VIEW commented.rv AS SELECT * FROM commented.r
+
+statement ok
+COMMENT ON COLUMN commented.rv.i IS 'the i'
+
+statement ok
+ALTER TABLE commented.r RENAME COLUMN i TO j
+
+statement ok
+SELECT * FROM commented.rv
+
+statement ok
+CREATE OR REPLACE VIEW commented.rv AS SELECT * FROM commented.r
+
+statement ok
+ALTER TABLE commented.r RENAME COLUMN j TO i
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'commented' AND table_name = 'rv'
+----
+i	NULL
