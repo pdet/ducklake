@@ -70,14 +70,6 @@ void DuckLakeInitializer::Initialize() {
 		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
 		options.metadata_schema = transaction.GetDefaultSchemaName();
 	}
-	// if no explicit ducklake_version was set via ATTACH, check the global setting
-	if (options.ducklake_version == DuckLakeVersion::UNSET) {
-		Value setting_val;
-		if (context.TryGetCurrentSetting("ducklake_default_version", setting_val) && !setting_val.IsNull()) {
-			options.ducklake_version = ParseWritableDuckLakeVersion(setting_val.ToString(), "ducklake_default_version");
-		}
-	}
-
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
@@ -213,9 +205,16 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		options.data_path = path + ".files";
 		InitializeDataPath();
 	}
-	// default to the latest version when creating a new DuckLake
-	auto version =
-	    options.ducklake_version == DuckLakeVersion::UNSET ? DUCKLAKE_LATEST_VERSION : options.ducklake_version;
+	// without an explicit ducklake_version use the global default, then the latest version
+	auto version = options.ducklake_version;
+	Value default_version;
+	if (version == DuckLakeVersion::UNSET &&
+	    context.TryGetCurrentSetting("ducklake_default_version", default_version) && !default_version.IsNull()) {
+		version = ParseWritableDuckLakeVersion(default_version.ToString(), "ducklake_default_version");
+	}
+	if (version == DuckLakeVersion::UNSET) {
+		version = DUCKLAKE_LATEST_VERSION;
+	}
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
