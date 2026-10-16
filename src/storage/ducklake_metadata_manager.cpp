@@ -545,6 +545,10 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	MigrateInlinedSchemaVersions();
 	MigrateRenamedFieldDefaults();
 	MigrateInlinedDataTypes();
+	// DDL locks the metadata tables exclusively on Postgres, a development catalog with every addition runs none
+	if (allow_failures && HasV1_1Dev1Additions()) {
+		return;
+	}
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
 

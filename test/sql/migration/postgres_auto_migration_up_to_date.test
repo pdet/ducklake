@@ -1,0 +1,52 @@
+# name: test/sql/migration/postgres_auto_migration_up_to_date.test
+# description: AUTOMATIC_MIGRATION runs no migration on a Postgres catalog that already has every v1.1-dev1 addition
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS auto_migration_up_to_date CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/auto_migration_up_to_date', METADATA_SCHEMA 'auto_migration_up_to_date', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+# A migration writes the version, which this constraint rejects
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE auto_migration_up_to_date.ducklake_metadata ADD CONSTRAINT reject_version_update CHECK (key <> ''version'') NOT VALID')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'auto_migration_up_to_date', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA auto_migration_up_to_date CASCADE')
+
+statement ok
+DETACH pg
