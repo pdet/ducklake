@@ -46,3 +46,36 @@ JOIN meta.ducklake_data_file df USING (data_file_id)
 WHERE df.end_snapshot IS NULL
 ----
 0.10000000149011612	0.20000000298023224
+
+# another connection retypes the column and drops it before the merge commits
+statement ok
+CREATE TABLE dl.d(k INTEGER, v FLOAT)
+
+statement ok
+INSERT INTO dl.d VALUES (1, 0.1)
+
+statement ok
+INSERT INTO dl.d VALUES (2, 0.2)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('dl', 'd')
+
+statement ok con2
+ALTER TABLE dl.d ALTER v TYPE DOUBLE
+
+statement ok con2
+SET VARIABLE retyped_snapshot = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok con2
+ALTER TABLE dl.d DROP COLUMN v
+
+statement ok con1
+COMMIT
+
+query I con2
+SELECT count(*) FROM dl.d AT (VERSION => getvariable('retyped_snapshot')) WHERE v > 0.2
+----
+1

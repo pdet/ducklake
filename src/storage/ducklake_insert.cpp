@@ -307,11 +307,7 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
 //===--------------------------------------------------------------------===//
 void DuckLakeInsert::WidenRetypedFloatBounds(DuckLakeTransaction &transaction, DuckLakeInsertGlobalState &gstate) {
 	auto &catalog = gstate.table.ParentCatalog().Cast<DuckLakeCatalog>();
-	auto latest = catalog.GetEntryById(transaction, transaction.GetSnapshot(), gstate.table.GetTableId());
-	if (!latest) {
-		return;
-	}
-	auto &latest_fields = latest->Cast<DuckLakeTableEntry>().GetFieldData();
+	auto &latest_fields = DuckLakeCompactor::GetLatestTableEntry(catalog, transaction, gstate.table).GetFieldData();
 	for (auto &file : gstate.written_files) {
 		for (auto &entry : file.column_stats) {
 			auto &stats = entry.second;

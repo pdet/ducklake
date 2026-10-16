@@ -2571,8 +2571,7 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 		auto table_ids = StringUtil::Join(other_changes.altered_tables, ", ",
 		                                  [](TableIndex table_id) { return to_string(table_id.index); });
 		auto query = StringUtil::Format("SELECT table_id, column_id FROM {METADATA_CATALOG}.ducklake_column WHERE "
-		                                "table_id IN (%s) AND column_type = %s AND begin_snapshot > %d AND "
-		                                "end_snapshot IS NULL",
+		                                "table_id IN (%s) AND column_type = %s AND begin_snapshot > %d",
 		                                table_ids, SQLString(DuckLakeTypes::ToString(LogicalType::DOUBLE)),
 		                                transaction_snapshot.snapshot_id);
 		auto result = context.query_metadata(query);
