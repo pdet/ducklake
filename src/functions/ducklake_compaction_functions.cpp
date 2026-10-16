@@ -172,13 +172,15 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 		}
 	}
 
+	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
+	DuckLakeInsert::WidenRetypedFloatBounds(transaction, global_state);
+
 	DuckLakeCompactionEntry compaction_entry;
 	compaction_entry.row_id_start = row_id_start;
 	compaction_entry.source_files = source_files;
 	compaction_entry.written_files = global_state.written_files;
 	compaction_entry.type = type;
 
-	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	if (!transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry))) {
 		auto &fs = FileSystem::GetFileSystem(context);
 		for (auto &file : global_state.written_files) {

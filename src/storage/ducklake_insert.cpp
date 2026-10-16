@@ -305,6 +305,24 @@ SourceResultType DuckLakeInsert::GetDataInternal(ExecutionContext &context, Data
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
+void DuckLakeInsert::WidenRetypedFloatBounds(DuckLakeTransaction &transaction, DuckLakeInsertGlobalState &gstate) {
+	auto &catalog = gstate.table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &latest_fields = DuckLakeCompactor::GetLatestTableEntry(catalog, transaction, gstate.table).GetFieldData();
+	for (auto &file : gstate.written_files) {
+		for (auto &entry : file.column_stats) {
+			auto &stats = entry.second;
+			if (stats.type.id() != LogicalTypeId::FLOAT) {
+				continue;
+			}
+			// the DOUBLE text of a FLOAT bound also reads back as that FLOAT, so dropped fields are widened too
+			auto field = latest_fields.GetByFieldIndex(entry.first);
+			if (!field || field->Type().id() == LogicalTypeId::DOUBLE) {
+				stats.WidenFloatBounds();
+			}
+		}
+	}
+}
+
 void DuckLakeInsert::RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate) {
 	if (gstate.empty_files.empty()) {
 		return;

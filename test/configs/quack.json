@@ -169,6 +169,12 @@
       ]
     },
     {
+      "reason": "FIXME: The server-side commit of a quack catalog does not widen the FLOAT bounds of files merged while another transaction retyped the column to DOUBLE",
+      "paths": [
+        "test/sql/stats/float_to_double_retype_rewrite_concurrent.test"
+      ]
+    },
+    {
       "reason": "FIXME: Flaky timeout on quack.",
       "paths": [
         "test/sql/alter/many_schema_versions_low_memory.test_slow"

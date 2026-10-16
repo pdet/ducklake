@@ -33,6 +33,15 @@ bool DuckLakeCommitState::WidensFloatColumns(TableIndex table_id) const {
 
 void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats,
                                              bool can_widen) const {
+	auto retyped_by_others = float_columns_retyped_by_others.find(table_id);
+	if (retyped_by_others != float_columns_retyped_by_others.end()) {
+		for (auto &field_index : retyped_by_others->second) {
+			auto column_entry = column_stats.find(field_index);
+			if (column_entry != column_stats.end() && column_entry->second.type.id() == LogicalTypeId::FLOAT) {
+				column_entry->second.WidenFloatBounds();
+			}
+		}
+	}
 	auto entry = float_widened_columns.find(table_id);
 	if (entry == float_widened_columns.end()) {
 		return;
@@ -2577,6 +2586,22 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	                    &other_changes.tables_merge_adjacent, &other_changes.tables_rewrite_delete}) {
 		tables_changed_by_others.insert(tables->begin(), tables->end());
 	}
+	// the rows this transaction wrote as FLOAT read as DOUBLE once another commit retyped their column
+	float_columns_retyped_by_others.clear();
+	if (!other_changes.altered_tables.empty()) {
+		auto table_ids = StringUtil::Join(other_changes.altered_tables, ", ",
+		                                  [](TableIndex table_id) { return to_string(table_id.index); });
+		auto query = StringUtil::Format("SELECT table_id, column_id FROM {METADATA_CATALOG}.ducklake_column WHERE "
+		                                "table_id IN (%s) AND column_type = %s AND begin_snapshot > %d",
+		                                table_ids, SQLString(DuckLakeTypes::ToString(LogicalType::DOUBLE)),
+		                                transaction_snapshot.snapshot_id);
+		auto result = context.query_metadata(query);
+		result->ThrowIfError("Failed to read the columns that other transactions retyped: ");
+		for (auto &row : *result) {
+			float_columns_retyped_by_others[TableIndex(row.GetValue<idx_t>(0))].insert(
+			    FieldIndex(row.GetValue<idx_t>(1)));
+		}
+	}
 
 	return snapshot_and_stats;
 }
@@ -2612,6 +2637,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
+			commit_state.float_columns_retyped_by_others = float_columns_retyped_by_others;
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
