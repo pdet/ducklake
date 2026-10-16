@@ -90,6 +90,8 @@ struct ParquetColumn {
 	LogicalType duckdb_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
+	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
+	LogicalType bounds_type;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -420,6 +422,9 @@ FROM parquet_full_metadata(%s)
 				stats.max = stats_max.GetValue().GetString();
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
+			}
+			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
+				stats.CastBoundsFrom(column.bounds_type);
 			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
@@ -775,6 +780,11 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		file_metadata.variant_columns.emplace_back(field_id.GetFieldIndex(), column);
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
+	auto &field_type = field_id.Type();
+	if (!field_id.HasChildren() && !column.skip_bounds && column.duckdb_type != field_type &&
+	    !DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type)) {
+		column.bounds_type = column.duckdb_type;
+	}
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
