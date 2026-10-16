@@ -16,7 +16,13 @@ Unsupported ducklake_version
 statement error
 ATTACH 'ducklake:{TEST_DIR}/ducklake_version_err.db' AS ducklake_err(DATA_PATH '{TEST_DIR}/ducklake_version_err_files', DUCKLAKE_VERSION '0.4')
 ----
-ducklake_version must be >= '1.0'
+ducklake_version must be '1.0' or '1.1', got '0.4'
+
+# dev versions should be rejected as user option
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_version_err.db' AS ducklake_err(DATA_PATH '{TEST_DIR}/ducklake_version_err_files', DUCKLAKE_VERSION '1.1-dev1')
+----
+ducklake_version must be '1.0' or '1.1', got '1.1-dev1'
 
 # create a new database pinned to version 1.0
 statement ok

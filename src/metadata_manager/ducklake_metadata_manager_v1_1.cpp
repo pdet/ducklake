@@ -3,8 +3,6 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "common/ducklake_version.hpp"
-#include "storage/ducklake_catalog.hpp"
-#include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
 
@@ -57,7 +55,8 @@ string DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetVersionString() {
-	return DuckLakeVersionToString(this->transaction.GetCatalog().GetDuckLakeVersion());
+	constexpr auto VERSION = DuckLakeVersion::V1_1;
+	return DuckLakeVersionToString(VERSION);
 }
 
 // explicit instantiations for all backends

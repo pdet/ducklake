@@ -10,10 +10,8 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
 test-env DATA_PATH {TEST_DIR}
 
-foreach name,version dev,1.1-dev1 final,1.1
-
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration_{name}', METADATA_SCHEMA 'requires_migration_{name}', DUCKLAKE_VERSION '1.0')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.0')
 
 statement ok
 CREATE TABLE ducklake.t AS SELECT 42 AS i
@@ -22,12 +20,18 @@ statement ok
 DETACH ducklake
 
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration_{name}', METADATA_SCHEMA 'requires_migration_{name}', DUCKLAKE_VERSION '{version}')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1')
 ----
-DuckLake catalog version mismatch: catalog version is 1.0, but the extension requires version 1.1
+DuckLake catalog version mismatch: catalog version is 1.0, but the extension requires version 1.1.
+
+# dev versions cannot be requested
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+----
+ducklake_version must be '1.0' or '1.1', got '1.1-dev1'
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration_{name}', METADATA_SCHEMA 'requires_migration_{name}', DUCKLAKE_VERSION '{version}', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 FROM ducklake.t
@@ -35,11 +39,6 @@ FROM ducklake.t
 42
 
 query I
-SELECT value = '{version}' FROM ducklake.options() WHERE option_name = 'version'
+SELECT value FROM ducklake.options() WHERE option_name = 'version'
 ----
-true
-
-statement ok
-DETACH ducklake
-
-endloop
+1.1
