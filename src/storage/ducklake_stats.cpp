@@ -189,6 +189,16 @@ void DuckLakeColumnStats::WidenFloatBounds() {
 	type = LogicalType::DOUBLE;
 }
 
+bool DuckLakeColumnStats::DefaultSurvivesFloatWidening(const Value &initial_default) {
+	if (initial_default.IsNull()) {
+		return true;
+	}
+	// the catalog stores the default as text and casts it to the type of the column
+	Value default_text(initial_default.ToString());
+	return default_text.DefaultCastAs(LogicalType::FLOAT).DefaultCastAs(LogicalType::DOUBLE) ==
+	       default_text.DefaultCastAs(LogicalType::DOUBLE);
+}
+
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {
 	// bound strings reread exactly at wider types
 	if (source.IsIntegral() && target.IsIntegral()) {

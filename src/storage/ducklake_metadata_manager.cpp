@@ -531,6 +531,10 @@ AND NOT EXISTS (
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	if (!allow_failures) {
+		// only the bounds that the 1.0 release kept need widening
+		MigrateFloatRetypeBounds();
+	}
 	MigrateInlinedSchemaVersions();
 	MigrateRenamedFieldDefaults();
 	MigrateInlinedDataTypes();
@@ -3382,17 +3386,123 @@ static string RewriteColumnStatsBoundsSql(const map<TableIndex, set<FieldIndex>>
 	                          bounds, column_pairs);
 }
 
-string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &widened_columns,
-                                                       const map<TableIndex, set<FieldIndex>> &cleared_columns,
-                                                       idx_t next_file_id) {
+//! The FLOAT bounds rewritten as the DOUBLE values they widen to
+static string WidenedFloatBoundsSql() {
 	string widened_bounds;
 	for (auto bound : {"min_value", "max_value"}) {
 		widened_bounds += widened_bounds.empty() ? "" : ", ";
 		widened_bounds +=
 		    StringUtil::Format("%s = CAST(CAST(CAST(%s AS REAL) AS DOUBLE PRECISION) AS VARCHAR)", bound, bound);
 	}
-	return RewriteColumnStatsBoundsSql(widened_columns, widened_bounds, next_file_id) +
-	       RewriteColumnStatsBoundsSql(cleared_columns, "min_value = NULL, max_value = NULL", next_file_id);
+	return widened_bounds;
+}
+
+static constexpr const char *CLEARED_BOUNDS_SQL = "min_value = NULL, max_value = NULL";
+
+string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &widened_columns,
+                                                       const map<TableIndex, set<FieldIndex>> &cleared_columns,
+                                                       idx_t next_file_id) {
+	return RewriteColumnStatsBoundsSql(widened_columns, WidenedFloatBoundsSql(), next_file_id) +
+	       RewriteColumnStatsBoundsSql(cleared_columns, CLEARED_BOUNDS_SQL, next_file_id);
+}
+
+void DuckLakeMetadataManager::MigrateFloatRetypeBounds() {
+	auto float_type = SQLString::ToString(DuckLakeTypes::ToString(LogicalType::FLOAT));
+	auto double_type = SQLString::ToString(DuckLakeTypes::ToString(LogicalType::DOUBLE));
+	auto retypes = Query(StringUtil::Format(R"(
+SELECT retyped.table_id, retyped.column_id, retyped.begin_snapshot, original.column_type = %s, original.initial_default
+FROM {METADATA_CATALOG}.ducklake_column retyped
+JOIN {METADATA_CATALOG}.ducklake_column original ON original.table_id = retyped.table_id
+	AND original.column_id = retyped.column_id AND original.end_snapshot = retyped.begin_snapshot
+WHERE retyped.column_type = %s AND original.column_type <> %s)",
+	                                        float_type, double_type, double_type));
+	retypes->ThrowIfError("Failed to list the columns retyped to DOUBLE while migrating to v1.1-dev1: ");
+	string migrate_query;
+	for (auto &row : *retypes) {
+		auto table_id = row.GetValue<idx_t>(0);
+		auto column_id = row.GetValue<idx_t>(1);
+		auto retype_snapshot = row.GetValue<idx_t>(2);
+		bool from_float = row.GetValue<bool>(3);
+		bool widen = from_float && DuckLakeColumnStats::DefaultSurvivesFloatWidening(
+		                               row.IsNull(4) ? Value() : Value(row.GetValue<string>(4)));
+		// whether a row of the column was valid when the data was written, outside of a commit that changed its type
+		auto written_as = [&](const string &snapshot, const string &type_filter) {
+			return StringUtil::Format(
+			    "EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_column col "
+			    "WHERE col.table_id = %d AND col.column_id = %d%s AND col.begin_snapshot <= %s "
+			    "AND (col.end_snapshot IS NULL OR col.end_snapshot > %s) AND NOT (col.begin_snapshot = %s AND EXISTS ("
+			    "SELECT 1 FROM {METADATA_CATALOG}.ducklake_column previous WHERE previous.table_id = col.table_id "
+			    "AND previous.column_id = col.column_id AND previous.end_snapshot = col.begin_snapshot "
+			    "AND previous.column_type <> col.column_type)))",
+			    table_id, column_id, type_filter, snapshot, snapshot, snapshot);
+		};
+		auto float_filter = " AND col.column_type = " + float_type;
+		auto files = [&](const string &filter) {
+			return StringUtil::Format("SELECT df.data_file_id FROM {METADATA_CATALOG}.ducklake_data_file df WHERE "
+			                          "df.table_id = %d AND (%s)",
+			                          table_id, filter);
+		};
+		auto update_bounds = [&](const string &stats_table, const string &bounds, const string &filter) {
+			migrate_query +=
+			    StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s WHERE table_id = %d AND column_id = %d%s;\n",
+			                       stats_table, bounds, table_id, column_id, filter);
+		};
+		auto float_files = files(StringUtil::Format("df.begin_snapshot < %d AND %s", retype_snapshot,
+		                                            written_as("df.begin_snapshot", float_filter)));
+		// files of a commit that changed the type, or of a FLOAT column whose rows expired, can hold either type
+		auto unknown_files = files(
+		    StringUtil::Format("df.begin_snapshot = %d OR (%s AND df.begin_snapshot < %d AND NOT %s)", retype_snapshot,
+		                       from_float ? "true" : "false", retype_snapshot, written_as("df.begin_snapshot", "")));
+		// table bounds are exact when every value was written while the column was FLOAT
+		bool exact_table_bounds = widen;
+		if (exact_table_bounds) {
+			auto other_files = Query(StringUtil::Format(
+			    "SELECT 1 FROM {METADATA_CATALOG}.ducklake_data_file df WHERE df.table_id = %d AND (df.begin_snapshot "
+			    ">= %d OR df.data_file_id IN (SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_file_column_stats "
+			    "WHERE table_id = %d AND column_id = %d AND data_file_id NOT IN (%s))) LIMIT 1",
+			    table_id, retype_snapshot, table_id, column_id, float_files));
+			other_files->ThrowIfError("Failed to read the data files of a column retyped to DOUBLE: ");
+			exact_table_bounds = !other_files->Fetch();
+		}
+		if (exact_table_bounds) {
+			auto inlined_tables = Query(GetInlinedTableNamesSql(TableIndex(table_id)));
+			inlined_tables->ThrowIfError("Failed to list the inlined-data tables of a column retyped to DOUBLE: ");
+			DuckLakeInlinedColNames col_names(true);
+			for (auto &inlined_table : *inlined_tables) {
+				auto other_rows = Query(StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE NOT %s LIMIT 1",
+				                                           SQLIdentifier(inlined_table.GetValue<string>(0)),
+				                                           written_as(col_names.begin_snapshot, float_filter)));
+				other_rows->ThrowIfError("Failed to read the inlined rows of a column retyped to DOUBLE: ");
+				if (other_rows->Fetch()) {
+					exact_table_bounds = false;
+					break;
+				}
+			}
+		}
+		if (from_float) {
+			update_bounds("ducklake_file_column_stats", widen ? WidenedFloatBoundsSql() : CLEARED_BOUNDS_SQL,
+			              " AND data_file_id IN (" + float_files + ")");
+		}
+		update_bounds("ducklake_file_column_stats", CLEARED_BOUNDS_SQL, " AND data_file_id IN (" + unknown_files + ")");
+		if (exact_table_bounds) {
+			update_bounds("ducklake_table_column_stats", WidenedFloatBoundsSql(), "");
+		} else if (from_float) {
+			update_bounds("ducklake_table_column_stats", CLEARED_BOUNDS_SQL, "");
+		} else {
+			// the table bounds took in the bounds of the files of unknown type
+			update_bounds(
+			    "ducklake_table_column_stats", CLEARED_BOUNDS_SQL,
+			    StringUtil::Format(" AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_column_stats "
+			                       "fcs WHERE fcs.table_id = %d AND fcs.column_id = %d AND fcs.data_file_id IN "
+			                       "(%s))",
+			                       table_id, column_id, unknown_files));
+		}
+	}
+	if (migrate_query.empty()) {
+		return;
+	}
+	auto result = Execute(migrate_query);
+	result->ThrowIfError("Failed to rewrite the bounds of columns retyped to DOUBLE while migrating to v1.1-dev1: ");
 }
 
 static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {

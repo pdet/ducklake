@@ -571,6 +571,8 @@ public:
 	virtual void MigrateV10Dev();
 	//! Whether the catalog already has every metadata table and column of v1.1-dev1
 	bool HasV1_1Dev1Additions();
+	//! Widens the bounds that older versions kept for FLOAT columns retyped to DOUBLE
+	void MigrateFloatRetypeBounds();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Adds the schema version rows of inlined tables that older versions registered without one

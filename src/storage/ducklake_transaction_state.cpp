@@ -59,17 +59,6 @@ void DuckLakeCommitState::PrepareFloatBounds(TableIndex table_id, map<FieldIndex
 	}
 }
 
-//! Whether the default of a widened FLOAT column reads as its FLOAT value widened to DOUBLE
-static bool DefaultSurvivesFloatWidening(const Value &initial_default) {
-	if (initial_default.IsNull()) {
-		return true;
-	}
-	// the catalog stores the default as text and casts it to the type of the column
-	Value default_text(initial_default.ToString());
-	return default_text.DefaultCastAs(LogicalType::FLOAT).DefaultCastAs(LogicalType::DOUBLE) ==
-	       default_text.DefaultCastAs(LogicalType::DOUBLE);
-}
-
 DuckLakeTransactionState::DuckLakeTransactionState(DatabaseInstance &db, bool require_commit_message,
                                                    DuckLakeNameMapSet &new_name_maps, string data_path,
                                                    string separator)
@@ -1740,7 +1729,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 				if (retyped && new_field.column_info.type == DuckLakeTypes::ToString(LogicalType::DOUBLE)) {
 					auto widened_table_id = commit_state.GetTableId(table);
 					commit_state.float_widened_columns[widened_table_id].insert(field_index);
-					if (!DefaultSurvivesFloatWidening(new_field.column_info.initial_default)) {
+					if (!DuckLakeColumnStats::DefaultSurvivesFloatWidening(new_field.column_info.initial_default)) {
 						commit_state.float_bounds_to_clear[widened_table_id].insert(field_index);
 					}
 				}
