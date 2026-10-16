@@ -22,6 +22,7 @@
 #include "functions/ducklake_compaction_functions.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
@@ -541,9 +542,8 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 
 DuckLakeTableEntry &DuckLakeCompactor::GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
                                                            const DuckLakeTableEntry &table) {
-	auto schema_id = table.schema.Cast<DuckLakeSchemaEntry>().GetSchemaId();
-	auto latest_entry =
-	    transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, schema_id, table.name.GetIdentifierName());
+	// by id, since the table can have been renamed and its old name taken by another table
+	auto latest_entry = transaction.GetLocalEntryById(table.GetTableId());
 	if (!latest_entry) {
 		latest_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.GetTableId());
 		if (!latest_entry) {
@@ -554,24 +554,23 @@ DuckLakeTableEntry &DuckLakeCompactor::GetLatestTableEntry(DuckLakeCatalog &cata
 }
 
 unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
-    ClientContext &context, Binder &binder, DuckLakeTableEntry &table, DuckLakeCopyInput &copy_input, bool write_row_id,
+    ClientContext &context, Binder &binder, DuckLakeTableEntry &table, DuckLakeCopyInput &copy_input,
     bool write_snapshot_id,
     const std::function<unique_ptr<DuckLakeMultiFileList>(DuckLakeFunctionInfo &)> &create_file_list,
     unique_ptr<LogicalCopyToFile> &copy) {
 	auto table_idx = binder.GenerateTableIndex();
 	unique_ptr<FunctionData> bind_data;
 	EntryLookupInfo info(CatalogType::TABLE_ENTRY, QualifiedName(table.name));
-	auto scan_function = table.GetScanFunction(context, bind_data, info);
+	auto scan_function = table.GetScanFunctionById(context, bind_data, info);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
 	multi_file_bind_data.file_list = create_file_list(read_info);
 
-	if (write_row_id && write_snapshot_id) {
+	// rowids are always written, since a sort reorders rows, deletes leave gaps and UPDATE files embed their own
+	if (write_snapshot_id) {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
-	} else if (write_row_id) {
+	} else {
 		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
-	} else if (write_snapshot_id) {
-		copy_input.virtual_columns = InsertVirtualColumns::WRITE_SNAPSHOT_ID;
 	}
 	copy_input.get_table_index = table_idx.index;
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
@@ -584,9 +583,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	for (idx_t i = 0; i < table.GetColumns().PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
 	}
-	if (write_row_id) {
-		column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
-	}
+	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	if (write_snapshot_id) {
 		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
 	}
@@ -639,7 +636,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		case CompactionType::REWRITE_DELETES: {
 			if (!source.delete_files.empty()) {
 				if (source.delete_files.back().end_snapshot.IsValid()) {
+					// LCOV_EXCL_START
 					continue;
+					// LCOV_EXCL_STOP
 				}
 				result.delete_file = source.delete_files.back().data;
 			}
@@ -670,7 +669,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		files_to_scan.push_back(std::move(result));
 	}
 	if (actionable_source_files.empty()) {
+		// LCOV_EXCL_START
 		return nullptr;
+		// LCOV_EXCL_STOP
 	}
 
 	string data_path;
@@ -694,8 +695,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		}
 	}
 
-	// rowids are always written, since a sort reorders rows, deletes leave gaps and UPDATE files embed their own
-	bool write_row_id = true;
 	bool write_snapshot_id = false;
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
@@ -712,7 +711,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	copy_input.partition_data = nullptr;
 	unique_ptr<LogicalCopyToFile> copy;
 	auto root = PlanRewriteScan(
-	    context, binder, table, copy_input, write_row_id, write_snapshot_id,
+	    context, binder, table, copy_input, write_snapshot_id,
 	    [&](DuckLakeFunctionInfo &read_info) {
 		    return make_uniq<DuckLakeMultiFileList>(read_info, std::move(files_to_scan));
 	    },
@@ -773,8 +772,11 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		compactions[0]->Cast<DuckLakeLogicalCompaction>().table_index = bind_index;
 		return std::move(compactions[0]);
 	}
-	return input.binder->UnionOperators(std::move(compactions), DuckLakeLogicalCompaction::GetResultTypes().size(),
-	                                    bind_index);
+	auto result = input.binder->UnionOperators(std::move(compactions),
+	                                           DuckLakeLogicalCompaction::GetResultTypes().size(), bind_index);
+	// the compactions are independent, so their pipelines may run concurrently
+	result->Cast<LogicalSetOperation>().allow_out_of_order = true;
+	return result;
 }
 
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,

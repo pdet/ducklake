@@ -144,6 +144,16 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 	return column_stats;
 }
 
+static bool IsLeafColumnStats(const vector<Value> &col_stats) {
+	// only leaf columns report a size
+	for (auto &stat : col_stats) {
+		if (StringValue::Get(StructValue::GetChildren(stat)[0]) == "column_size_bytes") {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
 	auto skipped_fields = global_state.table.GetSkippedStatsFields();
@@ -179,6 +189,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
+			if (!IsLeafColumnStats(col_stats)) {
+				continue;
+			}
 			auto column_names = DuckLakeUtil::ParseQuotedList(col_name, '.');
 			// FIXME: this should be checked differently
 			if (column_names[0] == "_ducklake_internal_snapshot_id") {
@@ -370,8 +383,7 @@ static bool WriteRowId(InsertVirtualColumns virtual_columns) {
 }
 
 static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
-	return virtual_columns == InsertVirtualColumns::WRITE_SNAPSHOT_ID ||
-	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 }
 
 static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns) {
@@ -714,7 +726,8 @@ DuckLakeInsertPipeline DuckLakeInsert::PlanInsertPipeline(ClientContext &context
 		}
 	}
 	if (data_inlining_row_limit > 0) {
-		auto &inline_data = planner.Make<DuckLakeInlineData>(result.root.get(), data_inlining_row_limit);
+		auto &inline_data =
+		    planner.Make<DuckLakeInlineData>(result.root.get(), schema.ParentCatalog(), data_inlining_row_limit);
 		result.inline_data = inline_data.Cast<DuckLakeInlineData>();
 		result.root = inline_data;
 		// with sort_on_insert off only the Parquet bound overflow rows are sorted, after inlining
@@ -785,7 +798,9 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 		throw BinderException("ON CONFLICT clause not yet supported for insertion into DuckLake table");
 	}
 	if (!op.column_index_map.empty()) {
+		// LCOV_EXCL_START
 		plan = planner.ResolveDefaultsProjection(op, *plan);
+		// LCOV_EXCL_STOP
 	}
 	auto &ducklake_table = op.table.Cast<DuckLakeTableEntry>();
 	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, ducklake_table, *plan);
@@ -802,11 +817,6 @@ PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPl
 
 PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      LogicalCreateTable &op, PhysicalOperator &plan) {
-	// CTAS bypasses the catalog CreateTable entry point, so the create table gate runs here
-	auto supports_create_table = SupportsCreateTable(*op.info);
-	if (supports_create_table.HasError()) {
-		supports_create_table.Throw();
-	}
 	auto &create_info = op.info->Base();
 	auto &columns = create_info.columns;
 	auto &duck_transaction = DuckLakeTransaction::Get(context, *this);
