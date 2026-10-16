@@ -563,28 +563,38 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
 	auto tables = Query(R"(
-SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
+SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name, tbl.dropped
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id AND tbl.end_snapshot IS NULL)");
+LEFT JOIN (
+	SELECT table_id, arg_max(table_name, begin_snapshot) AS table_name, bool_and(end_snapshot IS NOT NULL) AS dropped
+	FROM {METADATA_CATALOG}.ducklake_table
+	GROUP BY table_id
+) tbl ON idt.table_id = tbl.table_id)");
 	tables->ThrowIfError("Failed to list inlined-data tables while migrating to v1.1-dev1: ");
 	DuckLakeInlinedColNames old_names(false);
 	DuckLakeInlinedColNames new_names(true);
 	vector<pair<string, string>> col_renames {{old_names.row_id, new_names.row_id},
 	                                          {old_names.begin_snapshot, new_names.begin_snapshot},
 	                                          {old_names.end_snapshot, new_names.end_snapshot}};
-	// a query result can only be iterated once, so collect the (inlined table name, user table name) pairs
-	vector<pair<string, string>> inlined_tables;
+	struct InlinedTable {
+		string table_name;
+		string user_table_name;
+		bool dropped;
+	};
+	// a query result can only be iterated once, so collect the inlined tables
+	vector<InlinedTable> inlined_tables;
 	string renamed_probe;
 	for (auto &row : *tables) {
 		auto table_name = row.GetValue<string>(0);
 		auto user_table_name = row.IsNull(1) ? table_name : row.GetValue<string>(1);
+		bool dropped = row.IsNull(2) || row.GetValue<bool>(2);
 		if (!renamed_probe.empty()) {
 			renamed_probe += " UNION ALL ";
 		}
 		renamed_probe +=
 		    StringUtil::Format("(SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s LIMIT 0)", new_names.row_id,
 		                       new_names.begin_snapshot, new_names.end_snapshot, SQLIdentifier(table_name));
-		inlined_tables.emplace_back(std::move(table_name), std::move(user_table_name));
+		inlined_tables.push_back({std::move(table_name), std::move(user_table_name), dropped});
 	}
 	if (inlined_tables.empty()) {
 		return;
@@ -593,9 +603,10 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
+	// every inlined table is checked before the first rename, so a conflict renames nothing
+	vector<pair<string, string>> table_renames;
 	for (auto &inlined_table : inlined_tables) {
-		auto &table_name = inlined_table.first;
-		auto &user_table_name = inlined_table.second;
+		auto &table_name = inlined_table.table_name;
 		auto probe =
 		    Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		probe->ThrowIfError(
@@ -620,10 +631,12 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 			}
 			if (user_columns.count(entry.second)) {
 				throw InvalidInputException(
-				    "Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: table \"%s\" has a "
-				    "column \"%s\" colliding with the renamed metadata column. Rename the column and call "
-				    "ducklake_flush_inlined_data() before migrating",
-				    user_table_name, entry.second);
+				    "Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: %s \"%s\" has a "
+				    "column \"%s\" colliding with the renamed metadata column. %s before migrating",
+				    inlined_table.dropped ? "the dropped table" : "table", inlined_table.user_table_name, entry.second,
+				    inlined_table.dropped
+				        ? "Expire the snapshots in which the table exists with ducklake_expire_snapshots()"
+				        : "Rename the column and call ducklake_flush_inlined_data()");
 			}
 			renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
 			                              SQLIdentifier(table_name), entry.first, entry.second);
@@ -634,12 +647,15 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 			    "an unexpected column layout",
 			    table_name);
 		}
-		if (renames.empty()) {
-			continue;
+		if (!renames.empty()) {
+			table_renames.emplace_back(table_name, std::move(renames));
 		}
-		auto result = Execute(renames);
+	}
+	for (auto &table_rename : table_renames) {
+		auto result = Execute(table_rename.second);
 		result->ThrowIfError(StringUtil::Format(
-		    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ", table_name));
+		    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1-dev1: ",
+		    table_rename.first));
 	}
 }
 
