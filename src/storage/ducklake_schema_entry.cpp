@@ -273,6 +273,11 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(), info)) {
 		return nullptr;
 	}
+	for (auto &entry : info.column_comments_map) {
+		if (!entry.second.IsNull()) {
+			DuckLakeViewEntry::CheckColumnCommentsSupported(ParentCatalog().Cast<DuckLakeCatalog>());
+		}
+	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
