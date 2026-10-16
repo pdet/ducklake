@@ -120,7 +120,7 @@ public:
 	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(ClientContext &context, DuckLakeTableEntry &table, set<idx_t> new_deletes);
-	void SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table);
+	void SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table, bool changed_types);
 	//! Recompute the inlined column stats that deletes left outdated
 	void RecomputeOutdatedStats(ClientContext &context);
 	void AddColumnToLocalInlinedData(ClientContext &context, TableIndex table_id, const LogicalType &new_column_type,

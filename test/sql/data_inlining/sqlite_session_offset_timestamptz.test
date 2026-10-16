@@ -1,0 +1,51 @@
+# name: test/sql/data_inlining/sqlite_session_offset_timestamptz.test
+# description: inlined TIMESTAMPTZ rows stored as text in the session time zone read back as before next to UTC text
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require icu
+
+require sqlite_scanner
+
+# a 1.0 catalog that DuckLake a457bcc9 wrote in Europe/Amsterdam, which stored its rows with the offsets of that zone
+unzip data/old_ducklake/session_offset_timestamptz.sqlite.gz {TEST_DIR}/sqlite_session_offset_timestamptz.sqlite
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_session_offset_timestamptz.sqlite' AS dl (DATA_PATH '{TEST_DIR}/sqlite_session_offset_timestamptz', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+statement ok
+SET TimeZone = 'Europe/Amsterdam'
+
+statement ok
+INSERT INTO dl.t VALUES (3, TIMESTAMPTZ '1677-09-22 00:00:00+00', {'v': TIMESTAMPTZ '1677-09-22 00:00:00+00'})
+
+statement ok
+SET TimeZone = 'UTC'
+
+# the offset of the first row lost its seconds when it was written
+query III
+SELECT id, v, s FROM dl.t ORDER BY id
+----
+1	1677-09-22 00:00:30+00	{'v': '1677-09-22 00:00:30+00'}
+2	2020-06-01 00:00:00+00	{'v': '2020-06-01 00:00:00+00'}
+3	1677-09-22 00:00:00+00	{'v': '1677-09-22 00:00:00+00'}
+
+query II
+SELECT id, v FROM meta.ducklake_inlined_data_1_1 ORDER BY id
+----
+1	1677-09-22 00:17:30+00:17
+2	2020-06-01 02:00:00+02
+3	1677-09-22 00:00:00+00
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query III
+SELECT id, v, s FROM dl.t ORDER BY id
+----
+1	1677-09-22 00:00:30+00	{'v': '1677-09-22 00:00:30+00'}
+2	2020-06-01 00:00:00+00	{'v': '2020-06-01 00:00:00+00'}
+3	1677-09-22 00:00:00+00	{'v': '1677-09-22 00:00:00+00'}

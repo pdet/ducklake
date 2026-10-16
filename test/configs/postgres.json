@@ -74,6 +74,7 @@
     {
       "reason": "Test only for SQLite as catalog",
       "paths": [
+        "test/sql/data_inlining/sqlite_session_offset_timestamptz.test",
         "test/sql/metadata/ducklake_settings_sqlite.test",
         "test/sql/metadata/sqlite_all_varchar.test",
         "test/sql/data_inlining/sqlite_column_limit.test",

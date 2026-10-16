@@ -877,8 +877,9 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 			bool is_float = source_type.IsFloating();
 			string nan_expr =
 			    is_float ? StringUtil::Format("COALESCE(BOOL_OR(isnan(%s)), false)", col_expr) : string("false");
-			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_expr, col_expr,
-			                                  col_expr, nan_expr);
+			// the bounds are typed, so they are read as text without the session time zone
+			select_list +=
+			    StringUtil::Format(", MIN(%s), MAX(%s), COUNT(%s), %s", col_expr, col_expr, col_expr, nan_expr);
 		}
 		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
 		    SQLQuotedIdentifier::ToString(inlined_table_name), select_list, context.InlinedColNames());

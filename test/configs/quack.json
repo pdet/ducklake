@@ -34,6 +34,7 @@
     {
       "reason": "Test only for SQLite as catalog",
       "paths": [
+        "test/sql/data_inlining/sqlite_session_offset_timestamptz.test",
         "test/sql/metadata/ducklake_settings_sqlite.test",
         "test/sql/metadata/sqlite_all_varchar.test",
         "test/sql/data_inlining/sqlite_column_limit.test",
@@ -43,6 +44,7 @@
     {
       "reason": "Test only for Postgres as catalog",
       "paths": [
+        "test/sql/data_inlining/postgres_v03_timestamptz_utc_text.test",
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",

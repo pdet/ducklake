@@ -636,6 +636,23 @@ void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &nam
 	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
 }
 
+DuckLakeUTCTimeZone::DuckLakeUTCTimeZone(ClientContext &context_p) : context(context_p) {
+	if (!context.TryGetCurrentSetting("TimeZone", previous_time_zone)) {
+		return;
+	}
+	DuckLakeUtil::SetExtensionSetting(context, "TimeZone", Value("UTC"));
+}
+
+DuckLakeUTCTimeZone::~DuckLakeUTCTimeZone() {
+	if (previous_time_zone.IsNull()) {
+		return;
+	}
+	try {
+		DuckLakeUtil::SetExtensionSetting(context, "TimeZone", previous_time_zone);
+	} catch (...) {
+	}
+}
+
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
 
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
