@@ -297,7 +297,6 @@ static bool IsIdenticalView(DuckLakeViewEntry &view, const CreateViewInfo &info,
 	    view.tags != info.tags || view.HasColumnComments() || !info.column_comments_map.empty()) {
 		return false;
 	}
-	// a view without a cached binding binds its query when it is used
 	auto columns = view.GetColumnInfo();
 	return !columns || (HasSameTypes(columns->types, info.types) && HasSameSpelling(columns->names, info.names));
 }
@@ -310,9 +309,15 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto query_sql = info.query->ToString();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
-		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY &&
-		    IsIdenticalView(existing_entry->Cast<DuckLakeViewEntry>(), info, query_sql)) {
-			return existing_entry;
+		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY) {
+			auto &existing_view = existing_entry->Cast<DuckLakeViewEntry>();
+			if (IsIdenticalView(existing_view, info, query_sql)) {
+				if (!existing_view.GetColumnInfo()) {
+					// keep the binding of the replacement instead of binding the query again
+					existing_view.UpdateBinding(info.types, info.names);
+				}
+				return existing_entry;
+			}
 		}
 	}
 	// check if we have an existing entry with this name

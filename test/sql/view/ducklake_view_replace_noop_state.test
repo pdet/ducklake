@@ -173,6 +173,32 @@ k
 statement ok
 COMMIT
 
+# a view without a binding gets the binding of the replacement
+statement ok
+CREATE TEMP SEQUENCE bind_seq
+
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.q WITH (DEFER_BINDING) AS SELECT * FROM query('SELECT 42 AS c' || nextval('temp.bind_seq')::VARCHAR)
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.q AS SELECT * FROM query('SELECT 42 AS c' || nextval('temp.bind_seq')::VARCHAR)
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'q'
+----
+c1
+
+query I
+SELECT currval('temp.bind_seq')
+----
+1
+
+statement ok
+ROLLBACK
+
 # an identical PIVOT view is not written again
 statement ok
 CREATE TABLE ducklake.p(k VARCHAR, v INTEGER)
