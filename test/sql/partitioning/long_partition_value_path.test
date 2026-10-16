@@ -109,9 +109,61 @@ INSERT INTO dl.multi VALUES (1, repeat('商品', 15))
 
 query I
 SELECT count(*) FROM ducklake_list_files('dl', 'multi')
-WHERE contains(data_file, 'a=1/' || md5(hive_partition_component('b', repeat('商品', 15))) || '/')
+WHERE contains(replace(data_file, '\', '/'), 'a=1/' || md5(hive_partition_component('b', repeat('商品', 15))) || '/')
 ----
 1
+
+# a transformed key next to a long value
+statement ok
+CREATE TABLE dl.transformed (d DATE, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.transformed SET PARTITIONED BY (year(d), name)
+
+statement ok
+INSERT INTO dl.transformed VALUES (DATE '2024-05-01', repeat('商品', 15))
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'transformed')
+WHERE contains(replace(data_file, '\', '/'), 'year=2024/' || md5(hive_partition_component('name', repeat('商品', 15))) || '/')
+----
+1
+
+query II
+SELECT d, length(name) FROM dl.transformed
+----
+2024-05-01	30
+
+# a checkpoint flushes inlined rows with a long value
+statement ok
+INSERT INTO dl.inlined VALUES (3, repeat('商品', 15))
+
+statement ok
+CHECKPOINT dl
+
+query I
+SELECT sum(f.record_count)
+FROM __ducklake_metadata_dl.ducklake_data_file f
+JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id)
+WHERE t.table_name = 'inlined' AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL
+----
+3
+
+# VARIANT values of different types with the same text still share a directory
+statement ok
+CREATE TABLE dl.variants (id INTEGER, v VARIANT)
+
+statement ok
+ALTER TABLE dl.variants SET PARTITIONED BY (v)
+
+statement ok
+INSERT INTO dl.variants VALUES (1, 1::VARIANT), (2, '1'::VARIANT)
+
+query II
+SELECT id, variant_typeof(v) FROM dl.variants ORDER BY id
+----
+1	INT32
+2	VARCHAR
 
 statement ok
 CREATE TABLE dl.long_column (id INTEGER, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc VARCHAR)
@@ -128,7 +180,17 @@ WHERE contains(data_file, md5(hive_partition_component('cccccccccccccccccccccccc
 ----
 1
 
+statement ok
+INSERT INTO dl.long_column VALUES (2, NULL)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'long_column')
+WHERE contains(data_file, md5(hive_partition_component('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', NULL)))
+----
+1
+
 query II
-SELECT id, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc FROM dl.long_column
+SELECT id, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc FROM dl.long_column ORDER BY id
 ----
 1	v
+2	NULL
