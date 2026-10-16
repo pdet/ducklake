@@ -32,6 +32,7 @@ public:
 		return 2000;
 	}
 	bool IsRetryableCommitError(const string &message) const override;
+	string CommitErrorHint(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };
