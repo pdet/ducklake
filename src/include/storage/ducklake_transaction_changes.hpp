@@ -20,7 +20,7 @@ class CatalogEntry;
 class DuckLakeSchemaEntry;
 
 struct TransactionChangeInformation {
-	case_insensitive_set_t created_schemas;
+	case_insensitive_map_t<reference<DuckLakeSchemaEntry>> created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_scalar_macros;
@@ -28,6 +28,8 @@ struct TransactionChangeInformation {
 
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_tables_with_schema_version_changes;
+	//! Tables that got a NOT NULL constraint, which a concurrent insert can violate
+	set<TableIndex> tables_set_not_null;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;
@@ -35,6 +37,8 @@ struct TransactionChangeInformation {
 	set<MacroIndex> dropped_table_macros;
 	set<TableIndex> tables_inserted_into;
 	set<TableIndex> tables_deleted_from;
+	//! Tables a delete predicate was evaluated against, regardless of whether any rows matched
+	set<TableIndex> tables_delete_attempted;
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;

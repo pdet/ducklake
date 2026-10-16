@@ -5,6 +5,7 @@ name: Main Extension Distribution Pipeline
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   get-duckdb-version:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Get DuckDB version
     runs-on: ubuntu-latest
     outputs:
@@ -25,16 +27,21 @@ jobs:
         run: echo "duckdb_version=$(cat .github/duckdb-version)" >> $GITHUB_OUTPUT
 
   duckdb-next-build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build extension binaries
     needs: get-duckdb-version
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
     with:
       duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       ci_tools_version: v1.5-variegata
+      # Temporary override; remove when extension-ci-tools updates its default.
+      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
       extension_name: ducklake
+      opt_in_archs: 'linux_arm64_musl;linux_amd64_musl'
 
   # Regression test, see https://github.com/duckdb/ducklake/pull/1256 for more details.
   gcc12-compatibility-build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build with GCC 12
     runs-on: ubuntu-22.04
     env:
@@ -76,19 +83,19 @@ jobs:
           make release
 
   duckdb-next-deploy:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.ref != 'refs/heads/main')
     name: Deploy extension binaries
     needs: [get-duckdb-version, duckdb-next-build, gcc12-compatibility-build]
-    if: github.ref != 'refs/heads/main'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
     secrets: inherit
     with:
       extension_name: ducklake
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       ci_tools_version: main
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') }}
 
   relassert:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build relassert
     runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
     env:
@@ -129,4 +136,4 @@ jobs:
           build-type: relassert
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
           test: make unittest_relassert
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
