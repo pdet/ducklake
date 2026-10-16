@@ -1,0 +1,106 @@
+# name: test/sql/partitioning/partition_spec_restored_in_transaction.test
+# description: files written after a transaction sets the committed partition spec again reference the committed spec
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/partition_spec_restored_in_transaction', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (b)
+
+statement ok
+INSERT INTO lake.t VALUES (2, 20)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO lake.t VALUES (3, 30)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+WHERE partition_id NOT IN (SELECT partition_id FROM meta.ducklake_partition_info)
+----
+0
+
+query I
+SELECT count(DISTINCT partition_id) FROM meta.ducklake_data_file WHERE data_file_id IN (
+	SELECT data_file_id FROM meta.ducklake_file_partition_value WHERE partition_value IN ('1', '3'))
+----
+1
+
+# the file is merged with later files of its partition
+statement ok
+INSERT INTO lake.t VALUES (3, 31)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+query II
+SELECT count(*), sum(record_count) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND data_file_id IN (
+	SELECT data_file_id FROM meta.ducklake_file_partition_value WHERE partition_value = '3')
+----
+1	2
+
+query II
+SELECT a, b FROM lake.t ORDER BY b
+----
+1	10
+2	20
+3	30
+3	31
+
+# a reset in between
+statement ok
+CREATE TABLE lake.u (a INTEGER)
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO lake.u VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.u RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (a)
+
+statement ok
+INSERT INTO lake.u VALUES (2)
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), count(DISTINCT partition_id) FROM meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+AND partition_id IN (SELECT partition_id FROM meta.ducklake_partition_info)
+----
+2	1

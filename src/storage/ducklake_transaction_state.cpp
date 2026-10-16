@@ -2184,8 +2184,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		auto existing_catalog =
 		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
 		                                                     data_path, separator, context.supports_v1_1_metadata);
-		batch_queries +=
-		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
+		batch_queries += DuckLakeMetadataManager::WriteNewPartitionKeys(
+		    existing_catalog.partitions, result.new_partition_keys, commit_state.committed_partition_ids);
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
