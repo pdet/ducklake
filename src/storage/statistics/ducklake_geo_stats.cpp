@@ -39,12 +39,21 @@ static constexpr GeoStatsBound GEO_STATS_BOUNDS[] = {{"xmin", &GeometryExtent::x
                                                      {"mmin", &GeometryExtent::m_min, GeometryExtent::EMPTY_MIN},
                                                      {"mmax", &GeometryExtent::m_max, GeometryExtent::EMPTY_MAX}};
 
+//! Stands for an unknown bound, since JSON has no infinite numbers
+static constexpr double WIDEST_FINITE_BOUND = std::numeric_limits<double>::max();
+
 bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	JSONWriter writer;
 	auto bbox = writer.CreateObject();
 	for (auto &bound : GEO_STATS_BOUNDS) {
 		auto value = extent.*bound.field;
-		bbox.Add(bound.name, value == bound.empty_value ? writer.CreateNull() : writer.CreateDouble(value));
+		if (value == bound.empty_value) {
+			bbox.Add(bound.name, writer.CreateNull());
+		} else if (std::isfinite(value)) {
+			bbox.Add(bound.name, writer.CreateDouble(value));
+		} else {
+			bbox.Add(bound.name, writer.CreateDouble(std::copysign(WIDEST_FINITE_BOUND, -bound.empty_value)));
+		}
 	}
 	auto types = writer.CreateArray();
 	for (auto &type : geo_types) {
@@ -54,7 +63,7 @@ bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	root.Add("bbox", bbox);
 	root.Add("types", types);
 	writer.SetRoot(root);
-	result = SQLString::ToString(writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
+	result = SQLString::ToString(writer.ToString());
 	return true;
 }
 
@@ -107,15 +116,50 @@ bool DuckLakeColumnGeoStats::ParseStats(const string &stats_name, const vector<V
 	// LCOV_EXCL_STOP
 }
 
-unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
-	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
-
-	GeometryStats::GetExtent(stats) = extent;
-
-	auto &types = GeometryStats::GetTypes(stats);
+static GeometryTypeSet ToTypeSet(const set<string> &geo_types) {
+	auto types = GeometryTypeSet::Empty();
 	for (auto &type : geo_types) {
 		types.TryAdd(type);
 	}
+	return types;
+}
+
+static void SetBoundsUnknownIfEmpty(double &min, double &max) {
+	if (min == GeometryExtent::EMPTY_MIN && max == GeometryExtent::EMPTY_MAX) {
+		min = GeometryExtent::UNKNOWN_MIN;
+		max = GeometryExtent::UNKNOWN_MAX;
+	}
+}
+
+void DuckLakeColumnGeoStats::SetOmittedBoundsUnknown() {
+	auto types = ToTypeSet(geo_types);
+	if (types.IsEmpty()) {
+		return;
+	}
+	SetBoundsUnknownIfEmpty(extent.x_min, extent.x_max);
+	SetBoundsUnknownIfEmpty(extent.y_min, extent.y_max);
+	if (types.Has(VertexType::XYZ) || types.Has(VertexType::XYZM)) {
+		SetBoundsUnknownIfEmpty(extent.z_min, extent.z_max);
+	}
+	if (types.Has(VertexType::XYM) || types.Has(VertexType::XYZM)) {
+		SetBoundsUnknownIfEmpty(extent.m_min, extent.m_max);
+	}
+}
+
+unique_ptr<BaseStatistics> DuckLakeColumnGeoStats::ToStats() const {
+	auto stats = GeometryStats::CreateEmpty(LogicalType::GEOMETRY());
+
+	auto &stats_extent = GeometryStats::GetExtent(stats);
+	stats_extent = extent;
+	for (auto &bound : GEO_STATS_BOUNDS) {
+		// the largest finite bounds of an unknown extent also cover infinite coordinates
+		auto &value = stats_extent.*bound.field;
+		if (std::fabs(value) == WIDEST_FINITE_BOUND) {
+			value = -bound.empty_value;
+		}
+	}
+
+	GeometryStats::GetTypes(stats) = ToTypeSet(geo_types);
 
 	// DuckLake doesn't store flags for empty/non-empty geometry/parts, so assume the worst.
 	auto &flags = GeometryStats::GetFlags(stats);

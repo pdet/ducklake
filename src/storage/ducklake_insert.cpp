@@ -141,6 +141,9 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 			throw NotImplementedException("Unsupported stats type \"%s\" in DuckLakeInsert::Sink()", stats_name);
 		}
 	}
+	if (type.id() == LogicalTypeId::GEOMETRY) {
+		column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>().SetOmittedBoundsUnknown();
+	}
 	return column_stats;
 }
 

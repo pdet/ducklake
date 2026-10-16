@@ -26,6 +26,8 @@ struct DuckLakeColumnGeoStats final : public DuckLakeColumnExtraStats {
 	void Deserialize(const string &stats) override;
 
 	unique_ptr<BaseStatistics> ToStats() const;
+	//! The writer leaves out the bounds of an axis with a non finite coordinate, so they are unknown
+	void SetOmittedBoundsUnknown();
 
 public:
 	GeometryExtent extent = GeometryExtent::Empty();
