@@ -98,7 +98,7 @@ SELECT a, b FROM read_parquet(getvariable('m_files'))
 statement ok
 DETACH lake
 
-# the commit of an inlined table is unknown once the snapshot before it is expired
+# once the snapshot before their commit is expired, the oldest inlined rows date the commit
 unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/v10_inlined_schema_versions_expired.db
 
 statement ok
@@ -123,10 +123,147 @@ JOIN meta.ducklake_table tbl USING (table_id)
 ORDER BY ALL
 ----
 m	3	3
+m	7	7
 m	7	8
 n	5	5
 r	4	4
+r	7	7
 r	7	8
 t	1	1
 t	2	2
+t	6	6
 z	8	9
+
+# a schema change makes the reads look up the inlined tables by their schema version
+statement ok
+CREATE TABLE lake.y (i INTEGER)
+
+query II
+SELECT a, b FROM lake.m
+----
+100	5
+
+query I
+SELECT b FROM lake.r
+----
+5
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT a, b FROM lake.m
+----
+100	5
+
+query I
+SELECT b FROM lake.r
+----
+5
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+statement ok
+DETACH lake
+
+# written by DuckDB 1.5.6 from the catalog above, which then renamed r.b to c, deleted the row of m and inserted another
+unzip data/old_ducklake/inlined_schema_versions_reinserted.db.gz {TEST_DIR}/v10_inlined_schema_versions_reinserted.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_reinserted.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_reinserted', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE lake.z (i INTEGER)
+
+# removes the deleted row, so the oldest row of m is newer than the commit of m and r
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => now())
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_reinserted.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_reinserted', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT tbl.table_name, sv.begin_snapshot
+FROM meta.ducklake_schema_versions sv
+JOIN meta.ducklake_table tbl USING (table_id)
+WHERE sv.schema_version = 7
+ORDER BY ALL
+----
+m	7
+r	7
+
+statement ok
+DETACH lake
+
+# reading m first caches the catalog that r is read with
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_reinserted.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_reinserted', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query II
+SELECT a, b FROM lake.m
+----
+200	6
+
+query I
+SELECT c FROM lake.r
+----
+5
+
+statement ok
+DETACH lake
+
+# written by DuckDB 1.5.6, t got its inlined table at schema version 4 without a row in snapshot 4 and deleted its row
+# in snapshot 5, n renamed a to c in snapshot 6, and t inserted another row into the same inlined table in snapshot 7
+unzip data/old_ducklake/inlined_schema_versions_retained.db.gz {TEST_DIR}/v10_inlined_schema_versions_retained.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+# removes the commit of t and its first row, while snapshot 5 keeps schema version 4
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [3, 4])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query III
+SELECT tbl.table_name, sv.begin_snapshot, sv.schema_version
+FROM meta.ducklake_schema_versions sv
+JOIN meta.ducklake_table tbl USING (table_id)
+WHERE sv.schema_version = 4
+----
+t	5	4
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_retained.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_retained', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+
+query II
+SELECT a, b FROM lake.t
+----
+y	C
+
+# reading t cached the catalog of schema version 4, which snapshot 5 also reads n with
+query I
+SELECT count(*) FROM (SELECT a FROM lake.n AT (VERSION => 5))
+----
+0
+
+statement ok
+DETACH lake
