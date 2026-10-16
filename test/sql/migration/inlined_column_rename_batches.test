@@ -32,6 +32,16 @@ endloop
 statement ok
 DELETE FROM dl.t1 WHERE i = 11
 
+# a flushed table keeps an empty inlined table
+statement ok
+CREATE TABLE dl.flushed (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.flushed VALUES (1, 'a')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'flushed')
+
 statement ok
 CREATE TABLE inlined_columns AS
 SELECT table_name, column_index, column_name, data_type FROM duckdb_columns()
@@ -40,22 +50,22 @@ WHERE database_name = 'dlmeta' AND schema_name IN ('main', 'public') AND regexp_
 query I
 SELECT count(DISTINCT table_name) FROM inlined_columns
 ----
-6
+7
 
 statement ok
 DETACH dl
 
 statement ok
-CALL enable_logging('DuckLakeMetadata')
+CALL enable_logging(level => 'debug')
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
 
-# one statement batch renames the columns, and SQLite rebuilds the tables instead
+# one statement batch renames the columns, also on the Postgres server, and SQLite rebuilds the tables instead
 query I
 SELECT CASE WHEN (SELECT type FROM duckdb_databases() WHERE database_name = 'dlmeta') = 'sqlite'
 	THEN count(*) = 0 ELSE count(*) <= 1 END
-FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE contains(query, 'RENAME COLUMN')
+FROM duckdb_logs WHERE type IN ('DuckLakeMetadata', 'PostgresQueryLog') AND contains(message, 'RENAME COLUMN')
 ----
 true
 
@@ -68,7 +78,7 @@ WHERE new.data_type = old.data_type AND new.column_name = CASE old.column_name
 	WHEN 'row_id' THEN '_ducklake_row_id' WHEN 'begin_snapshot' THEN '_ducklake_begin_snapshot'
 	WHEN 'end_snapshot' THEN '_ducklake_end_snapshot' ELSE old.column_name END
 ----
-51
+56
 
 query IIIIIII
 SELECT rowid, i, d, b, s, dt, n FROM dl.t1 ORDER BY rowid
@@ -105,3 +115,17 @@ SELECT i, n FROM dl.t0 ORDER BY i
 10	7
 20	8
 NULL	NULL
+
+query II
+SELECT i, s FROM dl.flushed
+----
+1	a
+
+statement ok
+INSERT INTO dl.flushed VALUES (2, 'b')
+
+query II
+SELECT i, s FROM dl.flushed ORDER BY i
+----
+1	a
+2	b
