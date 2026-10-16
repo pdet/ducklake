@@ -66,3 +66,12 @@ query I
 SELECT answer FROM ducklake.v
 ----
 84
+
+# A table with the name of the view is not replaced.
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement error
+CREATE OR REPLACE VIEW ducklake.t AS SELECT 42
+----
+Existing object "t" is of type Table, trying to replace with type View

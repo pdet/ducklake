@@ -265,6 +265,33 @@ static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_na
 	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, strip_expression, strip_ref);
 }
 
+static bool HasSameSpelling(const vector<Identifier> &left, const vector<Identifier> &right) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left.size(); i++) {
+		if (left[i].GetIdentifierName() != right[i].GetIdentifierName()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Whether replacing the view with this definition leaves everything it stores and binds unchanged
+static bool IsIdenticalView(ClientContext &context, DuckLakeViewEntry &view, const CreateViewInfo &info,
+                            const string &query_sql) {
+	auto existing_info = view.GetInfo();
+	auto &existing = existing_info->Cast<CreateViewInfo>();
+	if (view.GetQuerySQL() != query_sql || !HasSameSpelling({existing.GetViewName()}, {info.GetViewName()}) ||
+	    !HasSameSpelling(existing.aliases, info.aliases) || !Value::NotDistinctFrom(existing.comment, info.comment) ||
+	    existing.tags != info.tags || !existing.column_comments_map.empty() || !info.column_comments_map.empty()) {
+		return false;
+	}
+	view.BindView(context);
+	auto columns = view.GetColumnInfo();
+	return columns && columns->types == info.types && HasSameSpelling(columns->names, info.names);
+}
+
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
 		throw NotImplementedException("DuckLake does not support secure views");
@@ -273,11 +300,9 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto query_sql = info.query->ToString();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
-		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY) {
-			auto &existing_view = existing_entry->Cast<DuckLakeViewEntry>();
-			if (existing_view.GetQuerySQL() == query_sql && existing_view.aliases == info.aliases) {
-				return existing_entry;
-			}
+		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY &&
+		    IsIdenticalView(transaction.GetContext(), existing_entry->Cast<DuckLakeViewEntry>(), info, query_sql)) {
+			return existing_entry;
 		}
 	}
 	// check if we have an existing entry with this name

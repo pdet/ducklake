@@ -1,0 +1,73 @@
+# name: test/sql/view/ducklake_view_replace_noop_state.test
+# description: An identical view replacement still applies the comment, spelling and binding of the new view
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_view_replace_noop_state.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_state')
+
+statement ok
+CREATE VIEW ducklake.v(answer) AS SELECT 42
+
+statement ok
+COMMENT ON VIEW ducklake.v IS 'documented'
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.V(Answer) AS SELECT 42
+
+query III
+SELECT view_name, comment, (SELECT column_name FROM information_schema.columns WHERE table_catalog = 'ducklake' AND lower(table_name) = 'v') FROM duckdb_views() WHERE database_name = 'ducklake'
+----
+V	NULL	Answer
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+CREATE VIEW ducklake.b AS SELECT * FROM ducklake.t
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN j VARCHAR
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.b AS SELECT * FROM ducklake.t
+
+query II
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'b' ORDER BY column_index
+----
+i	INTEGER
+j	VARCHAR
+
+statement ok
+COMMIT
+
+# an identical replacement of a view that is not bound yet keeps the view without a snapshot
+statement ok
+CREATE VIEW ducklake.w AS SELECT 42 AS answer
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_state')
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.w AS SELECT 42 AS answer
+
+query I
+SELECT id = getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
