@@ -149,7 +149,7 @@ WHERE t.table_name = 'inlined' AND t.end_snapshot IS NULL AND f.end_snapshot IS 
 ----
 3
 
-# VARIANT values of different types with the same text still share a directory
+# distinct values with the same text still share a directory
 statement ok
 CREATE TABLE dl.variants (id INTEGER, v VARIANT)
 
@@ -164,6 +164,26 @@ SELECT id, variant_typeof(v) FROM dl.variants ORDER BY id
 ----
 1	INT32
 2	VARCHAR
+
+statement ok
+CREATE TABLE dl.geometries (id INTEGER, g GEOMETRY, l GEOMETRY[])
+
+statement ok
+ALTER TABLE dl.geometries SET PARTITIONED BY (g)
+
+statement ok
+INSERT INTO dl.geometries VALUES (1, 'POINT EMPTY', NULL), (2, 'POINT (-nan -nan)', NULL)
+
+statement ok
+ALTER TABLE dl.geometries SET PARTITIONED BY (l)
+
+statement ok
+INSERT INTO dl.geometries VALUES (3, NULL, ['POINT EMPTY']), (4, NULL, ['POINT (-nan -nan)'])
+
+query I
+SELECT count(*) FROM dl.geometries
+----
+4
 
 statement ok
 CREATE TABLE dl.long_column (id INTEGER, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc VARCHAR)
