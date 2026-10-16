@@ -37,8 +37,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
 	const string metadata_type = catalog.MetadataType();
-	if (metadata_type.empty()) {
-		// open the metadata as DuckDB explicitly so DuckDB does not warn that it is only a DuckLake catalog
+	bool user_set_type = options.metadata_parameters.find("type") != options.metadata_parameters.end();
+	if (metadata_type.empty() && !user_set_type && !options.hide_metadata_catalog) {
+		// open a visible metadata catalog as DuckDB explicitly so DuckDB does not warn that it is a DuckLake catalog
 		attach_options.push_back("TYPE duckdb");
 	}
 	if (metadata_type.empty() || metadata_type == "duckdb") {
