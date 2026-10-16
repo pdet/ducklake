@@ -38,6 +38,7 @@ public:
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
 	void MigrateInlinedDataTypes() override;
+	vector<bool> GetNativeInlinedColumns(const string &table_name, const vector<LogicalType> &types) override;
 	bool IsRetryableCommitError(const string &message) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
@@ -46,6 +47,8 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	//! Whether an inlined column holds the native type of its values, as DuckLake 0.3 stored them
+	bool StoresNativeType(const LogicalType &stored_type, const LogicalType &type, string &storage_type_name);
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,

@@ -264,6 +264,44 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 	return result->Fetch() != nullptr;
 }
 
+bool PostgresMetadataManager::StoresNativeType(const LogicalType &stored_type, const LogicalType &type,
+                                               string &storage_type_name) {
+	// nested columns are stored as VARCHAR in every version
+	if (DuckLakeTypes::IsNested(type)) {
+		return false;
+	}
+	DuckLakeColumnInfo column;
+	column.type = DuckLakeTypes::ToString(type);
+	storage_type_name = GetColumnType(column);
+	auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
+	auto native_type = type.HasAlias() ? LogicalType(type.id()) : type;
+	return stored_type != storage_type && stored_type == native_type;
+}
+
+vector<bool> PostgresMetadataManager::GetNativeInlinedColumns(const string &table_name,
+                                                              const vector<LogicalType> &types) {
+	vector<bool> result;
+	// the v1.1 migration rebuilds the inlined tables of DuckLake 0.3
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+		return result;
+	}
+	auto probe = DuckLakeMetadataManager::Query(
+	    StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
+	probe->ThrowIfError(StringUtil::Format("Failed to read the columns of inlined-data table \"%s\": ", table_name));
+	// the metadata columns are always the first three columns, user columns follow
+	auto &stored_types = probe->GetTypes();
+	if (stored_types.size() == types.size() + 3) {
+		for (idx_t i = 0; i < types.size(); i++) {
+			string storage_type_name;
+			result.push_back(StoresNativeType(stored_types[i + 3], types[i], storage_type_name));
+		}
+	}
+	if (std::find(result.begin(), result.end(), true) == result.end()) {
+		result.clear();
+	}
+	return result;
+}
+
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
@@ -298,19 +336,10 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 				break;
 			}
 			auto type = DuckLakeTypes::FromString(column_type->second);
-			auto native_type = type.HasAlias() ? LogicalType(type.id()) : type;
 			// DuckLake 0.3 stored values with the native type of their DuckLake type, other columns are kept
 			auto &stored_type = probe->GetTypes()[i];
 			string storage_type_name;
-			bool convert = false;
-			// nested columns are stored as VARCHAR in every version
-			if (!DuckLakeTypes::IsNested(type)) {
-				DuckLakeColumnInfo column;
-				column.type = column_type->second;
-				storage_type_name = GetColumnType(column);
-				auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
-				convert = stored_type != storage_type && stored_type == native_type;
-			}
+			bool convert = StoresNativeType(stored_type, type, storage_type_name);
 			auto column_name = SQLIdentifier::ToString(name);
 			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());

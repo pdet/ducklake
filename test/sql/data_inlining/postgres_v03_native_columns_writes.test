@@ -1,0 +1,141 @@
+# name: test/sql/data_inlining/postgres_v03_native_columns_writes.test
+# description: inserts into the inlined tables that DuckLake 0.3 created in a 1.0 Postgres catalog keep the native column types
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require json
+
+require icu
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_v03_native_columns_writes', DATA_INLINING_ROW_LIMIT 1000, DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR, j JSON, d DATE, ts TIMESTAMP, tz TIMESTAMPTZ)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'hello', '{"a": 1}', DATE '2020-01-01', TIMESTAMP '2020-01-01 10:00:00', TIMESTAMPTZ '2020-01-01 10:00:00+00')
+
+# DuckLake 0.3 created these columns with their native Postgres types, and the 1.0 migration kept them
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ALTER COLUMN s TYPE VARCHAR USING convert_from(s, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON, ALTER COLUMN d TYPE DATE USING d::DATE, ALTER COLUMN ts TYPE TIMESTAMP USING ts::TIMESTAMP, ALTER COLUMN tz TYPE TIMESTAMPTZ USING tz::TIMESTAMPTZ')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_v03_native_columns_writes', DATA_INLINING_ROW_LIMIT 1000)
+
+# a few rows go to the commit batch as VALUES text
+statement ok
+INSERT INTO dl.t VALUES (2, 'wörld \x41 back\slash', '{"b": "é"}', DATE '2021-01-01', TIMESTAMP '2021-01-01 10:00:00', TIMESTAMPTZ '2021-01-01 10:00:00+00'), (3, '', NULL, NULL, NULL, NULL)
+
+# many rows are inserted after the batch
+statement ok
+INSERT INTO dl.t SELECT 100 + i, 'big ' || i, '{"i": ' || i || '}', DATE '2022-01-01', TIMESTAMP '2022-01-01 00:00:00', TIMESTAMPTZ '2022-01-01 00:00:00+00' FROM range(150) r(i)
+
+query IIIIII
+SELECT id, s, j, d, ts, tz FROM dl.t WHERE id < 101 ORDER BY id
+----
+1	hello	{"a": 1}	2020-01-01	2020-01-01 10:00:00	2020-01-01 10:00:00+00
+2	wörld \x41 back\slash	{"b": "é"}	2021-01-01	2021-01-01 10:00:00	2021-01-01 10:00:00+00
+3	(empty)	NULL	NULL	NULL	NULL
+100	big 0	{"i": 0}	2022-01-01	2022-01-01 00:00:00	2022-01-01 00:00:00+00
+
+query III
+SELECT count(*), count(*) FILTER (WHERE s = 'big ' || (id - 100)), count(*) FILTER (WHERE j = ('{"i": ' || (id - 100) || '}')::JSON) FROM dl.t WHERE id >= 100
+----
+150	150	150
+
+# the rows went to the table of DuckLake 0.3, as the native type of each column
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_tables), (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_data_file)
+----
+1	0
+
+query III
+SELECT * FROM postgres_query('__ducklake_metadata_dl', 'SELECT s, pg_typeof(s)::TEXT AS s_type, pg_typeof(d)::TEXT AS d_type FROM ducklake_inlined_data_1_1 WHERE id = 2')
+----
+wörld \x41 back\slash	character varying	date
+
+# quotes go in as text, and a NUL byte, which a Postgres VARCHAR cannot hold, fails the commit
+statement ok
+INSERT INTO dl.t VALUES (4, 'it''s "quoted"', '{"q": "it''s"}', NULL, NULL, NULL)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t (id, s) VALUES (5, 'nul' || chr(0) || 'byte')
+
+statement error
+COMMIT
+----
+
+query I
+SELECT count(*) FROM dl.t WHERE id = 5
+----
+0
+
+# an update in the same commit as an insert into a table with BYTEA columns
+statement ok
+CREATE TABLE dl.b (id INTEGER, s VARCHAR)
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE dl.t SET s = 'updated ' || s WHERE id = 2
+
+statement ok
+INSERT INTO dl.b VALUES (1, 'bytea ' || chr(0) || ' é')
+
+statement ok
+COMMIT
+
+query II
+SELECT id, s FROM dl.t WHERE id IN (2, 4) ORDER BY id
+----
+2	updated wörld \x41 back\slash
+4	it's "quoted"
+
+query I
+SELECT j FROM dl.t WHERE id = 4
+----
+{"q": "it's"}
+
+query I
+SELECT s = 'bytea ' || chr(0) || ' é' FROM dl.b
+----
+true
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIIIII
+SELECT id, s, j, d, ts, tz FROM dl.t WHERE id < 101 ORDER BY id
+----
+1	hello	{"a": 1}	2020-01-01	2020-01-01 10:00:00	2020-01-01 10:00:00+00
+2	updated wörld \x41 back\slash	{"b": "é"}	2021-01-01	2021-01-01 10:00:00	2021-01-01 10:00:00+00
+3	(empty)	NULL	NULL	NULL	NULL
+4	it's "quoted"	{"q": "it's"}	NULL	NULL	NULL
+100	big 0	{"i": 0}	2022-01-01	2022-01-01 00:00:00	2022-01-01 00:00:00+00
+
+query I
+SELECT count(*) FROM dl.t
+----
+154
