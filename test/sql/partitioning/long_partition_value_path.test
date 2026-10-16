@@ -1,0 +1,134 @@
+# name: test/sql/partitioning/long_partition_value_path.test
+# description: a partition directory whose hive name is too long for a file name is named after its md5 hash
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/long_partition_value_path', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (name)
+
+# 90 bytes of UTF-8 are 270 bytes once url encoded
+statement ok
+INSERT INTO dl.t VALUES (1, repeat('商品', 15)), (2, repeat('x', 250)), (3, repeat('x', 251)), (4, 'short')
+
+query IIII
+SELECT id, length(name), name = repeat('商品', 15), name = repeat('x', 251) FROM dl.t ORDER BY id
+----
+1	30	true	false
+2	250	false	false
+3	251	false	true
+4	5	false	false
+
+# name= and 250 bytes still fit in 255 bytes
+query II
+SELECT count(*) FILTER (contains(data_file, hive_partition_component('name', repeat('x', 250)))),
+       count(*) FILTER (contains(data_file, 'name=short'))
+FROM ducklake_list_files('dl', 't')
+----
+1	1
+
+query II
+SELECT count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('商品', 15))))),
+       count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('x', 251)))))
+FROM ducklake_list_files('dl', 't')
+----
+1	1
+
+query I
+SELECT id FROM dl.t WHERE name = repeat('商品', 15)
+----
+1
+
+# merging the files of a partition writes into the same directory
+statement ok
+INSERT INTO dl.t VALUES (5, repeat('商品', 15))
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query II
+SELECT count(*), count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('商品', 15)))))
+FROM ducklake_list_files('dl', 't')
+----
+4	1
+
+query II
+SELECT id, length(name) FROM dl.t WHERE name = repeat('商品', 15) ORDER BY id
+----
+1	30
+5	30
+
+# a flush of inlined rows
+statement ok
+CREATE TABLE dl.inlined (id INTEGER, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.inlined SET PARTITIONED BY (name)
+
+statement ok
+ALTER TABLE dl.inlined SET (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO dl.inlined VALUES (1, repeat('商品', 15)), (2, 'short')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'inlined')
+----
+2
+
+query II
+SELECT id, length(name) FROM dl.inlined ORDER BY id
+----
+1	30
+2	5
+
+# only the component that is too long is replaced, also for a long column name
+statement ok
+CREATE TABLE dl.multi (a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE dl.multi SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO dl.multi VALUES (1, repeat('商品', 15))
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'multi')
+WHERE contains(data_file, 'a=1/' || md5(hive_partition_component('b', repeat('商品', 15))) || '/')
+----
+1
+
+statement ok
+CREATE TABLE dl.long_column (id INTEGER, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc VARCHAR)
+
+statement ok
+ALTER TABLE dl.long_column SET PARTITIONED BY (cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)
+
+statement ok
+INSERT INTO dl.long_column VALUES (1, 'v')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'long_column')
+WHERE contains(data_file, md5(hive_partition_component('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'v')))
+----
+1
+
+query II
+SELECT id, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc FROM dl.long_column
+----
+1	v
