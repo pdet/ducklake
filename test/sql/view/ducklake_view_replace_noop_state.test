@@ -126,6 +126,32 @@ STRUCT(A INTEGER)
 statement ok
 COMMIT
 
+statement ok
+CREATE TABLE memory.source(s VARCHAR COLLATE NOCASE)
+
+statement ok
+CREATE VIEW ducklake.cv AS SELECT * FROM memory.source
+
+statement ok
+SELECT * FROM ducklake.cv
+
+statement ok
+DROP TABLE memory.source
+
+statement ok
+CREATE TABLE memory.source(s VARCHAR)
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.cv AS SELECT * FROM memory.source
+
+query I
+SELECT id > getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
+
 # a view without a binding is replaced
 statement ok
 BEGIN

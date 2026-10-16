@@ -283,7 +283,7 @@ static bool HasSameTypes(const vector<LogicalType> &left, const vector<LogicalTy
 		return false;
 	}
 	for (idx_t i = 0; i < left.size(); i++) {
-		if (left[i] != right[i] || left[i].ToString() != right[i].ToString()) {
+		if (!left[i].EqualsIncludingCollation(right[i]) || left[i].ToString() != right[i].ToString()) {
 			return false;
 		}
 	}
