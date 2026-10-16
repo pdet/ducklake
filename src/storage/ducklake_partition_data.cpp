@@ -7,7 +7,6 @@
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/crypto/md5.hpp"
-#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -163,6 +162,23 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 	return result;
 }
 
+//! Whether distinct values of the type always have distinct hive directory names
+static bool HasDistinctHiveNames(const LogicalType &type) {
+	if (type.IsNumeric() || type.IsTemporal()) {
+		return true;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::INTERVAL:
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::ENUM:
+		return true;
+	default:
+		return false;
+	}
+}
+
 string DuckLakePartitionUtils::GetPartitionDirectoryName(const string &hive_component) {
 	if (hive_component.size() <= DuckLakeUtil::MAX_FILE_NAME_LENGTH) {
 		return hive_component;
@@ -175,8 +191,7 @@ string DuckLakePartitionUtils::GetPartitionDirectoryName(const string &hive_comp
 unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(ClientContext &context,
                                                                              const LogicalCopyToFile &copy) {
 	for (auto col_idx : copy.partition_columns) {
-		// VARIANT values of different types can have the same text
-		if (TypeVisitor::Contains(copy.expected_types[col_idx], LogicalTypeId::VARIANT)) {
+		if (!HasDistinctHiveNames(copy.expected_types[col_idx])) {
 			return nullptr;
 		}
 	}
