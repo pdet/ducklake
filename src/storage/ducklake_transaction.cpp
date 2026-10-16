@@ -805,7 +805,12 @@ void DuckLakeTransaction::Commit() {
 		if (ChangesMade()) {
 			FlushChanges();
 		} else if (connection) {
-			connection->Commit();
+			try {
+				connection->Commit();
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
+			}
 			if (!state->flushed_inlined_tables.empty()) {
 				DropEmptySupersededInlinedTablesClientSide();
 			}

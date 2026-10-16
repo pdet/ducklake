@@ -8,6 +8,9 @@ require parquet
 
 require sqlite_scanner
 
+# the SQLite config skips errors about locks, this test checks them
+set ignore_error_messages
+
 test-env DATA_PATH {TEST_DIR}/issue_1798_data
 
 statement ok
@@ -43,6 +46,27 @@ query II con3
 SELECT (SELECT count(*) FROM lk.t), (SELECT count(*) FROM lk.t2)
 ----
 0	1
+
+# a commit that only sets an option gets the same advice
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL lk.set_option('parquet_compression', 'zstd')
+
+statement ok con2
+SELECT count(*) FROM lk.t
+
+statement error con1
+COMMIT
+----
+Attach the catalog with META_JOURNAL_MODE 'WAL'
+
+statement ok con2
+COMMIT
 
 # in WAL mode an open transaction does not block the commit of another
 statement ok
