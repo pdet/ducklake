@@ -121,27 +121,38 @@ bool DuckLakeInlinedColNames::ConflictsWith(const string &name) const {
 	       StringUtil::CIEquals(name, "_ducklake_internal_row_id");
 }
 
-bool DuckLakeMetadataManager::CanInlineColumn(const string &name, const LogicalType &type) {
-	if (InlinedColNames().ConflictsWith(name) || name.size() > MaxIdentifierLength()) {
-		return false;
+string DuckLakeMetadataManager::GetInliningObstacle(const string &name, const LogicalType &type) {
+	if (InlinedColNames().ConflictsWith(name)) {
+		return StringUtil::Format("column \"%s\" has the name of an internal column of inlined data tables", name);
 	}
-	return !TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); });
+	if (name.size() > MaxIdentifierLength()) {
+		return StringUtil::Format("the name of column \"%s\" is longer than %d bytes", name, MaxIdentifierLength());
+	}
+	if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
+		return StringUtil::Format("column \"%s\" has type %s, which cannot be inlined", name, type);
+	}
+	return string();
+}
+
+bool DuckLakeMetadataManager::CanInlineColumn(const string &name, const LogicalType &type) {
+	return GetInliningObstacle(name, type).empty();
 }
 
 bool DuckLakeMetadataManager::InlinedTableFits(idx_t column_count) const {
 	return column_count + DuckLakeInlinedColNames::COLUMN_COUNT <= MaxColumnCount();
 }
 
-bool DuckLakeMetadataManager::CanInlineColumns(const ColumnList &columns) {
+string DuckLakeMetadataManager::GetInliningObstacle(const ColumnList &columns) {
 	if (!InlinedTableFits(columns.LogicalColumnCount())) {
-		return false;
+		return "it has more columns than an inlined data table can hold";
 	}
 	for (auto &col : columns.Logical()) {
-		if (!CanInlineColumn(col.Name().GetIdentifierName(), col.Type())) {
-			return false;
+		auto obstacle = GetInliningObstacle(col.Name().GetIdentifierName(), col.Type());
+		if (!obstacle.empty()) {
+			return obstacle;
 		}
 	}
-	return true;
+	return string();
 }
 
 bool DuckLakeMetadataManager::CanInlineColumns(const vector<DuckLakeColumnInfo> &columns) {
@@ -3276,7 +3287,7 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 				// LCOV_EXCL_STOP
 			}
 		}
-		// FIXME: we are skipping columns that have conflicting names, we should resolve this
+		// the rows of these tables are written to files, see GetInliningLimit
 		if (!CanInlineColumns(table_ptr->columns)) {
 			continue;
 		}
