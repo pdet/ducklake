@@ -1,0 +1,95 @@
+# name: test/sql/migration/v10_drop_not_null_flush.test
+# description: NULL rows that DuckLake 1.0 inlined after a DROP NOT NULL can be flushed and rewritten
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, the NULL row went into the inlined table created while a was NOT NULL
+unzip data/old_ducklake/v10_drop_not_null.db.gz {TEST_DIR}/v10_drop_not_null_flush.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_drop_not_null_flush.db' AS lake (DATA_PATH '{TEST_DIR}/v10_drop_not_null_flush', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+query II
+SELECT id, a FROM lake.t ORDER BY id
+----
+1	10
+2	NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT (SELECT count(*) FROM meta.ducklake_data_file), (SELECT count(*) FROM meta.ducklake_inlined_data_1_1)
+----
+1	0
+
+query II
+SELECT id, a FROM lake.t ORDER BY id
+----
+1	10
+2	NULL
+
+statement ok
+DELETE FROM lake.t WHERE id = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', delete_threshold => 0)
+
+query II
+SELECT id, a FROM lake.t ORDER BY id
+----
+2	NULL
+
+statement error
+ALTER TABLE lake.t ALTER a SET NOT NULL
+----
+the column has NULL values
+
+# the same rows flush after the v1.1 migration
+unzip data/old_ducklake/v10_drop_not_null.db.gz {TEST_DIR}/v10_drop_not_null_flush_migrated.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_drop_not_null_flush_migrated.db' AS migrated (DATA_PATH '{TEST_DIR}/v10_drop_not_null_flush_migrated', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'migrated_meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL ducklake_flush_inlined_data('migrated')
+
+query II
+SELECT id, a FROM migrated.t ORDER BY id
+----
+1	10
+2	NULL
+
+query I
+SELECT count(*) FROM migrated_meta.ducklake_data_file
+----
+1
+
+# the deleted NULL row stays in the history after the column is NOT NULL again
+unzip data/old_ducklake/v10_drop_not_null.db.gz {TEST_DIR}/v10_drop_not_null_flush_set.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_drop_not_null_flush_set.db' AS restored (DATA_PATH '{TEST_DIR}/v10_drop_not_null_flush_set', OVERRIDE_DATA_PATH TRUE)
+
+statement ok
+DELETE FROM restored.t WHERE id = 2
+
+statement ok
+ALTER TABLE restored.t ALTER a SET NOT NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('restored')
+
+query II
+SELECT id, a FROM restored.t ORDER BY id
+----
+1	10
+
+query II
+SELECT id, a FROM restored.t AT (VERSION => 4) ORDER BY id
+----
+1	10
+2	NULL

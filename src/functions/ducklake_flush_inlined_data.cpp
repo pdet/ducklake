@@ -86,7 +86,10 @@ SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, D
 // Sink
 //===--------------------------------------------------------------------===//
 unique_ptr<GlobalSinkState> DuckLakeFlushData::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<DuckLakeInsertGlobalState>(table);
+	auto result = make_uniq<DuckLakeInsertGlobalState>(table);
+	// a flush moves committed rows, so the NOT NULL columns of their schema version are not checked again
+	result->not_null_fields.clear();
+	return std::move(result);
 }
 
 SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
