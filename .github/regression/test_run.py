@@ -288,7 +288,7 @@ class RegressionRunTest(unittest.TestCase):
             with self.subTest(catalog=catalog):
                 expected = supported if catalog == "sqlite" else benchmarks
 
-                def compare(root, passthrough, listing):
+                def compare(script, root, passthrough, listing):
                     self.assertEqual(listing.read_text().split(), expected)
                     return 0, set()
 
