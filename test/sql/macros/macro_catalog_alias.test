@@ -1,0 +1,187 @@
+# name: test/sql/macros/macro_catalog_alias.test
+# description: A macro that names its own catalog keeps working when the lake is attached under another name
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/macro_catalog_alias.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/macro_catalog_alias', METADATA_CATALOG 'macro_catalog_alias_meta', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE TABLE dl.main.t AS SELECT 42 AS x
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE SCHEMA dl.s.nested
+
+statement ok
+CREATE TABLE dl.s.nested.t AS SELECT 7 AS x
+
+statement ok
+CREATE TABLE memory.main.t AS SELECT -1 AS x
+
+statement ok
+CREATE MACRO dl.scalar_m() AS (SELECT max(x) FROM dl.main.t)
+
+statement ok
+CREATE MACRO dl.two_part_m() AS (SELECT max(x) FROM DL.t)
+
+statement ok
+CREATE MACRO dl.nested_m() AS (SELECT max(x) FROM dl.s.nested.t)
+
+statement ok
+CREATE MACRO dl.table_m() AS TABLE SELECT x FROM dl.main.t
+
+statement ok
+CREATE MACRO dl.calls_m(i) AS dl.main.scalar_m() + i
+
+statement ok
+CREATE MACRO dl.calls_table_m() AS TABLE SELECT x + 1 AS x FROM dl.main.table_m()
+
+statement ok
+CREATE MACRO dl.first_version() AS 1
+
+statement ok
+CREATE MACRO dl.total(v) AS sum(v)
+
+statement ok
+CREATE MACRO dl.dist(a, b) AS abs(a - b)
+
+statement ok
+CREATE MACRO dl.window_m() AS TABLE SELECT dl.main.total(x) OVER () AS y FROM dl.main.t
+
+statement ok
+CREATE MACRO dl.at_m() AS (SELECT max(x) FROM dl.main.t AT (VERSION => dl.main.first_version()))
+
+statement ok
+CREATE MACRO dl.nearest_m() AS TABLE SELECT q.x FROM dl.main.t q INNER JOIN dl.main.t r EXACT NEAREST 1 BY DISTANCE dl.main.dist(q.x, r.x)
+
+statement ok
+CREATE MACRO dl.star_m() AS TABLE SELECT * EXCLUDE (dl.main.t.x), * RENAME (dl.main.t.x AS y) FROM dl.main.t
+
+statement ok
+CREATE MACRO dl.column_m() AS (SELECT max(dl.main.t.x) FROM dl.main.t)
+
+statement ok
+CREATE MACRO dl.two_part_column_m() AS (SELECT max(dl.main.t.x) FROM dl.t)
+
+# with a table known by a name of the catalog, a qualified call can be a method of that table
+statement ok
+CREATE MACRO dl.method_m() AS (SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) dl)
+
+statement ok
+CREATE MACRO dl.placeholder_alias_m() AS (SELECT dl.main.first_version() FROM (VALUES (0)) AS "{DUCKLAKE_CATALOG}"(x))
+
+statement ok
+CREATE MACRO dl.new_alias_m() AS (SELECT dl.main.first_version() + other.x FROM (SELECT 1 AS x) other)
+
+statement ok
+CREATE MACRO dl.parameter_m(dl, other) AS dl.x.lower()
+
+statement ok
+CREATE MACRO dl.lambda_m() AS list_transform([{'x': 'ABC'}], lambda dl: dl.x.lower())
+
+statement ok
+CREATE MACRO dl.ranking_m() AS TABLE SELECT r.x FROM (VALUES (0)) q(x) INNER JOIN (VALUES (1), (2)) r(x) EXACT NEAREST 1 BY DISTANCE (SELECT dl.s.abs() FROM (SELECT r.x AS s) dl, (SELECT 3 - r.x AS s) other)
+
+# column references keep their name, and so do strings and other catalogs
+statement ok
+CREATE MACRO dl.untouched_m() AS (SELECT 'dl.main.t:' || dl.s.x || ':' || (SELECT max(x) FROM memory.main.t) FROM (SELECT {'x': 42} AS s) dl)
+
+query T
+SELECT sql FROM macro_catalog_alias_meta.ducklake_macro_impl ORDER BY macro_id
+----
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".main.t)
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".t)
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".s.nested.t)
+SELECT x FROM "{DUCKLAKE_CATALOG}".main.t
+("{DUCKLAKE_CATALOG}".main.scalar_m() + i)
+SELECT (x + 1) AS x FROM "{DUCKLAKE_CATALOG}".main.table_m()
+1
+sum(v)
+abs((a - b))
+SELECT "{DUCKLAKE_CATALOG}".main.total(x) OVER () AS y FROM "{DUCKLAKE_CATALOG}".main.t
+(SELECT max(x) FROM "{DUCKLAKE_CATALOG}".main.t AT (VERSION => "{DUCKLAKE_CATALOG}".main.first_version()))
+SELECT q.x FROM ("{DUCKLAKE_CATALOG}".main.t AS q INNER JOIN "{DUCKLAKE_CATALOG}".main.t AS r EXACT NEAREST 1 BY DISTANCE "{DUCKLAKE_CATALOG}".main.dist(q.x, r.x))
+SELECT * EXCLUDE ("{DUCKLAKE_CATALOG}".main.t.x), * RENAME ("{DUCKLAKE_CATALOG}".main.t.x AS y) FROM "{DUCKLAKE_CATALOG}".main.t
+(SELECT max("{DUCKLAKE_CATALOG}".main.t.x) FROM "{DUCKLAKE_CATALOG}".main.t)
+(SELECT max("{DUCKLAKE_CATALOG}".main.t.x) FROM "{DUCKLAKE_CATALOG}".t)
+(SELECT dl.s.lower() FROM (SELECT 'ABC' AS s) AS dl)
+(SELECT dl.main.first_version() FROM (SELECT * FROM (VALUES (0)) AS valueslist) AS "{DUCKLAKE_CATALOG}"(x))
+(SELECT ("{DUCKLAKE_CATALOG}".main.first_version() + other.x) FROM (SELECT 1 AS x) AS other)
+dl.x.lower()
+list_transform(list_value(struct_pack(x := 'ABC')), (lambda dl: dl.x.lower()))
+SELECT r.x FROM ((SELECT * FROM (VALUES (0)) AS valueslist) AS q(x) INNER JOIN (SELECT * FROM (VALUES (1), (2)) AS valueslist) AS r(x) EXACT NEAREST 1 BY DISTANCE (SELECT dl.s.abs() FROM (SELECT r.x AS s) AS dl , (SELECT (3 - r.x) AS s) AS other))
+(SELECT ((('dl.main.t:' || dl.s.x) || ':') || (SELECT max(x) FROM memory.main.t)) FROM (SELECT struct_pack(x := 42) AS s) AS dl)
+
+query I
+SELECT dl.main.placeholder_alias_m()
+----
+1
+
+statement ok
+DETACH dl
+
+# a schema of the default database named like the new alias does not make the references ambiguous
+statement ok
+CREATE SCHEMA memory.other
+
+statement ok
+CREATE TABLE memory.other.t AS SELECT -5 AS x
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/macro_catalog_alias', DUCKLAKE_VERSION '1.1-dev1')
+
+query IIIIIII
+SELECT other.main.scalar_m(), other.main.two_part_m(), other.main.nested_m(), other.main.calls_m(1), other.main.at_m(), other.main.column_m(), other.main.two_part_column_m()
+----
+42	42	7	43	42	42	42
+
+query IIII
+SELECT (SELECT x FROM other.main.table_m()), (SELECT x FROM other.main.calls_table_m()), (SELECT y FROM other.main.window_m()), (SELECT y FROM other.main.star_m())
+----
+42	43	42	42
+
+query I
+SELECT x FROM other.main.nearest_m()
+----
+42
+
+query TTTIT
+SELECT other.main.method_m(), other.main.untouched_m(), other.main.parameter_m({'x': 'ABC'}, {'x': 'DEF'}), (SELECT x FROM other.main.ranking_m()), other.main.lambda_m()
+----
+abc	dl.main.t:42:-1	abc	1	[abc]
+
+# a table known by the new name keeps the placeholder in the calls, which then fail instead of calling a method of it
+statement error
+SELECT other.main.new_alias_m()
+----
+{DUCKLAKE_CATALOG}
+
+# a table function bound by the name of the catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_catalog_alias_range.db' AS range (DATA_PATH '{DATA_PATH}/macro_catalog_alias_range', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE MACRO range.main.range_m() AS TABLE SELECT range.range.abs() AS x FROM range(-2, 1)
+
+statement ok
+DETACH range
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_catalog_alias_range.db' AS other_range (DATA_PATH '{DATA_PATH}/macro_catalog_alias_range', DUCKLAKE_VERSION '1.1-dev1')
+
+query I
+SELECT x FROM other_range.main.range_m() ORDER BY x
+----
+0
+1
+2
