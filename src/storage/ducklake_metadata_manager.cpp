@@ -652,8 +652,10 @@ void DuckLakeMetadataManager::RenameInlinedColumns(const map<string, vector<pair
 			                            SQLIdentifier(table.first), column.first, column.second);
 		}
 	}
-	auto result = Execute(query);
+	// with a snapshot Postgres runs the batch on the server, instead of reloading its catalog after every statement
+	auto result = Execute(DuckLakeSnapshot(), query);
 	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: ");
+	ClearCache();
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
