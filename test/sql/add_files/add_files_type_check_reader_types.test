@@ -35,17 +35,6 @@ SELECT t FROM dl.time_ns WHERE t > TIME_NS '12:34:56.123456788'
 ----
 12:34:56.123456789
 
-statement ok
-CREATE TABLE dl.tstz_ns (t TIMESTAMPTZ_NS)
-
-statement ok
-CALL ducklake_add_data_files('dl', 'tstz_ns', '{DATA_PATH}/reader_types_tstz_ns.parquet')
-
-query I
-SELECT t FROM dl.tstz_ns WHERE t > TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456788+00'
-----
-2020-01-01 12:34:56.123456789+00
-
 # TIMESTAMPTZ columns accept TIMESTAMPTZ_NS files, like TIMESTAMP columns accept TIMESTAMP_NS files
 statement ok
 CREATE TABLE dl.tstz_ns_as_tstz (t TIMESTAMPTZ)

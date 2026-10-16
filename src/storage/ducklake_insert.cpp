@@ -184,6 +184,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 		auto column_stats = chunk.GetValue(4, r);
 		auto &map_children = MapValue::GetChildren(column_stats);
 		auto &table = global_state.table;
+		auto version = table.ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion();
 		map<FieldIndex, PartialVariantStats> variant_stats;
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
@@ -229,7 +230,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				if (entry == variant_stats.end()) {
 					// insert empty stats for variants if this is the first stats we encounter for variants
 					auto insert_entry =
-					    variant_stats.insert(make_pair(field_id.GetFieldIndex(), PartialVariantStats()));
+					    variant_stats.insert(make_pair(field_id.GetFieldIndex(), PartialVariantStats(version)));
 					entry = insert_entry.first;
 				}
 				entry->second.ParseVariantStats(column_names, name_offset.GetIndex(), col_stats);

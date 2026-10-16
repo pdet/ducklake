@@ -182,10 +182,31 @@ string DuckLakeTypes::ToString(const LogicalType &type) {
 	}
 }
 
+//! The name of the type if the version predates it, or nullptr
+static const char *TypeNewerThanVersion(const LogicalType &type, DuckLakeVersion version) {
+	if (version >= DuckLakeVersion::V1_1_DEV_1) {
+		return nullptr;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::SQLNULL:
+		return "the NULL type";
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+		return "the TIMESTAMPTZ_NS type";
+	default:
+		return nullptr;
+	}
+}
+
+bool DuckLakeTypes::IsSupportedByVersion(const LogicalType &type, DuckLakeVersion version) {
+	return !TypeVisitor::Contains(
+	    type, [version](const LogicalType &child) { return TypeNewerThanVersion(child, version) != nullptr; });
+}
+
 void DuckLakeTypes::CheckSupportedType(const LogicalType &type, DuckLakeVersion version) {
 	TypeVisitor::VisitReplace(type, [version](const LogicalType &type) {
-		if (type.id() == LogicalTypeId::SQLNULL && version < DuckLakeVersion::V1_1_DEV_1) {
-			ThrowUnsupportedByVersion(version, "the NULL type");
+		auto type_name = TypeNewerThanVersion(type, version);
+		if (type_name) {
+			ThrowUnsupportedByVersion(version, type_name);
 		}
 		DuckLakeTypes::ToString(type);
 		return type;

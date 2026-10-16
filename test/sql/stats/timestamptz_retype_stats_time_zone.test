@@ -62,7 +62,7 @@ analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 statement ok
 SET TimeZone = 'America/New_York'
 
-foreach type TIMESTAMPTZ TIMESTAMPTZ_NS
+foreach type TIMESTAMPTZ
 
 statement ok
 CREATE TABLE dl.dst_{type} (v TIMESTAMP)

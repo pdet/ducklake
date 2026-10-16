@@ -1,0 +1,104 @@
+# name: test/sql/types/timestamptz_ns_version_gate.test
+# description: TIMESTAMPTZ_NS is not written into DuckLake 1.0 catalogs, whose readers do not know the type
+# group: [types]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/timestamptz_ns_version_gate', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, ts TIMESTAMP, s STRUCT(x INTEGER))
+
+statement error
+CREATE TABLE dl.n (v TIMESTAMPTZ_NS)
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE TABLE dl.n AS SELECT TIMESTAMPTZ_NS '2020-01-01 00:00:00+00' AS v
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE TABLE dl.n (v STRUCT(x TIMESTAMPTZ_NS))
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE TABLE dl.n (v MAP(INTEGER, TIMESTAMPTZ_NS[]))
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE dl.t ADD COLUMN v TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.y TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE dl.t ALTER ts TYPE TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE MACRO dl.m(v TIMESTAMPTZ_NS) AS v
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE MACRO dl.m(v := TIMESTAMPTZ_NS '2020-01-01 00:00:00+00') AS v
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+query II
+SELECT
+    (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_column WHERE column_type = 'timestamptz_ns'),
+    (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_macro_parameters)
+----
+0	0
+
+# the shredded TIMESTAMPTZ_NS field of a VARIANT gets no stats, the other field keeps them
+statement ok
+CREATE TABLE dl.v (v VARIANT)
+
+statement ok
+INSERT INTO dl.v SELECT {'a': ('2020-01-01 00:00:00.12345678' || i || '+00')::TIMESTAMPTZ_NS, 'b': i}::VARIANT
+FROM range(3) r(i)
+
+query II
+SELECT variant_path, shredded_type FROM __ducklake_metadata_dl.ducklake_file_variant_stats
+----
+"b"	int64
+
+query II
+SELECT
+    (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_file_column_stats WHERE extra_stats LIKE '%timestamptz_ns%'),
+    (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_table_column_stats WHERE extra_stats LIKE '%timestamptz_ns%')
+----
+0	0
+
+query II
+SELECT v.a::TIMESTAMPTZ_NS = ('2020-01-01 00:00:00.12345678' || v.b || '+00')::TIMESTAMPTZ_NS, v.b
+FROM dl.v ORDER BY v.b::BIGINT
+----
+true	0
+true	1
+true	2
+
+query I
+SELECT count(*) FROM dl.v WHERE v.b::BIGINT > 1
+----
+1
