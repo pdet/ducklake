@@ -1,5 +1,5 @@
 # name: test/sql/view/ducklake_view_replace_noop_state.test
-# description: An identical view replacement still applies the comment, spelling and binding of the new view
+# description: A view replacement is only skipped when it would not change the view
 # group: [view]
 
 require ducklake
@@ -13,20 +13,46 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_state')
 
+# the replacement drops the comment
 statement ok
-CREATE VIEW ducklake.v(answer) AS SELECT 42
+CREATE VIEW ducklake.c AS SELECT 42
 
 statement ok
-COMMENT ON VIEW ducklake.v IS 'documented'
+COMMENT ON VIEW ducklake.c IS 'documented'
 
 statement ok
-CREATE OR REPLACE VIEW ducklake.V(Answer) AS SELECT 42
+CREATE OR REPLACE VIEW ducklake.c AS SELECT 42
 
-query III
-SELECT view_name, comment, (SELECT column_name FROM information_schema.columns WHERE table_catalog = 'ducklake' AND lower(table_name) = 'v') FROM duckdb_views() WHERE database_name = 'ducklake'
+query I
+SELECT comment FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'c'
 ----
-V	NULL	Answer
+NULL
 
+# the replacement changes the spelling of the name
+statement ok
+CREATE VIEW ducklake.n AS SELECT 42
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.N AS SELECT 42
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name = 'ducklake' AND lower(view_name) = 'n'
+----
+N
+
+# the replacement changes the spelling of an alias
+statement ok
+CREATE VIEW ducklake.a(answer) AS SELECT 42
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.a(Answer) AS SELECT 42
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'a'
+----
+Answer
+
+# the replacement binds the columns the query returns now
 statement ok
 BEGIN
 
@@ -51,7 +77,69 @@ j	VARCHAR
 statement ok
 COMMIT
 
-# an identical replacement of a view that is not bound yet keeps the view without a snapshot
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok
+CREATE VIEW ducklake.ub AS SELECT * FROM ducklake.u
+
+statement ok
+ALTER TABLE ducklake.u ALTER COLUMN i TYPE BIGINT
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.ub AS SELECT * FROM ducklake.u
+
+query II
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'ub'
+----
+i	BIGINT
+
+statement ok
+COMMIT
+
+# a view without a binding is replaced
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.d WITH (DEFER_BINDING) AS SELECT * FROM ducklake.missing
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.d WITH (DEFER_BINDING) AS SELECT * FROM ducklake.missing
+
+statement ok
+CREATE TABLE ducklake.missing(k INTEGER)
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'd'
+----
+k
+
+statement ok
+COMMIT
+
+# an identical PIVOT view is not written again
+statement ok
+CREATE TABLE ducklake.p(k VARCHAR, v INTEGER)
+
+statement ok
+CREATE VIEW ducklake.pv AS PIVOT ducklake.p ON k IN ('x', 'y') USING sum(v)
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.pv AS PIVOT ducklake.p ON k IN ('x', 'y') USING sum(v)
+
+query I
+SELECT id = getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
+
+# nor is an identical view that was not bound yet
 statement ok
 CREATE VIEW ducklake.w AS SELECT 42 AS answer
 
@@ -71,3 +159,21 @@ query I
 SELECT id = getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
 ----
 true
+
+# the replacement drops the comments of the columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_view_replace_noop_columns.db' AS commented (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_columns', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+CREATE VIEW commented.cv AS SELECT 42 AS answer
+
+statement ok
+COMMENT ON COLUMN commented.cv.answer IS 'the answer'
+
+statement ok
+CREATE OR REPLACE VIEW commented.cv AS SELECT 42 AS answer
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'commented' AND table_name = 'cv'
+----
+NULL

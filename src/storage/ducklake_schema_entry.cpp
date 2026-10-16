@@ -277,19 +277,25 @@ static bool HasSameSpelling(const vector<Identifier> &left, const vector<Identif
 	return true;
 }
 
-//! Whether replacing the view with this definition leaves everything it stores and binds unchanged
 static bool IsIdenticalView(ClientContext &context, DuckLakeViewEntry &view, const CreateViewInfo &info,
                             const string &query_sql) {
-	auto existing_info = view.GetInfo();
-	auto &existing = existing_info->Cast<CreateViewInfo>();
-	if (view.GetQuerySQL() != query_sql || !HasSameSpelling({existing.GetViewName()}, {info.GetViewName()}) ||
-	    !HasSameSpelling(existing.aliases, info.aliases) || !Value::NotDistinctFrom(existing.comment, info.comment) ||
-	    existing.tags != info.tags || !existing.column_comments_map.empty() || !info.column_comments_map.empty()) {
+	if (view.GetQuerySQL() != query_sql || info.binding_mode != CreateViewBindingMode::BIND_ON_CREATE ||
+	    view.name.GetIdentifierName() != info.GetViewName().GetIdentifierName() ||
+	    !HasSameSpelling(view.aliases, info.aliases) || !Value::NotDistinctFrom(view.comment, info.comment) ||
+	    view.tags != info.tags || !info.column_comments_map.empty()) {
 		return false;
 	}
 	view.BindView(context);
 	auto columns = view.GetColumnInfo();
-	return columns && columns->types == info.types && HasSameSpelling(columns->names, info.names);
+	if (!columns || columns->types != info.types || !HasSameSpelling(columns->names, info.names)) {
+		return false;
+	}
+	for (idx_t column_idx = 0; column_idx < columns->names.size(); column_idx++) {
+		if (!view.GetColumnComment(column_idx).IsNull()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
