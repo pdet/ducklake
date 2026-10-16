@@ -39,6 +39,8 @@ static constexpr GeoStatsBound GEO_STATS_BOUNDS[] = {{"xmin", &GeometryExtent::x
                                                      {"mmin", &GeometryExtent::m_min, GeometryExtent::EMPTY_MIN},
                                                      {"mmax", &GeometryExtent::m_max, GeometryExtent::EMPTY_MAX}};
 
+static constexpr double ROUNDED_BOUND_UNIT = 1e-6;
+
 bool DuckLakeColumnGeoStats::TrySerialize(string &result) const {
 	JSONWriter writer;
 	auto bbox = writer.CreateObject();
@@ -73,12 +75,20 @@ void DuckLakeColumnGeoStats::Deserialize(const string &stats) {
 		throw InvalidInputException("Invalid geo stats JSON");
 	}
 
+	// DuckLake 1.0 and older wrote the bounds rounded to six decimals, in JSON with a space after each colon
+	bool rounded_bounds = StringUtil::StartsWith(stats, "{\"bbox\": ");
 	auto bbox = root.GetMember("bbox");
 	for (auto &bound : GEO_STATS_BOUNDS) {
 		auto bound_val = bbox.GetMember(bound.name);
-		if (bound_val.IsNumber()) {
-			extent.*bound.field = bound_val.GetNumber();
+		if (!bound_val.IsNumber()) {
+			continue;
 		}
+		auto value = bound_val.GetNumber();
+		if (rounded_bounds) {
+			// lower a minimum and raise a maximum by a unit of the last decimal
+			value -= std::copysign(ROUNDED_BOUND_UNIT, bound.empty_value);
+		}
+		extent.*bound.field = value;
 	}
 
 	root.GetMember("types").IterateArray([&](JSONValue type_val) {
