@@ -309,7 +309,9 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto query_sql = info.query->ToString();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
-		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY) {
+		// a definition that depends on the view is rejected by the conflict handling below
+		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY &&
+		    !info.dependencies.Contains(*existing_entry)) {
 			auto &existing_view = existing_entry->Cast<DuckLakeViewEntry>();
 			if (IsIdenticalView(existing_view, info, query_sql)) {
 				if (!existing_view.GetColumnInfo()) {

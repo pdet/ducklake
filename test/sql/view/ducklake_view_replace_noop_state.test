@@ -199,6 +199,24 @@ SELECT currval('temp.bind_seq')
 statement ok
 ROLLBACK
 
+# a definition that depends on the view is still rejected
+statement ok
+SET enable_view_dependencies = true
+
+statement ok
+CREATE TEMP SEQUENCE dep_seq
+
+statement ok
+CREATE VIEW ducklake.dv AS SELECT * FROM query(CASE nextval('temp.dep_seq') WHEN 2 THEN 'SELECT * FROM ducklake.dv' ELSE 'SELECT 42 AS x' END)
+
+statement error
+CREATE OR REPLACE VIEW ducklake.dv AS SELECT * FROM query(CASE nextval('temp.dep_seq') WHEN 2 THEN 'SELECT * FROM ducklake.dv' ELSE 'SELECT 42 AS x' END)
+----
+CREATE OR REPLACE is not allowed to depend on itself
+
+statement ok
+RESET enable_view_dependencies
+
 # an identical PIVOT view is not written again
 statement ok
 CREATE TABLE ducklake.p(k VARCHAR, v INTEGER)
