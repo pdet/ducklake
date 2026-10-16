@@ -1,0 +1,126 @@
+# name: test/sql/data_inlining/inlined_add_column_checks.test
+# description: a column that cannot be inlined is not added to rows inlined in the same transaction
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_add_column_checks', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement error
+ALTER TABLE dl.t ADD COLUMN g GEOMETRY DEFAULT 'POINT(1 2)'
+----
+the metadata catalog cannot inline the column
+
+statement ok
+ROLLBACK
+
+# rows committed before the column read its default and filters find them
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN g GEOMETRY DEFAULT 'POINT(1 2)'
+
+statement ok
+INSERT INTO dl.t VALUES (3, 'POINT(3 4)')
+
+query I
+SELECT i FROM dl.t WHERE g && 'POINT(1 2)'::GEOMETRY ORDER BY i
+----
+1
+2
+
+# a struct field that cannot be inlined is not added through a type change either
+statement ok
+CREATE TABLE dl.s (s STRUCT(i INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES ({'i': 1})
+
+statement error
+ALTER TABLE dl.s ALTER s TYPE STRUCT(i INTEGER, g GEOMETRY)
+----
+the metadata catalog cannot inline the new type
+
+statement ok
+ROLLBACK
+
+# defaults that a data file cannot store are refused like inserted values
+statement ok
+CREATE TABLE dl.n (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.n VALUES (1)
+
+statement error
+ALTER TABLE dl.n ADD COLUMN x INTERVAL DEFAULT '-1 day'::INTERVAL
+----
+Parquet files do not support negative intervals
+
+statement ok
+ROLLBACK
+
+# a VARIANT default that a data file cannot store
+statement ok
+CREATE TABLE dl.v (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.v VALUES (1)
+
+statement error
+ALTER TABLE dl.v ADD COLUMN v VARIANT DEFAULT '1 day'::INTERVAL
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.v VALUES (1)
+
+statement ok
+ALTER TABLE dl.v ADD COLUMN v VARIANT DEFAULT 42
+
+statement ok
+COMMIT
+
+query II
+SELECT i, v FROM dl.v
+----
+1	42
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT i, v FROM dl.v
+----
+1	42

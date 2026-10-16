@@ -1,0 +1,71 @@
+# name: test/sql/data_inlining/inlined_add_column_variant_v10.test
+# description: a VARIANT column is not added to rows inlined in the same transaction on a 1.0 SQLite catalog
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/inlined_add_column_variant_v10.db' AS dl
+(DATA_PATH '{DATA_PATH}/inlined_add_column_variant_v10', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# 1.0 catalogs on SQLite cannot inline VARIANT values
+statement error
+ALTER TABLE dl.t ADD COLUMN v VARIANT DEFAULT 42
+----
+the metadata catalog cannot inline the column
+
+statement ok
+ROLLBACK
+
+statement ok
+CREATE TABLE dl.s (s STRUCT(i INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.s VALUES ({'i': 1})
+
+statement error
+ALTER TABLE dl.s ALTER s TYPE STRUCT(i INTEGER, v VARIANT)
+----
+the metadata catalog cannot inline the new type
+
+statement ok
+ROLLBACK
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN v VARIANT DEFAULT 42
+
+statement ok
+INSERT INTO dl.t VALUES (3, 43)
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	42
+2	42
+3	43
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_data_file
+----
+1

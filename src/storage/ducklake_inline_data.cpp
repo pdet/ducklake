@@ -374,10 +374,13 @@ void DuckLakeInlineData::RecomputeColumnStats(DuckLakeTableEntry &table, DuckLak
 	inlined_data.outdated_stats_table = nullptr;
 }
 
-//! Refuse VARIANT values that a data file cannot store, such as INTERVAL members, so they never get stuck inlined
-static void VerifyParquetVariants(Vector &data, idx_t count) {
+//! Refuse values that a data file cannot store, such as negative intervals, so they never get stuck inlined
+static void VerifyFlushableValues(Vector &data, idx_t count) {
 	auto &type = data.GetType();
 	switch (type.id()) {
+	case LogicalTypeId::INTERVAL:
+		ThrowIfNegativeInterval(data, count);
+		break;
 	case LogicalTypeId::VARIANT: {
 		child_list_t<LogicalType> parquet_variant {{"metadata", LogicalType::BLOB}, {"value", LogicalType::BLOB}};
 		Vector encoded(LogicalType::STRUCT(std::move(parquet_variant)), count);
@@ -386,16 +389,25 @@ static void VerifyParquetVariants(Vector &data, idx_t count) {
 	}
 	case LogicalTypeId::STRUCT:
 		for (auto &child : StructVector::GetEntries(data)) {
-			VerifyParquetVariants(child, count);
+			VerifyFlushableValues(child, count);
 		}
 		break;
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
-		VerifyParquetVariants(ListVector::GetChildMutable(data), ListVector::GetListSize(data));
+		VerifyFlushableValues(ListVector::GetChildMutable(data), ListVector::GetListSize(data));
 		break;
 	default:
 		break;
 	}
+}
+
+void DuckLakeInlineData::VerifyFlushableValue(const Value &value) {
+	if (value.IsNull()) {
+		return;
+	}
+	Vector data(value.type(), 1);
+	data.SetValue(0, value);
+	VerifyFlushableValues(data, 1);
 }
 
 static void VerifyParquetVariants(ColumnDataCollection &data) {
@@ -410,7 +422,7 @@ static void VerifyParquetVariants(ColumnDataCollection &data) {
 	}
 	for (auto &chunk : data.Chunks(variant_columns)) {
 		for (auto &column : chunk.data) {
-			VerifyParquetVariants(column, chunk.size());
+			VerifyFlushableValues(column, chunk.size());
 		}
 	}
 }

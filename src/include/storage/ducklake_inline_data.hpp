@@ -51,6 +51,8 @@ public:
 	string GetName() const override;
 
 	static void RecomputeColumnStats(DuckLakeTableEntry &table, DuckLakeInlinedData &inlined_data);
+	//! Refuse a value that a data file cannot store
+	static void VerifyFlushableValue(const Value &value);
 };
 
 } // namespace duckdb
