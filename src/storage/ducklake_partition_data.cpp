@@ -7,6 +7,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/common/crypto/md5.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -173,6 +174,12 @@ string DuckLakePartitionUtils::GetPartitionDirectoryName(const string &hive_comp
 
 unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(ClientContext &context,
                                                                              const LogicalCopyToFile &copy) {
+	for (auto col_idx : copy.partition_columns) {
+		// VARIANT values of different types can have the same text
+		if (TypeVisitor::Contains(copy.expected_types[col_idx], LogicalTypeId::VARIANT)) {
+			return nullptr;
+		}
+	}
 	FunctionBinder binder(context);
 	vector<unique_ptr<Expression>> components;
 	for (idx_t i = 0; i < copy.partition_columns.size(); i++) {

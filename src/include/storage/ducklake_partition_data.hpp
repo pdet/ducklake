@@ -80,7 +80,8 @@ struct DuckLakePartitionUtils {
 	                                     const string &separator);
 	//! The directory of a hive partition component, or its md5 hash when it is too long for a file name
 	static string GetPartitionDirectoryName(const string &hive_component);
-	//! The hive partition path of a partitioned COPY, with the directory names of GetPartitionDirectoryName
+	//! The hive partition path of a partitioned COPY, with the directory names of GetPartitionDirectoryName.
+	//! Returns nullptr when distinct partitions can share a directory, which a partition path does not allow.
 	static unique_ptr<Expression> CreatePartitionPathExpression(ClientContext &context, const LogicalCopyToFile &copy);
 
 	//! Wrap a column expression in a named scalar function (e.g. "year", "hash")
