@@ -692,17 +692,12 @@ SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 	return metadata;
 }
 
-static bool AddChildColumn(vector<DuckLakeColumnInfo> &columns, FieldIndex parent_id, DuckLakeColumnInfo &column_info) {
-	for (auto &col : columns) {
-		if (col.id == parent_id) {
-			col.children.push_back(std::move(column_info));
-			return true;
-		}
-		if (AddChildColumn(col.children, parent_id, column_info)) {
-			return true;
-		}
+static DuckLakeColumnInfo &GetColumnByPath(vector<DuckLakeColumnInfo> &columns, const vector<idx_t> &path) {
+	reference<DuckLakeColumnInfo> result = columns[path[0]];
+	for (idx_t i = 1; i < path.size(); i++) {
+		result = result.get().children[path[i]];
 	}
-	return false;
+	return result.get();
 }
 
 vector<DuckLakeTag> DuckLakeMetadataManager::LoadTags(const Value &tag_map) {
@@ -1084,6 +1079,8 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
+	// child indexes from the root column to each column, stable since children are only appended
+	unordered_map<idx_t, vector<idx_t>> column_paths;
 	for (auto &row : *result) {
 		auto table_id = TableIndex(row.GetValue<uint64_t>(1));
 
@@ -1119,6 +1116,7 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 				table_info.path = FromRelativePath(ReadPath(row, 6), schema.path, separator);
 			}
 			tables.push_back(std::move(table_info));
+			column_paths.clear();
 		}
 		auto &table_entry = tables.back();
 		if (row.GetValue<Value>(COLUMN_INDEX_START).IsNull()) {
@@ -1149,15 +1147,24 @@ ORDER BY table_id, parent_column NULLS FIRST, column_order
 			column_info.tags = LoadTags(tags);
 		}
 
+		vector<idx_t> column_path;
 		if (row.IsNull(COLUMN_INDEX_START + 6)) {
 			// base column - add the column to this table
+			column_path.push_back(table_entry.columns.size());
+			column_paths.emplace(column_info.id.index, std::move(column_path));
 			table_entry.columns.push_back(std::move(column_info));
 		} else {
 			auto parent_id = FieldIndex(row.GetValue<idx_t>(COLUMN_INDEX_START + 6));
-			if (!AddChildColumn(table_entry.columns, parent_id, column_info)) {
+			auto parent_path = column_paths.find(parent_id.index);
+			if (parent_path == column_paths.end()) {
 				throw InvalidInputException("Failed to load DuckLake - Could not find parent column for column %s",
 				                            column_info.name);
 			}
+			auto &parent = GetColumnByPath(table_entry.columns, parent_path->second);
+			column_path = parent_path->second;
+			column_path.push_back(parent.children.size());
+			column_paths.emplace(column_info.id.index, std::move(column_path));
+			parent.children.push_back(std::move(column_info));
 		}
 	}
 	// load view information
