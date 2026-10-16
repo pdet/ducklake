@@ -566,7 +566,8 @@ public:
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
-	virtual void MigrateV10(bool allow_failures = false);
+	virtual void MigrateV10(bool allow_failures = false, DuckLakeVersion from_version = DuckLakeVersion::V1_0,
+	                        DuckLakeVersion target_version = DuckLakeVersion::V1_1);
 	//! Logs development migration failures during attach
 	virtual void MigrateV10Dev();
 	//! Whether the catalog already has every metadata table and column of v1.1-dev1

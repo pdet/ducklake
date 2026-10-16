@@ -271,11 +271,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
 			}
-			if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
+			if (catalog_version == DuckLakeVersion::V1_1_DEV_1 && target_version == DuckLakeVersion::V1_1_DEV_1) {
 				// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
 				if (options.automatic_migration) {
 					// an explicitly requested migration fails loudly
-					metadata_manager.MigrateV10(true);
+					metadata_manager.MigrateV10(true, DuckLakeVersion::V1_1_DEV_1, DuckLakeVersion::V1_1_DEV_1);
 				} else if (options.access_mode != AccessMode::READ_ONLY && !skip_dev_migration) {
 					metadata_manager.MigrateV10Dev();
 					if (ValidChecker::IsInvalidated(transaction.GetConnection().context->ActiveTransaction())) {
@@ -290,10 +290,14 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 				continue;
 			}
 			if (catalog_version == DuckLakeVersion::V1_0) {
-				metadata_manager.MigrateV10();
-				catalog_version = DuckLakeVersion::V1_1_DEV_1;
+				metadata_manager.MigrateV10(false, DuckLakeVersion::V1_0, target_version);
+				catalog_version = target_version;
 			}
-			if (catalog_version != DUCKLAKE_LATEST_VERSION) {
+			if (catalog_version == DuckLakeVersion::V1_1_DEV_1 && target_version == DuckLakeVersion::V1_1) {
+				metadata_manager.MigrateV10(true, DuckLakeVersion::V1_1_DEV_1);
+				catalog_version = DuckLakeVersion::V1_1;
+			}
+			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
 				                              DuckLakeVersionToString(catalog_version));
@@ -366,7 +370,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	}
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
-	if (version == DuckLakeVersion::V1_1_DEV_1) {
+	if (version == DuckLakeVersion::V1_1_DEV_1 || version == DuckLakeVersion::V1_1) {
 		if (dynamic_cast<QuackMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
 		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {
