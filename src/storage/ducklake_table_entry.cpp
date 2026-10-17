@@ -1191,9 +1191,17 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		                       info.new_field.Name().GetIdentifierName(), info.column_path.back().GetIdentifierName());
 	}
 
+	// existing rows read the initial value of the field, which only a literal default gives
+	Value literal_default;
+	if (info.new_field.HasDefaultValue() &&
+	    !DuckLakeUtil::TryGetLiteralValue(info.new_field.DefaultValue(), literal_default)) {
+		throw NotImplementedException("We cannot add a struct field with a non-literal default value. Use a literal "
+		                              "default, or add the field without a default and UPDATE the existing rows");
+	}
+
 	// generate a new field id for the column
 	auto next_field_id = next_column_id.GetIndex();
-	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id, true);
+	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id);
 	next_column_id = next_field_id;
 
 	ValidateAddedFieldsCanSkipStats(parent_id, *child_field_id);
