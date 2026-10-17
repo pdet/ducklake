@@ -44,3 +44,29 @@ query I
 SELECT t FROM dl.t_TIMESTAMP_MS
 ----
 294247-01-10 04:00:54.775
+
+# a column whose stats are skipped is checked too, and keeps no bounds
+statement ok
+CREATE TABLE dl.skipped (t TIMESTAMP_MS)
+
+statement ok
+CALL dl.set_option('skip_stats_columns', ['t'], table_name => 'skipped')
+
+statement error
+CALL ducklake_add_data_files('dl', 'skipped', '{DATA_PATH}/add_files_max_timestamp.parquet')
+----
+of type TIMESTAMP in the file does not fit type TIMESTAMP_MS
+
+statement ok
+CALL ducklake_add_data_files('dl', 'skipped', '{DATA_PATH}/add_files_max_timestamp_ms.parquet')
+
+query I
+SELECT t FROM dl.skipped
+----
+294247-01-10 04:00:54.775
+
+query II
+SELECT count(*), count(min_value) FROM __ducklake_metadata_dl.ducklake_file_column_stats
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'skipped')
+----
+1	0
