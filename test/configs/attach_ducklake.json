@@ -754,7 +754,8 @@
       "paths": [
         "test/sql/storage/types/variant/variant_comparator_stats.test",
         "test/sql/storage/types/variant/variant_shredded_extract_non_object.test",
-        "test/sql/types/variant/variant_map_to_variant_filter.test"
+        "test/sql/types/variant/variant_map_to_variant_filter.test",
+        "test/sql/storage/types/variant/variant_struct_field_subquery.test"
       ]
     },
     {
