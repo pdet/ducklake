@@ -256,8 +256,8 @@ public:
 		return NumericLimits<idx_t>::Maximum();
 	}
 
-	//! Check whether a table with the given columns can be inlined
-	bool CanInlineColumns(const ColumnList &columns);
+	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
+	string GetInliningObstacle(const ColumnList &columns);
 	//! Whether the inlined data table of a table with this many columns fits the backend
 	bool InlinedTableFits(idx_t column_count) const;
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
@@ -634,6 +634,7 @@ public:
 protected:
 	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
 	bool CanInlineColumn(const string &name, const LogicalType &type);
+	string GetInliningObstacle(const string &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery() const;

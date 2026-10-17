@@ -429,8 +429,43 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
+static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex field_id,
+                              optional_ptr<const DuckLakeColumnInfo> replacement) {
+	for (idx_t i = 0; i < fields.size(); i++) {
+		if (fields[i].id == field_id) {
+			if (replacement) {
+				// a renamed field keeps the children queued for it
+				auto children = std::move(fields[i].children);
+				fields[i] = *replacement;
+				fields[i].children = std::move(children);
+			} else {
+				fields.erase(fields.begin() + i);
+			}
+			return true;
+		}
+		if (UpdateNestedField(fields[i].children, field_id, replacement)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Replaces or removes a field nested in a column that the transaction adds, since it is written with that column
+static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx_t, idx_t> &txn_added_fields,
+                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement) {
+	for (auto &entry : txn_added_fields) {
+		if (UpdateNestedField(result.new_columns[entry.second].column_info.children, field_id, replacement)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
                        unordered_map<idx_t, idx_t> &txn_added_fields) {
+	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr)) {
+		return;
+	}
 	auto it = txn_added_fields.find(field_id.index);
 	if (it != txn_added_fields.end()) {
 		auto erased_idx = it->second;
@@ -462,10 +497,21 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
+	unordered_set<idx_t> replaced_fields;
+	for (auto &new_col_info : change_info.new_fields) {
+		if (UpdateNestedAddedField(result, txn_added_fields, new_col_info.column_info.id, new_col_info.column_info)) {
+			replaced_fields.insert(new_col_info.column_info.id.index);
+		}
+	}
 	for (auto &dropped_field_id : change_info.dropped_fields) {
-		CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+		if (!replaced_fields.count(dropped_field_id.index)) {
+			CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+		}
 	}
 	for (auto &new_col_info : change_info.new_fields) {
+		if (replaced_fields.count(new_col_info.column_info.id.index)) {
+			continue;
+		}
 		DuckLakeNewColumn new_column;
 		new_column.table_id = table_id;
 		new_column.column_info = new_col_info.column_info;
