@@ -10,7 +10,7 @@ require parquet
 unzip data/old_ducklake/inlined_struct_field_order.db.gz {TEST_DIR}/v10_inlined_struct_field_order.db
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_inlined_struct_field_order.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_struct_field_order', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_struct_field_order.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_struct_field_order', OVERRIDE_DATA_PATH TRUE, DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 # the rows go into the inlined table with the reordered fields, sorted by a they are not sorted by b
 statement ok
