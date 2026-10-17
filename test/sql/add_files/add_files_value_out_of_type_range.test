@@ -93,3 +93,15 @@ query I
 SELECT x FROM dl.d
 ----
 99.90
+
+# the error names the full path of a nested column
+statement ok
+COPY (SELECT {'x': 999.9::DECIMAL(4,1)} AS s) TO '{DATA_PATH}/add_files_decimal_nested.parquet'
+
+statement ok
+CREATE TABLE dl.nested (s STRUCT(x DECIMAL(4,2)))
+
+statement error
+CALL ducklake_add_data_files('dl', 'nested', '{DATA_PATH}/add_files_decimal_nested.parquet')
+----
+Failed to map column "s.x"

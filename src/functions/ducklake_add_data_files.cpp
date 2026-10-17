@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
@@ -92,6 +93,8 @@ struct ParquetColumn {
 	bool skip_bounds = false;
 	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
 	LogicalType bounds_type;
+	//! The dotted path of the column, set when the field mapping is made
+	string path;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -433,7 +436,7 @@ FROM parquet_full_metadata(%s)
 			if (check_bounds) {
 				auto dropped_value = stats.CastBoundsFrom(column.bounds_type);
 				if (dropped_value) {
-					throw MappingError(column.name, file.filepath, table,
+					throw MappingError(column.path, file.filepath, table,
 					                   StringUtil::Format("The value %s of type %s in the file does not fit type %s",
 					                                      *dropped_value, column.bounds_type, stats.type));
 				}
@@ -789,6 +792,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		prefix += ".";
 	}
 	prefix += column.name;
+	column.path = prefix;
 
 	auto map_entry = make_uniq<DuckLakeNameMapEntry>();
 	map_entry->source_name = column.name;
@@ -805,8 +809,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	auto bounds_survive = DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type);
 	if (bounds_survive && field_type.id() == LogicalTypeId::DECIMAL) {
 		// a decimal with fewer integer digits holds only some values of the file
-		bounds_survive = DecimalType::GetWidth(field_type) - DecimalType::GetScale(field_type) >=
-		                 DecimalType::GetWidth(column.duckdb_type) - DecimalType::GetScale(column.duckdb_type);
+		bounds_survive = BoundCastExpression::CastIsInvertible(column.duckdb_type, field_type);
 	}
 	if (!field_id.HasChildren() && column.duckdb_type != field_type && !bounds_survive) {
 		column.bounds_type = column.duckdb_type;
