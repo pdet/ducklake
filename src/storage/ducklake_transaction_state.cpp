@@ -436,18 +436,23 @@ static void ReplaceQueuedField(DuckLakeColumnInfo &field, const DuckLakeColumnIn
 	field.children = std::move(children);
 }
 
-static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex field_id,
-                              optional_ptr<const DuckLakeColumnInfo> replacement) {
+static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex parent_id, FieldIndex field_id,
+                              optional_ptr<const DuckLakeColumnInfo> replacement,
+                              optional_ptr<DuckLakeNewColumn> removed) {
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (fields[i].id == field_id) {
 			if (replacement) {
 				ReplaceQueuedField(fields[i], *replacement);
 			} else {
+				if (removed) {
+					removed->column_info = std::move(fields[i]);
+					removed->parent_idx = parent_id.index;
+				}
 				fields.erase(fields.begin() + i);
 			}
 			return true;
 		}
-		if (UpdateNestedField(fields[i].children, field_id, replacement)) {
+		if (UpdateNestedField(fields[i].children, fields[i].id, field_id, replacement, removed)) {
 			return true;
 		}
 	}
@@ -456,23 +461,36 @@ static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex fie
 
 //! Replaces or removes a field nested in a column that the transaction adds, since it is written with that column
 static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx_t, idx_t> &txn_added_fields,
-                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement) {
+                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement,
+                                   optional_ptr<DuckLakeNewColumn> removed = nullptr) {
 	for (auto &entry : txn_added_fields) {
-		if (UpdateNestedField(result.new_columns[entry.second].column_info.children, field_id, replacement)) {
+		auto &column = result.new_columns[entry.second];
+		if (UpdateNestedField(column.column_info.children, column.column_info.id, field_id, replacement, removed)) {
+			if (removed) {
+				removed->table_id = column.table_id;
+			}
 			return true;
 		}
 	}
 	return false;
 }
 
-void CancelOrDropField(TableIndex table_id, FieldIndex field_id, NewTableInfo &result,
+void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, NewTableInfo &result,
                        unordered_map<idx_t, idx_t> &txn_added_fields) {
-	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr)) {
+	DuckLakeNewColumn nested_field;
+	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr, nested_field)) {
+		if (!readded) {
+			result.dropped_new_columns.push_back(std::move(nested_field));
+		}
 		return;
 	}
 	auto it = txn_added_fields.find(field_id.index);
 	if (it != txn_added_fields.end()) {
 		auto erased_idx = it->second;
+		if (!readded) {
+			// files written in this transaction can hold the field ids, so they stay taken
+			result.dropped_new_columns.push_back(std::move(result.new_columns[erased_idx]));
+		}
 		result.new_columns.erase(result.new_columns.begin() + erased_idx);
 		txn_added_fields.erase(it);
 		for (auto &entry : txn_added_fields) {
@@ -501,6 +519,12 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const string
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
                          unordered_map<idx_t, idx_t> &txn_added_fields) {
+	auto &new_fields = change_info.new_fields;
+	auto is_readded = [&](const FieldIndex &field_id) {
+		return std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
+			return new_col.column_info.id.index == field_id.index;
+		});
+	};
 	unordered_set<idx_t> replaced_fields;
 	for (auto &new_col_info : change_info.new_fields) {
 		if (UpdateNestedAddedField(result, txn_added_fields, new_col_info.column_info.id, new_col_info.column_info)) {
@@ -509,7 +533,7 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 	}
 	for (auto &dropped_field_id : change_info.dropped_fields) {
 		if (!replaced_fields.count(dropped_field_id.index)) {
-			CancelOrDropField(table_id, dropped_field_id, result, txn_added_fields);
+			CancelOrDropField(table_id, dropped_field_id, is_readded(dropped_field_id), result, txn_added_fields);
 		}
 	}
 	for (auto &new_col_info : change_info.new_fields) {
@@ -528,11 +552,7 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 	// tags queued for it in this transaction; already-committed tags are expired when writing the
 	// dropped columns (GH #1310).
 	for (auto &dropped_field_id : change_info.dropped_fields) {
-		auto &new_fields = change_info.new_fields;
-		bool readded = std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
-			return new_col.column_info.id.index == dropped_field_id.index;
-		});
-		if (readded) {
+		if (is_readded(dropped_field_id)) {
 			continue;
 		}
 		result.new_column_tags.erase(std::remove_if(result.new_column_tags.begin(), result.new_column_tags.end(),
@@ -1757,7 +1777,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 				                   table.GetColumnInfo(local_change.field_index));
 			} else {
 				// drop the committed column and insert it with the updated info
-				CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
+				CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
 				DuckLakeNewColumn new_col;
 				new_col.table_id = committed_table_id;
 				new_col.column_info = table.GetColumnInfo(local_change.field_index);
@@ -2265,6 +2285,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
+		batch_queries += DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
 		                                              commit_state.replaced_inlined_tables);
