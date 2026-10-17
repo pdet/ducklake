@@ -536,7 +536,7 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 	MigrateInlinedSchemaVersions();
 	MigrateRenamedFieldDefaults();
 	MigrateInlinedDataTypes();
-	// DDL locks the metadata tables exclusively on Postgres, a dev catalog with every addition only sets the version
+	// DDL locks the metadata tables exclusively on Postgres, skip it when a dev catalog has every addition
 	auto has_additions = from_dev1 && HasV1_1Additions();
 	ExecuteMigration(V1_1MigrationQuery(has_additions), from_dev1, from_dev1 ? "1.1-dev1" : "1.0", "1.1");
 }
