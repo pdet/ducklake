@@ -3045,7 +3045,8 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
 	if (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
 	    metadata_type == "quack_scanner") {
-		return column;
+		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
+		return DuckLakeTypes::IsNested(type) ? "CAST(" + column + " AS " + type.ToString() + ")" : column;
 	}
 	auto expression = column;
 	if (type.id() == LogicalTypeId::VARCHAR && !TypeIsNativelySupported(type)) {
@@ -3785,45 +3786,6 @@ void DuckLakeMetadataManager::CheckInlinedDataReadError(QueryResult &result, con
 	result.GetErrorObject().Throw("Failed to read inlined data from DuckLake: ");
 }
 
-//! Whether both types have the same struct fields, in any order, so that a cast by field name converts one to the other
-static bool HaveSameFieldsInAnyOrder(const LogicalType &stored, const LogicalType &expected) {
-	if (stored == expected) {
-		return true;
-	}
-	if (stored.id() != expected.id()) {
-		return false;
-	}
-	switch (stored.id()) {
-	case LogicalTypeId::STRUCT: {
-		auto &stored_fields = StructType::GetChildTypes(stored);
-		auto &expected_fields = StructType::GetChildTypes(expected);
-		if (stored_fields.size() != expected_fields.size()) {
-			return false;
-		}
-		for (auto &expected_field : expected_fields) {
-			auto entry = std::find_if(stored_fields.begin(), stored_fields.end(),
-			                          [&](const child_list_t<LogicalType>::value_type &field) {
-				                          return field.first == expected_field.first;
-			                          });
-			if (entry == stored_fields.end() || !HaveSameFieldsInAnyOrder(entry->second, expected_field.second)) {
-				return false;
-			}
-		}
-		return true;
-	}
-	case LogicalTypeId::LIST:
-		return HaveSameFieldsInAnyOrder(ListType::GetChildType(stored), ListType::GetChildType(expected));
-	case LogicalTypeId::ARRAY:
-		return ArrayType::GetSize(stored) == ArrayType::GetSize(expected) &&
-		       HaveSameFieldsInAnyOrder(ArrayType::GetChildType(stored), ArrayType::GetChildType(expected));
-	case LogicalTypeId::MAP:
-		return HaveSameFieldsInAnyOrder(MapType::KeyType(stored), MapType::KeyType(expected)) &&
-		       HaveSameFieldsInAnyOrder(MapType::ValueType(stored), MapType::ValueType(expected));
-	default:
-		return false;
-	}
-}
-
 shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(QueryResult &result,
                                                                               const vector<LogicalType> &expected_types,
                                                                               const string &inlined_table_name) {
@@ -3838,41 +3800,16 @@ shared_ptr<DuckLakeInlinedData> DuckLakeMetadataManager::TransformInlinedData(Qu
 		                            inlined_table_name, expected_types.size(), result_types.size());
 		// LCOV_EXCL_STOP
 	}
-	// older versions stored struct fields in the order of the ALTER that changed them
-	vector<bool> cast_by_name(expected_types.size(), false);
-	bool cast_columns = false;
 	for (idx_t i = 0; i < expected_types.size(); i++) {
-		if (result_types[i] == expected_types[i]) {
-			continue;
-		}
-		if (!HaveSameFieldsInAnyOrder(result_types[i], expected_types[i])) {
+		if (result_types[i] != expected_types[i]) {
 			throw InvalidInputException("Failed to read inlined data from DuckLake table \"%s\": expected %s for "
 			                            "column %llu but read %s",
 			                            inlined_table_name, expected_types[i], i + 1, result_types[i]);
 		}
-		cast_by_name[i] = true;
-		cast_columns = true;
 	}
 	auto data = make_uniq<ColumnDataCollection>(*context, expected_types);
-	DataChunk cast_chunk;
-	if (cast_columns) {
-		cast_chunk.Initialize(*context, expected_types);
-	}
 	while (auto chunk = result.Fetch()) {
-		if (!cast_columns) {
-			data->Append(*chunk);
-			continue;
-		}
-		cast_chunk.Reset();
-		for (idx_t i = 0; i < expected_types.size(); i++) {
-			if (cast_by_name[i]) {
-				VectorOperations::Cast(*context, chunk->data[i], cast_chunk.data[i], chunk->size());
-			} else {
-				cast_chunk.data[i].Reference(chunk->data[i]);
-			}
-		}
-		cast_chunk.SetCardinality(chunk->size());
-		data->Append(cast_chunk);
+		data->Append(*chunk);
 	}
 	auto inlined_data = make_shared_ptr<DuckLakeInlinedData>();
 	inlined_data->data = std::move(data);
