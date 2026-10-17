@@ -1746,6 +1746,12 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			auto committed_table_id = commit_state.GetTableId(table);
 
+			// the fields of a column added in this transaction are only written with that column
+			vector<DuckLakeColumnInfo> added_fields;
+			auto added_column = txn_added_fields.find(local_change.field_index.index);
+			if (added_column != txn_added_fields.end()) {
+				added_fields = std::move(result.new_columns[added_column->second].column_info.children);
+			}
 			// Cancel the previous txn-local add for this field, or drop the committed column.
 			CancelOrDropField(committed_table_id, local_change.field_index, result, txn_added_fields);
 
@@ -1753,6 +1759,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			DuckLakeNewColumn new_col;
 			new_col.table_id = committed_table_id;
 			new_col.column_info = table.GetColumnInfo(local_change.field_index);
+			new_col.column_info.children = std::move(added_fields);
 			txn_added_fields[local_change.field_index.index] = result.new_columns.size();
 			result.new_columns.push_back(std::move(new_col));
 
