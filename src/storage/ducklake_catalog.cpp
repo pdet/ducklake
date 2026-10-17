@@ -566,9 +566,10 @@ static LogicalType ParseMacroParameterType(const string &type) {
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
-//! Whether an expression builds its value from constants only, as the text of a list or struct of numbers does
-static bool IsNestedLiteral(const ParsedExpression &expr) {
+//! The type of constants inside list and struct literals, the form in which DuckLake 1.0 wrote some nested values
+static bool TryGetNestedLiteralType(ClientContext &context, const ParsedExpression &expr, LogicalType &result) {
 	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		result = expr.Cast<ConstantExpression>().GetLiteral().ToValue().type();
 		return true;
 	}
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
@@ -576,24 +577,40 @@ static bool IsNestedLiteral(const ParsedExpression &expr) {
 	}
 	auto &function = expr.Cast<FunctionExpression>();
 	auto &name = function.FunctionName().GetIdentifierName();
-	if (function.IsOperator() || (name != "list_value" && name != "struct_pack")) {
+	bool is_list = name == "list_value";
+	if (function.IsOperator() || (!is_list && name != "struct_pack")) {
 		return false;
 	}
+	LogicalType child_type = LogicalType::SQLNULL;
+	child_list_t<LogicalType> child_types;
 	for (auto &argument : function.GetArguments()) {
-		if (!IsNestedLiteral(argument.GetExpression())) {
+		LogicalType argument_type;
+		if (!TryGetNestedLiteralType(context, argument.GetExpression(), argument_type)) {
+			return false;
+		}
+		if (!is_list) {
+			child_types.emplace_back(argument.GetName().GetIdentifierName(), argument_type);
+		} else if (!LogicalType::TryGetMaxLogicalType(context, child_type, argument_type, child_type)) {
 			return false;
 		}
 	}
+	result = is_list ? LogicalType::LIST(child_type) : LogicalType::STRUCT(std::move(child_types));
 	return true;
 }
 
-//! DuckLake 1.0 stored a nested default as the text of its value, which does not quote its strings
-static unique_ptr<ParsedExpression> LegacyNestedDefault(const string &macro_name,
+//! DuckLake 1.0 stored a nested default as the text of its value, which does not quote most strings
+static unique_ptr<ParsedExpression> LegacyNestedDefault(ClientContext &context, const string &macro_name,
                                                         const DuckLakeMacroParameters &param) {
+	auto &text = StringValue::Get(param.default_value);
 	try {
-		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(param.default_value.GetValue<string>());
-		if (IsNestedLiteral(*expr)) {
-			return expr;
+		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(text);
+		LogicalType type;
+		if (TryGetNestedLiteralType(context, *expr, type)) {
+			// a value that prints differently, as 001 does, was a string
+			auto value = param.default_value.DefaultTryCastAs(type);
+			if (value && value->ToString() == text) {
+				return ConstantExpression::FromValue(*value);
+			}
 		}
 	} catch (std::exception &) {
 	}
@@ -601,7 +618,9 @@ static unique_ptr<ParsedExpression> LegacyNestedDefault(const string &macro_name
 	vector<unique_ptr<ParsedExpression>> children;
 	children.push_back(ConstantExpression::FromValue(Value(macro_name)));
 	children.push_back(ConstantExpression::FromValue(Value(param.parameter_name)));
-	return make_uniq<FunctionExpression>(Identifier("ducklake_unreadable_macro_default"), std::move(children));
+	QualifiedName function_name(Identifier(SYSTEM_CATALOG), Identifier(DEFAULT_SCHEMA),
+	                            Identifier("ducklake_unreadable_macro_default"));
+	return make_uniq<FunctionExpression>(function_name, std::move(children));
 }
 
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
@@ -639,9 +658,9 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
 			bool null_default = StringValue::Get(param.default_value) == "NULL";
-			if (expr_type.IsNested() && !null_default) {
+			if (DuckLakeTypes::IsNested(expr_type) && !null_default) {
 				macro_function->default_parameters.insert(Identifier(param.parameter_name),
-				                                          LegacyNestedDefault(macro.macro_name, param));
+				                                          LegacyNestedDefault(context, macro.macro_name, param));
 				continue;
 			}
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
