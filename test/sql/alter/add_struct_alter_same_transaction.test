@@ -138,3 +138,41 @@ query I
 SELECT count(*) FROM ducklake.t5 WHERE c = 0
 ----
 1
+
+# a field dropped after the rename keeps its field id taken
+statement ok
+CREATE TABLE ducklake.t6 (id INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't6')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t6 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t6 VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.t6 RENAME COLUMN s TO r
+
+statement ok
+ALTER TABLE ducklake.t6 DROP COLUMN r.b
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't6')
+----
+1
+
+statement ok
+ALTER TABLE ducklake.t6 ADD COLUMN r.c INTEGER
+
+query II
+SELECT id, r FROM ducklake.t6
+----
+1	{'a': 10, 'c': NULL}
