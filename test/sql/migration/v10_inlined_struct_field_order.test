@@ -78,6 +78,11 @@ CHECKPOINT lake
 
 endloop
 
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 'other')
+----
+1
+
 # the flush sorted the rows of the reordered inlined table by a
 statement ok
 SET VARIABLE t_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 't'))
