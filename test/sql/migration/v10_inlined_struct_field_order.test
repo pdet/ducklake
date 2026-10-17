@@ -1,0 +1,80 @@
+# name: test/sql/migration/v10_inlined_struct_field_order.test
+# description: inlined data whose struct fields DuckDB 1.5.6 stored in the order of an ALTER reads by field name
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, the ALTER of every table but appended and other reordered its struct fields
+unzip data/old_ducklake/inlined_struct_field_order.db.gz {TEST_DIR}/v10_inlined_struct_field_order.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_struct_field_order.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_struct_field_order', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+loop i 0 2
+
+query I
+SELECT c FROM lake.t ORDER BY c.a
+----
+{'a': 1, 'b': 2}
+{'a': 3, 'b': 4}
+
+query II
+SELECT id, c FROM lake.front ORDER BY id
+----
+1	{'a': 1, 'c': NULL}
+2	{'a': 3, 'c': 5}
+
+query II
+SELECT id, c FROM lake.inner_s ORDER BY id
+----
+1	{'s': {'x': 1, 'y': 2}}
+
+query II
+SELECT id, c FROM lake.map_v ORDER BY id
+----
+1	{k={'a': 1, 'b': 2}}
+
+query II
+SELECT id, l FROM lake.list_s ORDER BY id
+----
+1	[{'a': 1, 'b': 2}]
+
+query II
+SELECT id, c FROM lake.widen ORDER BY id
+----
+1	{'a': 1, 'b': 2}
+2	{'a': 3, 'b': 40000000000}
+
+query II
+SELECT id, c FROM lake.appended ORDER BY id
+----
+1	{'a': 1, 'z': NULL}
+2	{'a': 2, 'z': 9}
+
+query I
+SELECT i FROM lake.other
+----
+1
+
+# the second round reads the flushed files
+statement ok
+CHECKPOINT lake
+
+endloop
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1
+
+statement ok
+INSERT INTO lake.t VALUES ({'a': 5, 'b': 6})
+
+query I
+SELECT c FROM lake.t ORDER BY c.a
+----
+{'a': 1, 'b': 2}
+{'a': 3, 'b': 4}
+{'a': 5, 'b': 6}
