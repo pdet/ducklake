@@ -1,0 +1,46 @@
+# name: test/sql/add_files/add_files_value_out_of_type_range.test
+# description: A file with a value that does not fit the type of the table is not added
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_value_out_of_type_range')
+
+statement ok
+COPY (SELECT TIMESTAMP '294247-01-10 04:00:54.775806' AS t) TO '{DATA_PATH}/add_files_max_timestamp.parquet'
+
+foreach type TIMESTAMP_MS TIMESTAMP_S
+
+statement ok
+CREATE TABLE dl.t_${type} (t ${type})
+
+statement error
+CALL ducklake_add_data_files('dl', 't_${type}', '{DATA_PATH}/add_files_max_timestamp.parquet')
+----
+of type TIMESTAMP in the file does not fit type TIMESTAMP_
+
+query I
+SELECT count(*) FROM dl.t_${type}
+----
+0
+
+endloop
+
+# the largest value that fits is added
+statement ok
+COPY (SELECT TIMESTAMP '294247-01-10 04:00:54.775' AS t) TO '{DATA_PATH}/add_files_max_timestamp_ms.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't_TIMESTAMP_MS', '{DATA_PATH}/add_files_max_timestamp_ms.parquet')
+
+query I
+SELECT t FROM dl.t_TIMESTAMP_MS
+----
+294247-01-10 04:00:54.775

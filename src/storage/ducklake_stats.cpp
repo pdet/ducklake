@@ -1,4 +1,5 @@
 #include "storage/ducklake_stats.hpp"
+#include "common/ducklake_types.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_geo_stats.hpp"
@@ -197,17 +198,27 @@ static bool TryCastBound(string &bound, const LogicalType &source, const Logical
 	return true;
 }
 
-void DuckLakeColumnStats::CastBoundsFrom(const LogicalType &source) {
+optional<string> DuckLakeColumnStats::CastBoundsFrom(const LogicalType &source) {
+	// only string bounds can be truncated in the footer
+	auto bounds_are_values = !DuckLakeTypes::IsStringType(source);
+	optional<string> dropped_value;
 	if (has_min && !TryCastBound(min, source, type)) {
+		if (min_is_exact || bounds_are_values) {
+			dropped_value = min;
+		}
 		min.clear();
 		has_min = false;
 		min_is_exact = false;
 	}
 	if (has_max && !TryCastBound(max, source, type)) {
+		if (!dropped_value && (max_is_exact || bounds_are_values)) {
+			dropped_value = max;
+		}
 		max.clear();
 		has_max = false;
 		max_is_exact = false;
 	}
+	return dropped_value;
 }
 
 bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target) {

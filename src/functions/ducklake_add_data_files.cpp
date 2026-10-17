@@ -424,7 +424,15 @@ FROM parquet_full_metadata(%s)
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
 			}
 			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
-				stats.CastBoundsFrom(column.bounds_type);
+				auto dropped_value = stats.CastBoundsFrom(column.bounds_type);
+				if (dropped_value) {
+					// every read of the row that holds this value would fail
+					throw InvalidInputException(
+					    "Failed to map column \"%s\" from file \"%s\" to the column in table \"%s\"\n* The value %s "
+					    "of type %s in the file does not fit type %s",
+					    column.name, file.filepath, table.name.GetIdentifierName(), *dropped_value, column.bounds_type,
+					    stats.type);
+				}
 			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
