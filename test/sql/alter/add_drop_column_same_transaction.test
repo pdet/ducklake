@@ -163,3 +163,30 @@ query II
 SELECT id, s FROM ducklake.n
 ----
 1	{'a': 10, 'c': NULL}
+
+# a field of a struct column added in the same transaction
+statement ok
+CREATE TABLE ducklake.f (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.f ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.f VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.f DROP COLUMN s.b
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.f ADD COLUMN s.c INTEGER
+
+query II
+SELECT id, s FROM ducklake.f
+----
+1	{'a': 10, 'c': NULL}

@@ -429,8 +429,9 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
 }
 
-static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex field_id,
-                              optional_ptr<const DuckLakeColumnInfo> replacement) {
+static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex parent_id, FieldIndex field_id,
+                              optional_ptr<const DuckLakeColumnInfo> replacement,
+                              optional_ptr<DuckLakeNewColumn> removed) {
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (fields[i].id == field_id) {
 			if (replacement) {
@@ -439,11 +440,15 @@ static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex fie
 				fields[i] = *replacement;
 				fields[i].children = std::move(children);
 			} else {
+				if (removed) {
+					removed->column_info = std::move(fields[i]);
+					removed->parent_idx = parent_id.index;
+				}
 				fields.erase(fields.begin() + i);
 			}
 			return true;
 		}
-		if (UpdateNestedField(fields[i].children, field_id, replacement)) {
+		if (UpdateNestedField(fields[i].children, fields[i].id, field_id, replacement, removed)) {
 			return true;
 		}
 	}
@@ -452,9 +457,14 @@ static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex fie
 
 //! Replaces or removes a field nested in a column that the transaction adds, since it is written with that column
 static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx_t, idx_t> &txn_added_fields,
-                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement) {
+                                   FieldIndex field_id, optional_ptr<const DuckLakeColumnInfo> replacement,
+                                   optional_ptr<DuckLakeNewColumn> removed = nullptr) {
 	for (auto &entry : txn_added_fields) {
-		if (UpdateNestedField(result.new_columns[entry.second].column_info.children, field_id, replacement)) {
+		auto &column = result.new_columns[entry.second];
+		if (UpdateNestedField(column.column_info.children, column.column_info.id, field_id, replacement, removed)) {
+			if (removed) {
+				removed->table_id = column.table_id;
+			}
 			return true;
 		}
 	}
@@ -463,7 +473,11 @@ static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx
 
 void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, NewTableInfo &result,
                        unordered_map<idx_t, idx_t> &txn_added_fields) {
-	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr)) {
+	DuckLakeNewColumn nested_field;
+	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr, nested_field)) {
+		if (!readded) {
+			result.dropped_new_columns.push_back(std::move(nested_field));
+		}
 		return;
 	}
 	auto it = txn_added_fields.find(field_id.index);
