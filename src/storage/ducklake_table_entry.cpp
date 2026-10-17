@@ -1192,8 +1192,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 
 	// existing rows read the initial value of the field, which only a literal default gives
+	// nested types reject any default when the field id is built
 	Value literal_default;
-	if (info.new_field.HasDefaultValue() &&
+	if (info.new_field.HasDefaultValue() && !info.new_field.Type().IsNested() &&
 	    !DuckLakeUtil::TryGetLiteralValue(info.new_field.DefaultValue(), literal_default)) {
 		throw NotImplementedException("We cannot add a struct field with a non-literal default value. Use a literal "
 		                              "default, or add the field without a default and UPDATE the existing rows");
