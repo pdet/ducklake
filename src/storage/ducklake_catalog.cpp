@@ -566,6 +566,44 @@ static LogicalType ParseMacroParameterType(const string &type) {
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
+//! Whether an expression builds its value from constants only, as the text of a list or struct of numbers does
+static bool IsNestedLiteral(const ParsedExpression &expr) {
+	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &function = expr.Cast<FunctionExpression>();
+	auto &name = function.FunctionName().GetIdentifierName();
+	if (function.IsOperator() || (name != "list_value" && name != "struct_pack")) {
+		return false;
+	}
+	for (auto &argument : function.GetArguments()) {
+		if (!IsNestedLiteral(argument.GetExpression())) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! DuckLake 1.0 stored a nested default as the text of its value, which does not quote its strings
+static unique_ptr<ParsedExpression> LegacyNestedDefault(const string &macro_name,
+                                                        const DuckLakeMacroParameters &param) {
+	try {
+		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(param.default_value.GetValue<string>());
+		if (IsNestedLiteral(*expr)) {
+			return expr;
+		}
+	} catch (std::exception &) {
+	}
+	// the macro stays usable when the parameter is passed
+	vector<unique_ptr<ParsedExpression>> children;
+	children.push_back(ConstantExpression::FromValue(Value(macro_name)));
+	children.push_back(ConstantExpression::FromValue(Value(param.parameter_name)));
+	return make_uniq<FunctionExpression>(Identifier("ducklake_unreadable_macro_default"), std::move(children));
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -600,10 +638,16 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 				continue;
 			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+			bool null_default = StringValue::Get(param.default_value) == "NULL";
+			if (expr_type.IsNested() && !null_default) {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name),
+				                                          LegacyNestedDefault(macro.macro_name, param));
+				continue;
+			}
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
 				Value casted_value;
 				// typed NULL defaults are stored as the text NULL
-				if (StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(expr_type)) {
+				if (null_default && !DuckLakeTypes::IsStringType(expr_type)) {
 					// nested types are stored without their child types
 					casted_value = expr_type.IsNested() ? Value() : Value(expr_type);
 				} else {
