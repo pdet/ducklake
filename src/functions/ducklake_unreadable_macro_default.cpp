@@ -16,7 +16,6 @@ static void UnreadableMacroDefaultFunction(DataChunk &args, ExpressionState &sta
 	throw InternalException("ducklake_unreadable_macro_default is never bound");
 }
 
-//! The default of a macro parameter that DuckLake 1.0 stored in a form that cannot be read back
 ScalarFunction DuckLakeUnreadableMacroDefaultFunction() {
 	return ScalarFunction("ducklake_unreadable_macro_default", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                      LogicalType::SQLNULL, UnreadableMacroDefaultFunction, UnreadableMacroDefaultBind);

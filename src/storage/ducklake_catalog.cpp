@@ -601,16 +601,13 @@ static bool TryGetNestedLiteralType(ClientContext &context, const ParsedExpressi
 //! DuckLake 1.0 stored a nested default as the text of its value, which does not quote most strings
 static unique_ptr<ParsedExpression> LegacyNestedDefault(ClientContext &context, const string &macro_name,
                                                         const DuckLakeMacroParameters &param) {
-	auto &text = StringValue::Get(param.default_value);
 	try {
-		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(text);
+		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(StringValue::Get(param.default_value));
 		LogicalType type;
-		if (TryGetNestedLiteralType(context, *expr, type)) {
-			// a value that prints differently, as 001 does, was a string
-			auto value = param.default_value.DefaultTryCastAs(type);
-			if (value && value->ToString() == text) {
-				return ConstantExpression::FromValue(*value);
-			}
+		Value value;
+		if (TryGetNestedLiteralType(context, *expr, type) &&
+		    DuckLakeUtil::TryReadTextAs(param.default_value, type, value)) {
+			return ConstantExpression::FromValue(value);
 		}
 	} catch (std::exception &) {
 	}
