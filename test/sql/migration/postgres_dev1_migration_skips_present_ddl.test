@@ -30,6 +30,24 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 statement ok
 DETACH dl
 
+# A catalog that lacks an addition still gets it
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_delete_file DROP COLUMN row_group_count')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_present_ddl', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_delete_file'' AND column_name = ''row_group_count''')
+----
+1
+
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
 
