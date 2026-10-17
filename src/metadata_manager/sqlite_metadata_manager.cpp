@@ -65,7 +65,7 @@ void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<s
 		query += "DROP TABLE temp.ducklake_renamed_inlined;";
 	}
 	auto result = Execute(query);
-	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1-dev1: ");
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 }
 
 } // namespace duckdb

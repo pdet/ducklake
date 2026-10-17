@@ -59,7 +59,7 @@ statement ok
 CALL enable_logging(level => 'debug')
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 # one statement batch renames the columns, also on the Postgres server, and SQLite rebuilds the tables instead
 query I

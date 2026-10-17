@@ -44,10 +44,10 @@ DETACH DATABASE IF EXISTS lake;
 @copy ${lake}_pristine TO ${work}
 
 run
-@attach ${work} AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+@attach ${work} AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 result_query III
 SELECT (SELECT value FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version'), count(*), sum(id)
 FROM lake.t199
 ----
-1.1-dev1	3	6
+1.1	3	6
