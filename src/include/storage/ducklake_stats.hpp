@@ -97,7 +97,7 @@ public:
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
 	void WidenFloatBounds();
 	//! Rewrite bounds of the source type as the values they cast to, dropping the bounds that do not cast
-	//! Returns the first dropped bound that is exact, so a value of the file
+	//! Returns the first exact bound that does not cast
 	optional<string> CastBoundsFrom(const LogicalType &source);
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);

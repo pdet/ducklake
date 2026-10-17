@@ -70,3 +70,26 @@ SELECT count(*), count(min_value) FROM __ducklake_metadata_dl.ducklake_file_colu
 WHERE table_id = (SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'skipped')
 ----
 1	0
+
+# a decimal with fewer integer digits holds only some values of the file
+statement ok
+COPY (SELECT 999.9::DECIMAL(4,1) AS x) TO '{DATA_PATH}/add_files_decimal_large.parquet'
+
+statement ok
+COPY (SELECT 99.9::DECIMAL(4,1) AS x) TO '{DATA_PATH}/add_files_decimal_small.parquet'
+
+statement ok
+CREATE TABLE dl.d (x DECIMAL(4,2))
+
+statement error
+CALL ducklake_add_data_files('dl', 'd', '{DATA_PATH}/add_files_decimal_large.parquet')
+----
+The value 999.9 of type DECIMAL(4,1) in the file does not fit type DECIMAL(4,2)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'd', '{DATA_PATH}/add_files_decimal_small.parquet')
+
+query I
+SELECT x FROM dl.d
+----
+99.90

@@ -411,8 +411,7 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-			// min/max are copied out of the footer here, once per row group, so a skipped column
-			// only materializes them to check that they fit the table type
+			// a skipped column reads its bounds only to check that they fit the table type
 			auto check_bounds = column.bounds_type.id() != LogicalTypeId::INVALID;
 			auto read_bounds = !column.skip_bounds || check_bounds;
 			auto stats_min = stats_entry.GetChildValue<1>();
@@ -440,7 +439,6 @@ FROM parquet_full_metadata(%s)
 				}
 			}
 			if (column.skip_bounds) {
-				// the geo bbox below is kept, as for every skipped column
 				stats.ClearBounds();
 			}
 
@@ -804,8 +802,13 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 	auto &field_type = field_id.Type();
-	if (!field_id.HasChildren() && column.duckdb_type != field_type &&
-	    !DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type)) {
+	auto bounds_survive = DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type);
+	if (bounds_survive && field_type.id() == LogicalTypeId::DECIMAL) {
+		// a decimal with fewer integer digits holds only some values of the file
+		bounds_survive = DecimalType::GetWidth(field_type) - DecimalType::GetScale(field_type) >=
+		                 DecimalType::GetWidth(column.duckdb_type) - DecimalType::GetScale(column.duckdb_type);
+	}
+	if (!field_id.HasChildren() && column.duckdb_type != field_type && !bounds_survive) {
 		column.bounds_type = column.duckdb_type;
 	}
 
