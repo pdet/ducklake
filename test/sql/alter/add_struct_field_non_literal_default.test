@@ -22,12 +22,12 @@ INSERT INTO dl.t VALUES (1, {'a': 1})
 statement error
 ALTER TABLE dl.t ADD COLUMN s.f INTEGER DEFAULT 1 + 1
 ----
-We cannot add a column with a non-literal default value
+We cannot add a struct field with a non-literal default value
 
 statement error
 ALTER TABLE dl.t ADD COLUMN s.f VARCHAR DEFAULT concat('a', 'b')
 ----
-We cannot add a column with a non-literal default value
+We cannot add a struct field with a non-literal default value
 
 query II
 SELECT * FROM dl.t
