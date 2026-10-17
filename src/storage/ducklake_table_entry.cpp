@@ -967,15 +967,7 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 }
 
 static bool IsTimestampWithoutTimeZone(const LogicalType &type) {
-	switch (type.id()) {
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-		return true;
-	default:
-		return false;
-	}
+	return LogicalType::TypeIsTimestamp(type) && type.id() != LogicalTypeId::TIMESTAMP_TZ;
 }
 
 bool IsSimpleCast(const ParsedExpression &expr) {
