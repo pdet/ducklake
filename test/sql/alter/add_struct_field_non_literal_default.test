@@ -29,6 +29,17 @@ ALTER TABLE dl.t ADD COLUMN s.f VARCHAR DEFAULT concat('a', 'b')
 ----
 We cannot add a struct field with a non-literal default value
 
+# nested fields support no default at all
+statement error
+ALTER TABLE dl.t ADD COLUMN s.l INTEGER[] DEFAULT [1, 2]
+----
+Default value for LIST type not supported
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.n STRUCT(x INTEGER) DEFAULT {'x': 1}
+----
+Default value for STRUCT type not supported
+
 query II
 SELECT * FROM dl.t
 ----
