@@ -275,7 +275,6 @@ static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &o
 	return true;
 }
 
-//! Returns true if a timestamp field in `older_fields` has another type in `latest`
 static bool TimestampRetypedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &older_fields,
                                      const DuckLakeFieldData &latest) {
 	for (auto &older_field : older_fields) {

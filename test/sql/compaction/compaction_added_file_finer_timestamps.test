@@ -17,6 +17,9 @@ statement ok
 COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t) TO '{DATA_PATH}/finer_ns.parquet'
 
 statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t, i FROM range(2) t(i)) TO '{DATA_PATH}/finer_ns_rows.parquet'
+
+statement ok
 COPY (SELECT TIMESTAMP '2020-01-01 00:00:00.123456' AS t) TO '{DATA_PATH}/finer_us.parquet'
 
 statement ok
@@ -44,16 +47,26 @@ SELECT t FROM ducklake.t
 2020-01-01 00:00:00.000000001
 2020-01-01 00:00:00.000000001
 
+# a rewrite after deleting part of the file
 statement ok
-DELETE FROM ducklake.t WHERE rowid = 0
+CREATE TABLE ducklake.r (t TIMESTAMP, i BIGINT)
 
 statement ok
-CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+CALL ducklake_add_data_files('ducklake', 'r', '{DATA_PATH}/finer_ns_rows.parquet')
 
-query I
-SELECT t FROM ducklake.t
+statement ok
+ALTER TABLE ducklake.r ALTER COLUMN t TYPE TIMESTAMP_NS
+
+statement ok
+DELETE FROM ducklake.r WHERE i = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'r', delete_threshold => 0)
+
+query II
+SELECT t, i FROM ducklake.r
 ----
-2020-01-01 00:00:00.000000001
+2020-01-01 00:00:00.000000001	1
 
 # microseconds in a TIMESTAMP_S column
 statement ok
