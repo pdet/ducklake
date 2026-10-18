@@ -187,12 +187,13 @@ static DuckLakePath ReadPath(const QueryResultRow &row, idx_t col) {
 	return path;
 }
 
-string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields) {
+string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields, const string &order) {
 	// DuckDB syntax: LIST({'key1': val1, 'key2': val2, ...})
 	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
 		return "'" + entry.first + "': " + entry.second;
 	});
-	return "LIST({" + fields_part + "})";
+	auto order_part = order.empty() ? string() : " ORDER BY " + order;
+	return "LIST({" + fields_part + "}" + order_part + ")";
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::AttachMetadata(const string &attach_query) {
@@ -1240,7 +1241,7 @@ WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < view.end_snapshot OR 
 		AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
 		)
 	)",
-	                                            ListAggregation(MACRO_PARAM_FIELDS));
+	                                            ListAggregation(MACRO_PARAM_FIELDS, "column_id ASC"));
 	const vector<pair<string, string>> MACRO_IMPL_FIELDS = {
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
 
