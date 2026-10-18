@@ -56,3 +56,35 @@ query I
 SELECT count(*) FROM ducklake.u WHERE filename LIKE '%.parquet'
 ----
 1
+
+# rows inlined in the transaction cannot get such a column
+statement ok
+CREATE TABLE ducklake.w (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.w VALUES (1)
+
+statement error
+ALTER TABLE ducklake.w RENAME a TO xmin
+----
+ALTER on a table with transaction-local inlined data is not supported when column "xmin" has the name of a system column of the metadata database, commit the rows first
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.w VALUES (1)
+
+statement error
+ALTER TABLE ducklake.w ADD COLUMN ctid INTEGER
+----
+ALTER on a table with transaction-local inlined data is not supported when column "ctid" has the name of a system column of the metadata database, commit the rows first
+
+statement ok
+ROLLBACK
