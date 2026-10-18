@@ -45,6 +45,20 @@ COMMIT
 ----
 A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
 
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('dl', 'author', 'msg', extra_info => chr(0))
+
+statement ok
+INSERT INTO dl.p VALUES ('s', 4)
+
+statement error
+COMMIT
+----
+A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
+
 statement error
 CREATE TABLE dl.pivoted AS PIVOT (SELECT 'a' || chr(0) AS k, 1 AS v) ON k USING sum(v)
 ----

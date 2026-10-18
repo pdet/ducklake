@@ -194,7 +194,7 @@ void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DATA_FILE_PARTITION),
 		                          local_file_id, part.partition_column_idx,
-		                          DuckLakeUtil::PartitionValueLiteral(part.partition_value));
+		                          DuckLakeUtil::TextLiteralOrNull(part.partition_value));
 	}
 }
 

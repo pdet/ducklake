@@ -4384,7 +4384,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			throw InternalException("File should either not be partitioned, or have partition values");
 		}
 		for (auto &part_val : file.partition_values) {
-			auto partition_value = DuckLakeUtil::PartitionValueLiteral(part_val.partition_value);
+			auto partition_value = DuckLakeUtil::TextLiteralOrNull(part_val.partition_value);
 			partition_values.push_back(StringUtil::Format("(%d, %d, %d, %s)", data_file_index, table_id,
 			                                              part_val.partition_column_idx, partition_value));
 		}
@@ -4625,8 +4625,9 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
                                                         const DuckLakeSnapshotCommit &commit_info) {
 	return StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
-	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
-	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
+	    SQLStringOrNull(change_info.changes_made), DuckLakeUtil::TextLiteralOrNull(commit_info.author),
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_message),
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(bool include_exactness) {

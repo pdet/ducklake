@@ -504,7 +504,7 @@ const char *DuckLakeUtil::BoolLiteral(bool v) {
 	return v ? "true" : "false";
 }
 
-string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
+string DuckLakeUtil::TextLiteralOrNull(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
