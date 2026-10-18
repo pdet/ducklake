@@ -5256,12 +5256,16 @@ WHERE data_file_id IN (%s);
 }
 
 idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
+	// before 1.1, a column added and dropped in one transaction left no column row, only its id in the data files
 	auto result = Query(StringUtil::Format(R"(
 	SELECT MAX(column_id)
-	FROM {METADATA_CATALOG}.ducklake_column
-	WHERE table_id=%d
+	FROM (
+		SELECT MAX(column_id) AS column_id FROM {METADATA_CATALOG}.ducklake_column WHERE table_id=%d
+		UNION ALL
+		SELECT MAX(column_id) AS column_id FROM {METADATA_CATALOG}.ducklake_file_column_stats WHERE table_id=%d
+	) AS column_ids
 )",
-	                                       table_id.index));
+	                                       table_id.index, table_id.index));
 	result->ThrowIfError("Failed to get next column id in DuckLake: ");
 	for (auto &row : *result) {
 		if (row.IsNull(0)) {
