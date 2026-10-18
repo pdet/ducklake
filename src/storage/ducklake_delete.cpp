@@ -492,8 +492,10 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		}
 	}
 	if (sorted_deletes.size() != deleted_rows.Count() && !allow_duplicates) {
+		// LCOV_EXCL_START
 		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
 		                              "DuckLake. Eliminate duplicate matches prior to running the UPDATE");
+		// LCOV_EXCL_STOP
 	}
 	global_state.total_deleted_count += sorted_deletes.size();
 
@@ -641,6 +643,29 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 	return result;
 }
 
+DuckLakeFileListExtendedEntry DuckLakeDeleteMap::GetExtendedFileInfo(const string &filename) {
+	lock_guard<mutex> guard(lock);
+	auto delete_entry = file_map.find(filename);
+	if (delete_entry == file_map.end() && !file_lists.empty()) {
+		for (auto &file_list : file_lists) {
+			for (auto &file_entry : file_list->Cast<DuckLakeMultiFileList>().GetFilesExtended()) {
+				auto path = file_entry.file.path;
+				file_map.emplace(std::move(path), std::move(file_entry));
+			}
+		}
+		delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			throw TransactionException("Transaction conflict - attempting to delete from file \"%s\" - but another "
+			                           "transaction has rewritten it",
+			                           filename);
+		}
+	}
+	if (delete_entry == file_map.end()) {
+		throw InternalException("Could not find matching file for written delete file");
+	}
+	return delete_entry->second;
+}
+
 //! Whether the scan reads the current rows of the table, a MERGE can also read its source or an older version
 static bool ScansCurrentRows(PhysicalTableScan &scan, DuckLakeTableEntry &table) {
 	if (scan.function.GetName() != "ducklake_scan") {
@@ -697,6 +722,7 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 		for (auto &file_entry : files) {
 			delete_map->AddExtendedFileInfo(std::move(file_entry));
 		}
+		delete_map->file_lists.push_back(bind_data.file_list);
 		reader.delete_map = delete_map;
 	}
 	return planner.Make<DuckLakeDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes),

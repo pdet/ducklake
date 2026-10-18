@@ -24,11 +24,15 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool DroppedTablesStayReadable() const override {
+		return false;
+	}
 	idx_t MaxColumnCount() const override {
 		// the default SQLITE_MAX_COLUMN
 		return 2000;
 	}
 	bool IsRetryableCommitError(const string &message) const override;
+	void RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };
