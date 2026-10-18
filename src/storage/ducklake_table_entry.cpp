@@ -1435,7 +1435,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
                                                    AlterTableInfo &info) {
 	auto result = AlterEntry(context, transaction, info);
-	if (!transaction.HasTransactionInlinedData(GetTableId())) {
+	if (!result || !transaction.HasTransactionInlinedData(GetTableId())) {
 		return result;
 	}
 	// the inlined rows of the transaction are committed with the altered columns
