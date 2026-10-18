@@ -18,7 +18,7 @@ set ignore_error_messages
 statement ok
 SET GLOBAL errors_as_json = true
 
-# the internal connections of DuckLake take the global value, this connection keeps plain errors
+# this connection keeps plain errors
 statement ok
 SET errors_as_json = false
 
