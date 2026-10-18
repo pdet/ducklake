@@ -33,6 +33,7 @@ public:
 	}
 	bool IsRetryableCommitError(const string &message) const override;
 	string CommitErrorHint(const string &message) const override;
+	void RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };
