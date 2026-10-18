@@ -35,6 +35,9 @@ public:
 	idx_t MaxColumnCount() const override {
 		return 1600;
 	}
+	vector<string> SystemColumnNames() const override {
+		return {"tableoid", "xmin", "cmin", "xmax", "cmax", "ctid"};
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
