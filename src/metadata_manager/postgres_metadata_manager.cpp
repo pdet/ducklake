@@ -389,6 +389,10 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	if (query.find('\0') != string::npos) {
+		throw InvalidInputException("A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte, "
+		                            "such as a partition value, a name or a commit message");
+	}
 	SubstituteTransactionPlaceholders(snapshot, query);
 	auto &ducklake_catalog = transaction.GetCatalog();
 	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
