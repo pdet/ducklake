@@ -1328,8 +1328,7 @@ unique_ptr<DuckLakeSort> DuckLakeTableEntry::BuildSortData(DuckLakeTransaction &
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction =
 		    order_node.type == OrderType::DESCENDING ? OrderType::DESCENDING : OrderType::ASCENDING;
-		// Normalize the null order the same way the metadata writer and the ORDER BY builder
-		// do, so a sort read back from the catalog compares equal to the same clause re-issued.
+		// Store the null order the catalog reads back, so a re-issued clause compares equal.
 		sort_field.null_order = order_node.null_order == OrderByNullType::NULLS_FIRST ? OrderByNullType::NULLS_FIRST
 		                                                                              : OrderByNullType::NULLS_LAST;
 		sort_data->fields.push_back(sort_field);
