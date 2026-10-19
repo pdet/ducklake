@@ -1309,19 +1309,7 @@ static bool SortFieldsMatch(optional_ptr<DuckLakeSort> current_sort, const DuckL
 	if (!current_sort) {
 		return requested_sort.fields.empty();
 	}
-	if (current_sort->fields.size() != requested_sort.fields.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < current_sort->fields.size(); i++) {
-		auto &current = current_sort->fields[i];
-		auto &requested = requested_sort.fields[i];
-		if (current.sort_key_index != requested.sort_key_index || current.expression != requested.expression ||
-		    current.dialect != requested.dialect || current.sort_direction != requested.sort_direction ||
-		    current.null_order != requested.null_order) {
-			return false;
-		}
-	}
-	return true;
+	return current_sort->fields == requested_sort.fields;
 }
 
 unique_ptr<DuckLakeSort> DuckLakeTableEntry::BuildSortData(DuckLakeTransaction &transaction, const ColumnList &columns,
