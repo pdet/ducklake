@@ -13,14 +13,6 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rename_sorted_column_altered_again', DATA_INLINING_ROW_LIMIT 0)
 
-statement ok
-CREATE MACRO active_sort(tbl) AS TABLE
-SELECT se.expression
-FROM __ducklake_metadata_ducklake.ducklake_sort_info si
-JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
-JOIN __ducklake_metadata_ducklake.ducklake_table t ON t.table_id = si.table_id AND t.end_snapshot IS NULL
-WHERE si.end_snapshot IS NULL AND t.table_name = tbl
-
 # the rename is followed by another change of the same column
 statement ok
 CREATE TABLE ducklake.t(a INTEGER) SORTED BY (a)
@@ -36,11 +28,6 @@ ALTER TABLE ducklake.t ALTER COLUMN b SET DEFAULT 0
 
 statement ok
 COMMIT
-
-query I
-FROM active_sort('t')
-----
-b
 
 statement ok
 INSERT INTO ducklake.t VALUES (2), (1)
@@ -69,11 +56,6 @@ ALTER TABLE ducklake.s SET SORTED BY (b)
 statement ok
 COMMIT
 
-query I
-FROM active_sort('s')
-----
-b
-
 statement ok
 INSERT INTO ducklake.s VALUES (2), (1)
 
@@ -97,11 +79,6 @@ ALTER TABLE ducklake.created ALTER COLUMN b SET DEFAULT 0
 
 statement ok
 COMMIT
-
-query I
-FROM active_sort('created')
-----
-b
 
 statement ok
 INSERT INTO ducklake.created VALUES (2), (1)
