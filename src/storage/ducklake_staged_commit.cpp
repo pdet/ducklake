@@ -184,7 +184,7 @@ void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &
 	    DuckLakeUtil::OptionalIdxOrNull(file.partition_id), DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key),
 	    DuckLakeUtil::MappingIdOrNull(file.mapping_id), DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot),
 	    DuckLakeUtil::OptionalIdxOrNull(file.begin_snapshot), compaction_id_literal,
-	    DuckLakeUtil::OptionalIdxOrNull(file.row_group_count), file.created_by_ducklake ? "true" : "false");
+	    DuckLakeUtil::OptionalIdxOrNull(file.row_group_count), DuckLakeUtil::BoolLiteral(file.created_by_ducklake));
 	for (auto &stat : file.column_stats) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DATA_FILE_COLUMN_STATS),
