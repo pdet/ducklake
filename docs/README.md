@@ -101,11 +101,13 @@ See the [Usage](https://ducklake.select/docs/stable/duckdb/introduction) guide f
 To build, type
 ```
 git submodule init
-git submodule update
+git submodule update --recursive
 # to build with multiple cores, use `make GEN=ninja release`
-make pull
 make
 ```
+
+The submodules are pinned to the DuckDB version in `.github/duckdb-version`, which is what CI builds against. `make pull`
+moves them to the tip of their branch instead, where the build can fail.
 
 To run, run the bundled `duckdb` shell:
 ```
@@ -114,10 +116,7 @@ To run, run the bundled `duckdb` shell:
 
 ## Contributing
 
-We are happy to have outside contributions to our DuckLake extension. We currently have two active branches, and depending on your contribution, you must target the appropriate branch. Please note that bug fixes are always welcome. For new features, please coordinate with the team before starting any implementation.
-
-1. `main`. Our main branch is our DuckLake implementation that uses DuckDB `main` as a submodule. If your contribution is a new feature, or a bug fix that requires a DuckLake spec change, or if it strictly depends on a change in DuckDB `main`, you must target this branch.
-2. `1.5-variegata`. Here, we use DuckDB `1.5-variegata` as a submodule. Target this branch if you have a bug-fix that does not require a DuckLake spec change.
+We are happy to welcome external contributions to our DuckLake extension. Our active development branch is currently `main`, and all contributions should target that branch.
 
 ## Testing
 
@@ -140,3 +139,20 @@ We are happy to have outside contributions to our DuckLake extension. We current
 # run tests with deletion vectors enabled
 ./build/release/test/unittest --test-config test/configs/deletion_vectors.json
 ```
+
+### Code Coverage
+
+`make codecov` builds `build/codecov`, a release build in which only the DuckLake sources are instrumented for clang's
+source-based code coverage, like `make codecov` in DuckDB. DuckDB's test runner then writes the coverage report of the
+tests it runs, by default the fast ones. It needs `llvm-profdata`, `llvm-cov` and `genhtml` from lcov 2.0 to 2.5 (2.2
+and 2.6 fail on its options). Run it from the repository root, so the report only shows `src`:
+
+```bash
+python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --coverage-report build/codecov/coverage/fast
+# any test runner argument works, e.g. the tests with SQLite as catalog database
+python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --coverage-report build/codecov/coverage/sqlite \
+  --test-config test/configs/sqlite.json "test/sql/*"
+```
+
+CI merges the coverage of the tests of every metadata catalog (DuckDB, PostgreSQL, SQLite and Quack) into the
+`coverage-ducklake` artifact, and fails a pull request that lowers the line coverage of the latest report of `main`.

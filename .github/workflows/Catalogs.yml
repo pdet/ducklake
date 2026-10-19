@@ -1,5 +1,9 @@
 name: DBMS Catalog Tests
-on: [push, pull_request, repository_dispatch]
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  repository_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -9,6 +13,7 @@ defaults:
 
 jobs:
   ducklake-config-tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: DuckDB Tests with DuckLake + (Postgres/SQLite)
     runs-on: ubuntu-latest
     strategy:
@@ -64,7 +69,7 @@ jobs:
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11.1
       with:
-        vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
+        vcpkgGitCommitId: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
     - name: Build extension
       env:
@@ -74,7 +79,7 @@ jobs:
 
     - name: Test Quack
       run: |
-        python3 scripts/run_quack_tests.py
+        python3 scripts/run_quack_tests.py --timeout 300
 
     - name: Test SQLite
       env:

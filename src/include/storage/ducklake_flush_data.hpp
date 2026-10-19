@@ -22,20 +22,17 @@ class DuckLakeFlushData : public PhysicalOperator {
 public:
 	DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table,
 	                  DuckLakeInlinedTableInfo inlined_table, string encryption_key, optional_idx partition_id,
-	                  string sort_order_sql, PhysicalOperator &child);
+	                  PhysicalOperator &child);
 
 	DuckLakeTableEntry &table;
 	DuckLakeInlinedTableInfo inlined_table;
 	string encryption_key;
 	optional_idx partition_id;
-	string sort_order_sql;
 
 public:
 	// // Source interface
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override;
-
-	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
 
 	bool IsSource() const override {
 		return true;
