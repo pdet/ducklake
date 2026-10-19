@@ -1314,6 +1314,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	                                     SetDefaultLocalChange::SetDefault(field_id.GetFieldIndex(), new_column));
 }
 
+static bool SortFieldsMatch(optional_ptr<DuckLakeSort> current_sort, const DuckLakeSort &requested_sort) {
+	if (!current_sort) {
+		return requested_sort.fields.empty();
+	}
+	return current_sort->fields == requested_sort.fields;
+}
+
 unique_ptr<DuckLakeSort> DuckLakeTableEntry::BuildSortData(DuckLakeTransaction &transaction, const ColumnList &columns,
                                                            const vector<OrderByNode> &orders) {
 	if (orders.empty()) {
@@ -1330,7 +1337,9 @@ unique_ptr<DuckLakeSort> DuckLakeTableEntry::BuildSortData(DuckLakeTransaction &
 		sort_field.dialect = "duckdb";
 		sort_field.sort_direction =
 		    order_node.type == OrderType::DESCENDING ? OrderType::DESCENDING : OrderType::ASCENDING;
-		sort_field.null_order = order_node.null_order;
+		// Store the null order the catalog reads back, so a re-issued clause compares equal.
+		sort_field.null_order = order_node.null_order == OrderByNullType::NULLS_FIRST ? OrderByNullType::NULLS_FIRST
+		                                                                              : OrderByNullType::NULLS_LAST;
 		sort_data->fields.push_back(sort_field);
 	}
 	return sort_data;
@@ -1351,7 +1360,14 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	auto create_info = GetInfo();
 	auto &table_info = create_info->Cast<CreateTableInfo>();
 
+	if (info.orders.empty() && !GetSortData()) {
+		// RESET SORTED BY on a table that has no sort data
+		return nullptr;
+	}
 	auto sort_data = BuildSortData(transaction, GetColumns(), info.orders);
+	if (sort_data && SortFieldsMatch(GetSortData(), *sort_data)) {
+		return nullptr;
+	}
 	return make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(sort_data));
 }
 
