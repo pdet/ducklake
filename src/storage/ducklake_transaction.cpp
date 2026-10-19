@@ -800,6 +800,15 @@ void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
 	}
+	if (ChangesMade()) {
+		// the changes of a maintenance function reach the commit even when the catalog is read-only
+		try {
+			ducklake_catalog.VerifyWritable();
+		} catch (...) {
+			Rollback();
+			throw;
+		}
+	}
 	if (!expired_snapshots.empty()) {
 		try {
 			GetMetadataManager().DeleteSnapshots(expired_snapshots);
@@ -1678,6 +1687,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
+	ducklake_catalog.VerifyWritable();
 	// write the config option to the metadata
 	metadata_manager->SetConfigOption(option);
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
@@ -1685,6 +1695,7 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
+	ducklake_catalog.VerifyWritable();
 	if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
 	}
@@ -1699,6 +1710,7 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 }
 
 void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	ducklake_catalog.VerifyWritable();
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
