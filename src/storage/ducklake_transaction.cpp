@@ -349,6 +349,14 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, DuckL
 		new_data->Append(append_state, chunk);
 	}
 
+	if (new_data->Count() == 0) {
+		table_changes->new_inlined_data.reset();
+		if (table_changes->IsEmpty()) {
+			changes.erase(table.GetTableId());
+		}
+		return;
+	}
+
 	// override the existing collection and row_ids
 	inlined_data.data = std::move(new_data);
 	inlined_data.row_ids = std::move(new_row_ids);
