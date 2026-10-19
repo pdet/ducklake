@@ -54,18 +54,33 @@ NULL	50
 NULL	60
 
 # the merged files stay in the table directory and keep the spec and their partition values
-query III
-SELECT bool_and(regexp_matches(data_file, '/main/t/[^/]+\.parquet$')), count(DISTINCT f.partition_id), list(pv.partition_value ORDER BY pv.partition_value NULLS LAST)
-FROM ducklake_list_files('lake', 't') l
-JOIN meta.ducklake_data_file f ON f.end_snapshot IS NULL AND regexp_matches(l.data_file, '/' || replace(f.path, '\', '/') || '$')
-LEFT JOIN meta.ducklake_file_partition_value pv USING (data_file_id)
+query I
+SELECT bool_and(regexp_matches(data_file, '/main/t/[^/]+\.parquet$')) FROM ducklake_list_files('lake', 't')
 ----
-true	1	[1, 2, NULL]
+true
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE spec_ids = (SELECT list(partition_id) FROM meta.ducklake_partition_info WHERE table_id = getvariable('t_id'))
+
+statement ok
+SET VARIABLE t_files = (SELECT list(data_file_id) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = getvariable('t_id'))
+
+query II
+SELECT count(DISTINCT partition_id), bool_and(list_contains(getvariable('spec_ids'), partition_id))
+FROM meta.ducklake_data_file
+WHERE end_snapshot IS NULL AND table_id = getvariable('t_id')
+----
+1	true
 
 query I
-SELECT count(*) FROM meta.ducklake_data_file f WHERE f.end_snapshot IS NULL AND NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.partition_id = f.partition_id)
+SELECT list(partition_value ORDER BY partition_value NULLS LAST)
+FROM meta.ducklake_file_partition_value
+WHERE list_contains(getvariable('t_files'), data_file_id)
 ----
-0
+[1, 2, NULL]
 
 statement ok
 DELETE FROM lake.t WHERE v = 10
