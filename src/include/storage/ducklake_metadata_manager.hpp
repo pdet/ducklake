@@ -230,6 +230,10 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! Advice added to the error of a commit that failed for good
+	virtual string CommitErrorHint(const string &) const {
+		return string();
+	}
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
@@ -579,6 +583,8 @@ public:
 	void MigrateInlinedSchemaVersions();
 	//! Restores the defaults that older versions dropped when they renamed a struct field
 	void MigrateRenamedFieldDefaults();
+	//! Clears the bounds that older versions may have stored in the type of a file or of an earlier column type
+	void MigrateRetypedBounds();
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}
