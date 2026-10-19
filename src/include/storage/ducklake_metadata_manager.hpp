@@ -400,13 +400,12 @@ public:
 	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
 	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
-	//! The id of the last new spec of a table that equals its committed spec, which is not written, mapped to the
-	//! committed spec's id
+	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
+	                                    const vector<DuckLakePartitionInfo> &new_partitions);
+	//! Maps the id of a last new spec that equals the committed spec, which is not written, to the committed id
 	static unordered_map<idx_t, idx_t>
 	GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
 	                         const vector<DuckLakePartitionInfo> &new_partitions);
-	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
-	                                    const vector<DuckLakePartitionInfo> &new_partitions);
 	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
 	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
