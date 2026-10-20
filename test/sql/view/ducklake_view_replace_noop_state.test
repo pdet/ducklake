@@ -258,7 +258,7 @@ true
 
 # the replacement drops the comments of the columns
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/ducklake_view_replace_noop_columns.db' AS commented (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_columns', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{TEST_DIR}/ducklake_view_replace_noop_columns.db' AS commented (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_columns', DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE VIEW commented.cv AS SELECT 42 AS answer
