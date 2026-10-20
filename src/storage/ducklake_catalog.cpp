@@ -1336,6 +1336,20 @@ InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(Table
 	return InlinedDeletionCacheResult::UNKNOWN;
 }
 
+shared_ptr<const unordered_set<string>> DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	if (!inlined_deletion_tables || inlined_deletion_tables_snapshot != snapshot_id) {
+		return nullptr;
+	}
+	return inlined_deletion_tables;
+}
+
+void DuckLakeCatalog::SetInlinedDeletionTables(idx_t snapshot_id, shared_ptr<const unordered_set<string>> tables) {
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	inlined_deletion_tables = std::move(tables);
+	inlined_deletion_tables_snapshot = snapshot_id;
+}
+
 void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (exists) {
