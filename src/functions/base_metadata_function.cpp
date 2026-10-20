@@ -17,7 +17,7 @@ string DuckLakeTableFunctionUtil::FormatTimestampISO8601(const timestamp_t times
 	if (!Value::IsFinite(timestamp)) {
 		return Timestamp::ToString(timestamp);
 	}
-	// BC timestamps have no ISO 8601 text, the start of the year 1 filters the same
+	// metadata times are AD, so the start of the year 1 filters the same as a BC timestamp
 	if (Date::ExtractYear(Timestamp::GetDate(timestamp)) < 1) {
 		return "0001-01-01T00:00:00+00";
 	}

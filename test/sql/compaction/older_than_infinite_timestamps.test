@@ -64,6 +64,11 @@ FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => '0001-01-
 ----
 0
 
+# infinity also selects a time after the year 9999
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion SET schedule_start = '10000-01-01 00:00:00+00'
+WHERE data_file_id = (SELECT max(data_file_id) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion)
+
 query I
 SELECT count(*) FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
 ----
