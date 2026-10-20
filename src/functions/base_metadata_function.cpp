@@ -14,11 +14,11 @@
 namespace duckdb {
 
 string DuckLakeTableFunctionUtil::FormatTimestampISO8601(const timestamp_t timestamp) {
-	// infinite and BC timestamps have no ISO 8601 text, the bounds of the years 1 to 9999 filter the same
-	if (timestamp == timestamp_t::infinity()) {
-		return "9999-12-31T23:59:59.999999+00";
+	if (!Value::IsFinite(timestamp)) {
+		return Timestamp::ToString(timestamp);
 	}
-	if (timestamp == timestamp_t::ninfinity() || Date::ExtractYear(Timestamp::GetDate(timestamp)) < 1) {
+	// BC timestamps have no ISO 8601 text, the start of the year 1 filters the same
+	if (Date::ExtractYear(Timestamp::GetDate(timestamp)) < 1) {
 		return "0001-01-01T00:00:00+00";
 	}
 	auto ts_string = Timestamp::ToString(timestamp);

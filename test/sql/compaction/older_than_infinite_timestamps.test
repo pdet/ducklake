@@ -69,6 +69,19 @@ SELECT count(*) FROM ducklake_cleanup_old_files('lake', dry_run => true, older_t
 ----
 2
 
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/older_than_infinite_timestamps/orphan.parquet'
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', dry_run => true, older_than => '-infinity'::TIMESTAMPTZ)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+1
+
 # an age that reaches before year 1 expires and deletes nothing
 statement ok
 INSERT INTO lake.t VALUES (3)
