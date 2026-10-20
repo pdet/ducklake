@@ -66,3 +66,15 @@ query II
 SELECT count(*), sum(i) FROM dl.t
 ----
 3	6
+
+# every partition key is checked, also after a bucket key that starts a new spec
+statement ok
+CREATE TABLE dl.b(ts TIMESTAMP) PARTITIONED BY (bucket(4, ts), year(ts))
+
+statement error
+ALTER TABLE dl.b ALTER COLUMN ts TYPE TIMESTAMPTZ_NS
+----
+Cannot partition by year(ts)
+
+statement ok
+INSERT INTO dl.b VALUES (TIMESTAMP '2024-01-15 12:30:00')
