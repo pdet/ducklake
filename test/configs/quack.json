@@ -114,6 +114,7 @@
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/data_inlining/postgres_system_column_names.test",
+        "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/data_inlining/postgres_column_limit.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
         "test/sql/metadata/ducklake_settings_s3.test"
@@ -174,6 +175,12 @@
       "reason": "FIXME: Flaky timeout on quack.",
       "paths": [
         "test/sql/alter/many_schema_versions_low_memory.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
+      "paths": [
+        "test/sql/sorted_table/set_sorted_by_idempotent.test"
       ]
     },
     {
