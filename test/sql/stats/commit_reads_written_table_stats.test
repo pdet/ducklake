@@ -38,13 +38,14 @@ INSERT INTO lk.t2 VALUES (20)
 statement ok
 CALL disable_logging()
 
-# the stats are read with a table filter, a server-side commit reads them on the server
-query I
-SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+(=|IN)'))
+# the stats are read for the written table, a server-side commit reads them on the server
+query II
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	coalesce(bool_and(len(string_split(regexp_extract(message, 'table_id\s+IN\s+\(([0-9, ]+)\)', 1), ',')) = 1), true)
 FROM duckdb_logs
 WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
 ----
-0
+0	true
 
 # a commit that writes three tables reads their stats in one query
 statement ok
@@ -72,7 +73,8 @@ statement ok
 CALL disable_logging()
 
 query II
-SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+(=|IN)')), count(*) <= 1
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	coalesce(bool_and(len(string_split(regexp_extract(message, 'table_id\s+IN\s+\(([0-9, ]+)\)', 1), ',')) = 3), true)
 FROM duckdb_logs
 WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
 ----
@@ -101,13 +103,31 @@ statement ok
 COMMIT
 
 statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	coalesce(bool_and(len(string_split(regexp_extract(message, 'table_id\s+IN\s+\(([0-9, ]+)\)', 1), ',')) = 3), true)
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0	true
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
 ALTER TABLE lk.t4 ADD COLUMN j INTEGER
 
 statement ok
 CALL disable_logging()
 
 query II
-SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+(=|IN)')), count(*) <= 2
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	coalesce(bool_and(len(string_split(regexp_extract(message, 'table_id\s+IN\s+\(([0-9, ]+)\)', 1), ',')) = 1), true)
 FROM duckdb_logs
 WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
 ----
