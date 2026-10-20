@@ -80,6 +80,11 @@ which is attached in read-only mode
 statement ok
 ROLLBACK
 
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('lake', versions => [1], dry_run => true)
+----
+1
+
 statement error
 CALL ducklake_expire_snapshots('lake', versions => [1])
 ----
