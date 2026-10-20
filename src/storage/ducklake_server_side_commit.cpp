@@ -111,6 +111,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
+		commit_tables.push_back(entry.first);
 		DuckLakeTransaction::AddTableChanges(entry.first, entry.second, transaction_changes);
 	}
 	// Mirror whole-file drops into the conflict-detection set.
@@ -533,23 +534,29 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 	if (entry != existing_table_stats.end()) {
 		return entry->second;
 	}
-	// only the tables the commit writes are read, not the whole lake
+	// the tables the commit writes are read in one query, not the whole lake
+	vector<TableIndex> read_tables;
+	for (auto &commit_table : commit_tables) {
+		if (!existing_table_stats.count(commit_table) && commit_table != table_id) {
+			read_tables.push_back(commit_table);
+		}
+	}
+	read_tables.push_back(table_id);
 	string sql =
-	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata, table_id.index),
+	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata, read_tables),
 	                        "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 	DuckLakeMetadataManager::FillMissingTableSizes(global_stats, [&](string query) {
 		return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	});
-	shared_ptr<DuckLakeTableStats> table_stats;
-	for (auto &gs : global_stats) {
-		if (gs.table_id == table_id) {
-			table_stats = BuildTableStats(gs);
-		}
+	for (auto &read_table : read_tables) {
+		existing_table_stats[read_table] = nullptr;
 	}
-	existing_table_stats.emplace(table_id, table_stats);
-	return table_stats;
+	for (auto &gs : global_stats) {
+		existing_table_stats[gs.table_id] = BuildTableStats(gs);
+	}
+	return existing_table_stats[table_id];
 }
 
 bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {

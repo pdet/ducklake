@@ -99,6 +99,8 @@ private:
 	TransactionChangeInformation transaction_changes;
 	map<pair<TableIndex, FieldIndex>, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
+	//! The tables the commit writes, whose stats are read together
+	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;

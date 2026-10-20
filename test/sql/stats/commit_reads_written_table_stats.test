@@ -38,9 +38,41 @@ INSERT INTO lk.t2 VALUES (20)
 statement ok
 CALL disable_logging()
 
-# the stats are read with a table filter
+# the stats are read with a table filter, a server-side commit reads them on the server
+query I
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+(=|IN)'))
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0
+
+# a commit that writes three tables reads their stats in one query
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lk.t0 VALUES (100)
+
+statement ok
+INSERT INTO lk.t1 VALUES (100)
+
+statement ok
+INSERT INTO lk.t3 VALUES (100)
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
 query II
-SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s*=')), count(*) > 0
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+(=|IN)')), count(*) <= 1
 FROM duckdb_logs
 WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
 ----
@@ -54,8 +86,8 @@ SELECT sum(i) FROM lk.t2
 query II
 SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'lk' ORDER BY table_name
 ----
-t0	1
-t1	1
+t0	2
+t1	2
 t2	2
-t3	1
+t3	2
 t4	1
