@@ -75,6 +75,13 @@ void DuckLakeInitializer::Initialize() {
 		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
 		options.metadata_schema = transaction.GetDefaultSchemaName();
 	}
+	// the metadata database would truncate a longer name, and the catalog is then not found under its name
+	auto max_name_length = transaction.GetMetadataManager().MaxIdentifierLength();
+	if (options.metadata_schema.GetIdentifierName().size() > max_name_length) {
+		throw InvalidInputException("METADATA_SCHEMA \"%s\" is longer than the %d bytes that the metadata database "
+		                            "allows for a name",
+		                            options.metadata_schema.GetIdentifierName(), max_name_length);
+	}
 	// if no explicit ducklake_version was set via ATTACH, check the global setting
 	if (options.ducklake_version == DuckLakeVersion::UNSET) {
 		Value setting_val;
