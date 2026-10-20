@@ -87,8 +87,7 @@ void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<s
 	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 }
 
-//! The type the stats table declares for a column, since sqlite_query returns every value as VARCHAR. Empty for a
-//! stat this list does not name, which keeps the base CTE rather than guessing its type.
+//! The declared type of a stats column, since sqlite_query returns every value as VARCHAR
 static string StatsColumnType(const string &stat) {
 	if (stat == "value_count" || stat == "null_count" || stat == "column_size_bytes") {
 		return "BIGINT";
@@ -102,8 +101,7 @@ static string StatsColumnType(const string &stat) {
 	return string();
 }
 
-//! sqlite_scan pushes no filter into SQLite, so the base CTE copies every table's stats rows into DuckDB on each
-//! filtered read. sqlite_query runs the WHERE inside SQLite, in the same transaction.
+//! Reads the stats through sqlite_query, since sqlite_scan pushes no filter into SQLite
 string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
                                                              const string &metadata_table_prefix) {
 	auto unmapped = std::any_of(req.referenced_stats.begin(), req.referenced_stats.end(),
@@ -111,21 +109,16 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	if (metadata_table_prefix != "{METADATA_CATALOG}" || unmapped) {
 		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix);
 	}
-	string native_list = "data_file_id";
+	// TEXT values, so parallel scans on the shared connection read them without converting
+	string native_list = "CAST(data_file_id AS TEXT) AS data_file_id";
 	string select_list = "data_file_id::BIGINT AS data_file_id";
 	for (const auto &stat : req.referenced_stats) {
-		if (stat == "value_count" || stat == "null_count") {
-			// every row of a file counts as a value or a NULL, so zero counts of both are unknown
-			native_list += StringUtil::Format(
-			    ", CASE WHEN value_count = 0 AND null_count = 0 THEN NULL ELSE %s END AS %s", stat, stat);
-		} else {
-			native_list += ", " + stat;
-		}
+		native_list += StringUtil::Format(", CAST(%s AS TEXT) AS %s", stat, stat);
 		select_list += StringUtil::Format(", %s::%s AS %s", stat, StatsColumnType(stat), stat);
 	}
 	auto native_query =
-	    StringUtil::Format("SELECT %s FROM ducklake_file_column_stats WHERE column_id = %d AND table_id = %d",
-	                       native_list, req.column_field_index, table_id.index);
+	    StringUtil::Format("SELECT %s FROM (%s)", native_list,
+	                       DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, "main"));
 	return StringUtil::Format("  SELECT %s\n"
 	                          "  FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
 	                          select_list, SQLString(native_query));
