@@ -1,0 +1,112 @@
+# name: test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test
+# description: Postgres commits that create inlined tables keep the postgres_scanner cache, which finds the new tables
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS new_inlined_keeps_cache CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/new_inlined_keeps_cache', METADATA_SCHEMA 'new_inlined_keeps_cache', DATA_INLINING_ROW_LIMIT 200)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+# each of these commits creates an inlined data table
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+CREATE TABLE dl.u(k INTEGER)
+
+# the next commits write the new tables, more than 100 rows through an INSERT the scanner binds
+statement ok
+INSERT INTO dl.t VALUES (2, 20)
+
+statement ok
+INSERT INTO dl.u SELECT range FROM range(150)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%postgres_clear_cache%'
+----
+0
+
+query II
+FROM dl.t ORDER BY i
+----
+1	NULL
+2	20
+
+query II
+SELECT count(*), sum(k) FROM dl.u
+----
+150	11175
+
+# a delete from a data file creates the inlined deletion table of the table
+statement ok
+CREATE TABLE dl.w AS SELECT range i FROM range(300)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+DELETE FROM dl.w WHERE i < 10
+
+statement ok
+DELETE FROM dl.w WHERE i < 20
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%postgres_clear_cache%'
+----
+0
+
+query II
+SELECT count(*), min(i) FROM dl.w
+----
+280	20
+
+# another DuckLake on the same catalog sees the new tables
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/new_inlined_keeps_cache', METADATA_SCHEMA 'new_inlined_keeps_cache')
+
+query IIII
+SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u), (SELECT count(*) FROM dl.w), (SELECT sum(j) FROM dl.t)
+----
+2	150	280	20
