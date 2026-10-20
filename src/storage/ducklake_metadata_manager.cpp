@@ -5219,8 +5219,13 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	if (result.empty()) {
 		return result;
 	}
-	// a file that another data or delete file of the catalog still uses waits until no file uses it
+	// a file that a data or delete file of the catalog or of an open transaction uses waits until no file uses it
 	auto live_files = GetCanonicalFilePaths(GetLiveFilesForCleanupQuery());
+	vector<string> written_files;
+	transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
+	for (auto &path : written_files) {
+		live_files.insert(CanonicalFilePath(path));
+	}
 	vector<DuckLakeFileForCleanup> unused_files;
 	for (auto &file : result) {
 		if (!live_files.count(CanonicalFilePath(file.path))) {
@@ -5273,7 +5278,6 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 }
 
 string DuckLakeMetadataManager::CanonicalFilePath(const string &path) {
-	// differently spelled paths to the same file have the same canonical path
 	auto normalized = StringUtil::Replace(path, "\\", "/");
 	auto parsed = Path::FromString(normalized);
 	if (parsed.IsLocal()) {
