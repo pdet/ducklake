@@ -139,3 +139,59 @@ query I
 SELECT count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
 ----
 true
+
+# transactions at neighboring snapshots keep their listings side by side
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM dl.t0
+----
+10
+
+statement ok con2
+CREATE TABLE dl.t4(i INTEGER)
+
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM dl.t1
+----
+9
+
+query I con1
+SELECT count(*) FROM dl.t2
+----
+9
+
+query I con3
+SELECT count(*) FROM dl.t3
+----
+9
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+2
