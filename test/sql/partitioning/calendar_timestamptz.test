@@ -86,7 +86,8 @@ SELECT id, ts FROM lake.t ORDER BY id
 unzip data/old_ducklake/calendar_timestamptz.db.gz {TEST_DIR}/calendar_timestamptz_legacy.db
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/calendar_timestamptz_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/calendar_timestamptz/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/calendar_timestamptz_legacy.db' AS legacy
+(DATA_PATH 'data/old_ducklake/calendar_timestamptz/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT string_agg(partition_value, ', ' ORDER BY partition_key_index)
