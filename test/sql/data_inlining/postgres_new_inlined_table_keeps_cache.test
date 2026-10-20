@@ -121,6 +121,12 @@ SELECT count(*), min(i) FROM dl.w
 ----
 280	20
 
+# the DuckLake that stayed attached finds the new tables
+query IIIII
+SELECT (SELECT count(*) FROM dl2.t), (SELECT sum(j) FROM dl2.t), (SELECT count(*) FROM dl2.u), (SELECT count(*) FROM dl2.x), (SELECT count(*) FROM dl2.w)
+----
+2	20	150	150	280
+
 # a commit that fails after the scanner bound its new inlined table rolls back, and the next commit reuses the name
 statement ok
 BEGIN
@@ -146,12 +152,6 @@ query II
 SELECT count(*), max(b) FROM dl.failed
 ----
 150	99
-
-# the DuckLake that stayed attached finds the new tables
-query IIIII
-SELECT (SELECT count(*) FROM dl2.t), (SELECT sum(j) FROM dl2.t), (SELECT count(*) FROM dl2.u), (SELECT count(*) FROM dl2.x), (SELECT count(*) FROM dl2.w)
-----
-2	20	150	150	280
 
 query II
 SELECT count(*), max(b) FROM dl2.failed
