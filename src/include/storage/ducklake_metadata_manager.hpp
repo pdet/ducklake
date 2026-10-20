@@ -651,9 +651,6 @@ protected:
 	string GetLiveFilesForCleanupQuery() const;
 	string GetKnownFilesForCleanupQuery() const;
 	string CanonicalFilePath(const string &path);
-	vector<string> ReadPaths(string query);
-	//! The file name that all spellings of a path share
-	static string CleanupFileName(const string &path);
 	unordered_set<string> GetCanonicalFilePaths(string query);
 
 	//! Optimized data file writing using DuckDB Appender API (DuckDB and SQLite metadata managers)
