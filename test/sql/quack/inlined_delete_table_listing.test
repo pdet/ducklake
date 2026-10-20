@@ -1,0 +1,78 @@
+# name: test/sql/quack/inlined_delete_table_listing.test
+# description: first queries on many tables of a Quack catalog list its inlined deletion tables once per snapshot
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+loop i 0 4
+
+statement ok
+CREATE TABLE dl.t${i}(i INTEGER)
+
+statement ok
+INSERT INTO dl.t${i} SELECT range FROM range(10)
+
+endloop
+
+# a delete from a data file is inlined
+statement ok
+DELETE FROM dl.t1 WHERE i = 0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query IIII
+SELECT (SELECT count(*) FROM dl.t0), (SELECT count(*) FROM dl.t1), (SELECT count(*) FROM dl.t2), (SELECT count(*) FROM dl.t3)
+----
+10	9	10	10
+
+query I
+SELECT count(*) FROM dl.t2
+----
+10
+
+query I
+SELECT count(*) FROM dl.t3
+----
+10
+
+statement ok
+CALL disable_logging()
+
+# one listing for the snapshot, not one probe per table
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+1
+
+# a later snapshot lists the tables again and sees a new inlined deletion table
+statement ok
+DELETE FROM dl.t2 WHERE i = 0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+query II
+SELECT (SELECT count(*) FROM dl.t1), (SELECT count(*) FROM dl.t2)
+----
+9	9
