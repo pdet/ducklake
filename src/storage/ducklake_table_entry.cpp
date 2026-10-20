@@ -1148,11 +1148,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
 		return std::move(result);
 	}
 	auto context = transaction.context.lock();
-	for (auto &field : partition->fields) {
-		if (context) {
+	if (context) {
+		for (auto &field : partition->fields) {
 			auto &new_field = *result->GetFieldId(field.field_id);
 			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, field, new_field.Name(), new_field.Type());
 		}
+	}
+	for (auto &field : partition->fields) {
 		if (field.transform.type != DuckLakeTransformType::BUCKET) {
 			continue;
 		}
