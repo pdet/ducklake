@@ -97,10 +97,11 @@ CALL ducklake_expire_snapshots('ducklake', older_than => now())
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
+# the checks glob patterns, since an exact remote path that was read can stay cached after its delete
 query II
-SELECT (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/d=a/data_0.parquet')), (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/d=b/data_0.parquet'))
+SELECT count(*), bool_and(file LIKE '%d=a%') FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/*/data_0.parquet')
 ----
-1	0
+1	true
 
 # a data file that DuckLake wrote for one table and that another table uses
 statement ok
@@ -150,7 +151,7 @@ statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
 query II
-SELECT (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_x.parquet')), (SELECT count(*) FROM glob(getvariable('v_file')))
+SELECT (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_x*.parquet')), (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file/**') WHERE parse_filename(file) = parse_filename(getvariable('v_file')))
 ----
 0	0
 
