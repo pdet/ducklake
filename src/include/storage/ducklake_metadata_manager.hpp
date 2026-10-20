@@ -651,6 +651,7 @@ protected:
 	string GetLiveFilesForCleanupQuery() const;
 	string GetKnownFilesForCleanupQuery() const;
 	string CanonicalFilePath(const string &path);
+	vector<string> ReadPaths(string query);
 	//! The file name of a path, which differently spelled paths to the same file share
 	static string CleanupFileName(const string &path);
 	//! Whether one of the paths is the same file as the given path

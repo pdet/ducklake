@@ -75,6 +75,33 @@ SELECT count(*), sum(i) FROM ducklake.t
 ----
 13	48
 
+# a file with the same name in another directory is another file
+statement ok
+COPY (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v(i, d)) TO '{DATA_PATH}/cleanup_shared_file_dirs' (FORMAT PARQUET, PARTITION_BY (d))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/cleanup_shared_file_dirs/d=a/data_0.parquet')
+
+statement ok
+CREATE TABLE ducklake.b_old (i INTEGER);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'b_old', '{DATA_PATH}/cleanup_shared_file_dirs/d=b/data_0.parquet')
+
+statement ok
+DROP TABLE ducklake.b_old
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query II
+SELECT (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/d=a/data_0.parquet')), (SELECT count(*) FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/d=b/data_0.parquet'))
+----
+1	0
+
 # a data file that DuckLake wrote for one table and that another table uses
 statement ok
 CREATE TABLE ducklake.v (i INTEGER);
