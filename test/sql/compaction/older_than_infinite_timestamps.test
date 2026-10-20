@@ -71,6 +71,15 @@ SELECT count(*) FROM ducklake_cleanup_old_files('lake', dry_run => true, older_t
 
 # an age that reaches before year 1 expires and deletes nothing
 statement ok
+INSERT INTO lake.t VALUES (3)
+
+statement ok
+SET VARIABLE kept_snapshot = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+INSERT INTO lake.t VALUES (4)
+
+statement ok
 CALL lake.set_option('expire_older_than', '3000 years')
 
 statement ok
@@ -79,7 +88,9 @@ CALL lake.set_option('delete_older_than', '3000 years')
 statement ok
 CHECKPOINT lake
 
-query II
-SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion), count(*) FROM lake.t
+query III
+SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion),
+	(SELECT count(*) FROM lake.snapshots() WHERE snapshot_id = getvariable('kept_snapshot')), count(*)
+FROM lake.t
 ----
-2	2
+5	1	4
