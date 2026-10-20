@@ -1,0 +1,85 @@
+# name: test/sql/compaction/older_than_infinite_timestamps.test
+# description: Maintenance functions accept an infinite or BC older_than, and an age that reaches before year 1
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/older_than_infinite_timestamps.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_infinite_timestamps')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+# infinity selects every snapshot but the latest, -infinity and BC select none
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+3
+
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => '-infinity'::TIMESTAMPTZ)
+----
+0
+
+query I
+SELECT count(*)
+FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => '0001-01-01 (BC) 00:00:00+00'::TIMESTAMPTZ)
+----
+0
+
+query IIII
+SELECT * FROM ducklake_merge_adjacent_files('lake', older_than => 'infinity'::TIMESTAMPTZ)
+----
+main	t	2	1
+
+# expiring the snapshots before the merge schedules its two source files
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('lake', older_than => 'infinity'::TIMESTAMPTZ)
+----
+4
+
+query I
+SELECT count(*)
+FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => '0001-01-01 (BC) 00:00:00+00'::TIMESTAMPTZ)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+2
+
+# an age that reaches before year 1 expires and deletes nothing
+statement ok
+CALL lake.set_option('expire_older_than', '3000 years')
+
+statement ok
+CALL lake.set_option('delete_older_than', '3000 years')
+
+statement ok
+CHECKPOINT lake
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion), count(*) FROM lake.t
+----
+2	2

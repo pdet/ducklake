@@ -23,11 +23,7 @@ class DuckLakeTableFunctionUtil {
 public:
 	// Conform timestamp to ISO-8601 extended format with optional fractional seconds and timezone offset, e.g.:
 	// "2025-12-26T06:13:30.673176+00:00" (UTC) or "2025-12-26T01:13:30.673176-05:00" (EST)
-	static string FormatTimestampISO8601(const timestamp_t timestamp) {
-		auto ts_string = Timestamp::ToString(timestamp);
-		std::replace(ts_string.begin(), ts_string.end(), ' ', 'T');
-		return ts_string + "+00";
-	}
+	static string FormatTimestampISO8601(const timestamp_t timestamp);
 	static string FormatTimestampOlderThan(const string &interval);
 	static bool TryGetNonNullOption(const TableFunctionBindInput &input, const string &name, const string &type_name,
 	                                Value &result);
