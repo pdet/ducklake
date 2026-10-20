@@ -8,10 +8,10 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/snapshot_attach_maintenance.db
 
-test-env DATA_PATH {TEST_DIR}/snapshot_attach_maintenance
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/snapshot_attach_maintenance')
 
 statement ok
 CREATE TABLE lake.obs (i INTEGER)
@@ -107,6 +107,6 @@ SELECT count(*) FROM lake.options() WHERE option_name = 'data_inlining_row_limit
 0
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/**/*.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/snapshot_attach_maintenance/**/*.parquet')
 ----
 2

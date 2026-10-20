@@ -8,10 +8,10 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_attach_cleanup.db
 
-test-env DATA_PATH {TEST_DIR}/read_only_attach_cleanup
+test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/read_only_attach_cleanup')
 
 statement ok
 CREATE TABLE lake.big (i INTEGER)
@@ -39,7 +39,7 @@ SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_delet
 
 # a file that belongs to no table
 statement ok
-COPY (SELECT 1 AS i) TO '{DATA_PATH}/main/big/orphan.parquet'
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/read_only_attach_cleanup/main/big/orphan.parquet'
 
 statement ok
 DETACH lake
@@ -63,7 +63,7 @@ CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
 read-only mode
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/**/*.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/read_only_attach_cleanup/**/*.parquet')
 ----
 4
 
@@ -73,7 +73,7 @@ CALL ducklake_delete_orphaned_files('lake', cleanup_all => true)
 read-only mode
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/**/*.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/read_only_attach_cleanup/**/*.parquet')
 ----
 4
 
