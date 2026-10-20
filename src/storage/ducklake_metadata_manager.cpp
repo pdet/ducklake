@@ -5220,19 +5220,45 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 		return result;
 	}
 	// a file that a data or delete file of the catalog or of an open transaction uses waits until no file uses it
-	auto live_files = GetCanonicalFilePaths(GetLiveFilesForCleanupQuery());
-	vector<string> written_files;
-	transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
-	for (auto &path : written_files) {
-		live_files.insert(CanonicalFilePath(path));
+	auto live_result = Query(GetLiveFilesForCleanupQuery());
+	live_result->ThrowIfError("Failed to get the files of DuckLake: ");
+	vector<string> live_files;
+	for (auto &row : *live_result) {
+		if (!row.IsNull(0)) {
+			live_files.push_back(row.GetValue<string>(0));
+		}
+	}
+	transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(live_files);
+	// only paths with the same file name can be the same file, so only those are canonicalized
+	unordered_map<string, vector<string>> live_files_by_name;
+	for (auto &path : live_files) {
+		live_files_by_name[CleanupFileName(path)].push_back(path);
 	}
 	vector<DuckLakeFileForCleanup> unused_files;
 	for (auto &file : result) {
-		if (!live_files.count(CanonicalFilePath(file.path))) {
-			unused_files.push_back(std::move(file));
+		auto entry = live_files_by_name.find(CleanupFileName(file.path));
+		if (entry != live_files_by_name.end() && UsesFile(entry->second, file.path)) {
+			continue;
 		}
+		unused_files.push_back(std::move(file));
 	}
 	return unused_files;
+}
+
+string DuckLakeMetadataManager::CleanupFileName(const string &path) {
+	auto normalized = StringUtil::Replace(path, "\\", "/");
+	auto end = Path::FromString(normalized).IsLocal() ? string::npos : normalized.find('?');
+	return StringUtil::GetFileName(normalized.substr(0, end));
+}
+
+bool DuckLakeMetadataManager::UsesFile(const vector<string> &paths, const string &path) {
+	auto canonical_path = CanonicalFilePath(path);
+	for (auto &other_path : paths) {
+		if (CanonicalFilePath(other_path) == canonical_path) {
+			return true;
+		}
+	}
+	return false;
 }
 
 string DuckLakeMetadataManager::GetLiveFilesForCleanupQuery() const {
