@@ -5223,37 +5223,39 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	vector<string> written_files;
 	transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
 	// only paths with the same file name can be the same file, so the stored paths tell whether to resolve any
+	unordered_set<string> scheduled_names;
+	for (auto &file : result) {
+		scheduled_names.insert(CleanupFileName(file.path));
+	}
+	auto has_scheduled_name = [&](const vector<string> &paths) {
+		for (auto &path : paths) {
+			if (scheduled_names.count(CleanupFileName(path))) {
+				return true;
+			}
+		}
+		return false;
+	};
 	auto stored_paths = ReadPaths(R"(
 SELECT path FROM {METADATA_CATALOG}.ducklake_data_file
 UNION ALL
 SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file)");
-	unordered_set<string> live_file_names;
-	for (auto &path : stored_paths) {
-		live_file_names.insert(CleanupFileName(path));
-	}
-	for (auto &path : written_files) {
-		live_file_names.insert(CleanupFileName(path));
-	}
-	bool same_file_names = false;
-	for (auto &file : result) {
-		if (live_file_names.count(CleanupFileName(file.path))) {
-			same_file_names = true;
-			break;
-		}
-	}
-	if (!same_file_names) {
+	if (!has_scheduled_name(stored_paths) && !has_scheduled_name(written_files)) {
 		return result;
 	}
 	auto live_files = ReadPaths(GetLiveFilesForCleanupQuery());
 	live_files.insert(live_files.end(), written_files.begin(), written_files.end());
-	unordered_map<string, vector<string>> live_files_by_name;
+	unordered_set<string> live_names;
+	unordered_set<string> live_canonical_paths;
 	for (auto &path : live_files) {
-		live_files_by_name[CleanupFileName(path)].push_back(path);
+		auto name = CleanupFileName(path);
+		if (scheduled_names.count(name)) {
+			live_names.insert(name);
+			live_canonical_paths.insert(CanonicalFilePath(path));
+		}
 	}
 	vector<DuckLakeFileForCleanup> unused_files;
 	for (auto &file : result) {
-		auto entry = live_files_by_name.find(CleanupFileName(file.path));
-		if (entry != live_files_by_name.end() && UsesFile(entry->second, file.path)) {
+		if (live_names.count(CleanupFileName(file.path)) && live_canonical_paths.count(CanonicalFilePath(file.path))) {
 			continue;
 		}
 		unused_files.push_back(std::move(file));
@@ -5272,19 +5274,9 @@ vector<string> DuckLakeMetadataManager::ReadPaths(string query) {
 }
 
 string DuckLakeMetadataManager::CleanupFileName(const string &path) {
+	// a query string, also of a relative path of a remote data path, is not part of the file name
 	auto normalized = StringUtil::Replace(path, "\\", "/");
-	auto end = Path::FromString(normalized).IsLocal() ? string::npos : normalized.find('?');
-	return StringUtil::GetFileName(normalized.substr(0, end));
-}
-
-bool DuckLakeMetadataManager::UsesFile(const vector<string> &paths, const string &path) {
-	auto canonical_path = CanonicalFilePath(path);
-	for (auto &other_path : paths) {
-		if (CanonicalFilePath(other_path) == canonical_path) {
-			return true;
-		}
-	}
-	return false;
+	return StringUtil::GetFileName(normalized.substr(0, normalized.find('?')));
 }
 
 string DuckLakeMetadataManager::GetLiveFilesForCleanupQuery() const {

@@ -652,10 +652,8 @@ protected:
 	string GetKnownFilesForCleanupQuery() const;
 	string CanonicalFilePath(const string &path);
 	vector<string> ReadPaths(string query);
-	//! The file name of a path, which differently spelled paths to the same file share
+	//! The file name that all spellings of a path share
 	static string CleanupFileName(const string &path);
-	//! Whether one of the paths is the same file as the given path
-	bool UsesFile(const vector<string> &paths, const string &path);
 	unordered_set<string> GetCanonicalFilePaths(string query);
 
 	//! Optimized data file writing using DuckDB Appender API (DuckDB and SQLite metadata managers)
