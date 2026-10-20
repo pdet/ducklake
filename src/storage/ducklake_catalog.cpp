@@ -968,7 +968,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 
 shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
                                                               DuckLakeSnapshot snapshot, TableIndex table_id,
-                                                              const vector<TableIndex> &load_tables) {
+                                                              optional_ptr<const vector<TableIndex>> load_tables) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
@@ -989,7 +989,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	}
 	// one query for the whole snapshot or for the given tables, caching the tables without stats as well
 	vector<TableIndex> cache_tables;
-	if (load_tables.empty()) {
+	if (!load_tables) {
 		for (auto &table_entry : table_map) {
 			cache_tables.push_back(table_entry.first);
 		}
@@ -997,14 +997,14 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		unordered_set<idx_t> seen;
 		cache_tables.push_back(table_id);
 		seen.insert(table_id.index);
-		for (auto &load_table : load_tables) {
+		for (auto &load_table : *load_tables) {
 			if (table_map.find(load_table) != table_map.end() && seen.insert(load_table.index).second) {
 				cache_tables.push_back(load_table);
 			}
 		}
 	}
 	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(
-	    snapshot, load_tables.empty() ? vector<TableIndex>() : cache_tables);
+	    snapshot, load_tables ? cache_tables : vector<TableIndex>());
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;

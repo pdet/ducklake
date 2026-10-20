@@ -111,7 +111,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
-		commit_tables.push_back(entry.first);
 		DuckLakeTransaction::AddTableChanges(entry.first, entry.second, transaction_changes);
 	}
 	// Mirror whole-file drops into the conflict-detection set.
@@ -119,6 +118,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	                                               state->tables_deleted_from.end());
 	transaction_changes.tables_delete_attempted.insert(state->tables_delete_attempted.begin(),
 	                                                   state->tables_delete_attempted.end());
+	commit_tables = transaction_changes.GetChangedTables();
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);

@@ -249,9 +249,10 @@ public:
 	                                              unique_ptr<AlterTableInfo> alter_info) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
-	//! Reads and caches the stats of load_tables with the table's in one query, by default of every table
+	//! Reads and caches the stats of load_tables with the table's in one query, without them of every table
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
-	                                             TableIndex table_id, const vector<TableIndex> &load_tables = {});
+	                                             TableIndex table_id,
+	                                             optional_ptr<const vector<TableIndex>> load_tables = nullptr);
 	//! Returns zero when the table has no stats
 	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
 
