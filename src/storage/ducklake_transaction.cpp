@@ -1455,6 +1455,10 @@ void DuckLakeTransaction::FlushChanges() {
 	forget_columns_with_values();
 }
 
+void DuckLakeTransaction::CleanupFiles() {
+	state->CleanupFiles();
+}
+
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	if (snapshot) {
 		for (auto &entry : state->dropped_file_stats) {
