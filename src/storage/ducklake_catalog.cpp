@@ -967,7 +967,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 }
 
 shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
-                                                              DuckLakeSnapshot snapshot, TableIndex table_id) {
+                                                              DuckLakeSnapshot snapshot, TableIndex table_id,
+                                                              bool all_tables) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
@@ -986,13 +987,17 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		// a table that is not part of the snapshot, e.g. one created in this transaction, has no stats in it
 		return nullptr;
 	}
-	// one query for the whole snapshot, caching the tables without stats as well
-	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot);
+	// one query for the whole snapshot or for the table, caching the tables without stats as well
+	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(
+	    snapshot, all_tables ? optional_idx() : optional_idx(table_id.index));
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
 	for (auto &table_entry : table_map) {
 		auto current_id = table_entry.first;
+		if (!all_tables && current_id != table_id) {
+			continue;
+		}
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
 		auto stats_entry = lake_stats->table_stats.find(current_id);
 		if (stats_entry == lake_stats->table_stats.end()) {

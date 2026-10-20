@@ -1581,7 +1581,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
-		return ducklake_catalog.GetTableStats(*this, table_id);
+		// a commit reads the stats of the tables it writes, not of the whole lake
+		return ducklake_catalog.GetTableStats(*this, GetSnapshot(), table_id, false);
 	};
 	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
 		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);

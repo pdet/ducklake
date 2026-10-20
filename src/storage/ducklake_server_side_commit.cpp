@@ -108,7 +108,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedFlushedInlinedTables();
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
-	ReadExistingTableStats();
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
@@ -529,18 +528,28 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 	});
 }
 
-void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata),
-	                                 "{METADATA_CATALOG}", schema_id);
+shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(TableIndex table_id) {
+	auto entry = existing_table_stats.find(table_id);
+	if (entry != existing_table_stats.end()) {
+		return entry->second;
+	}
+	// only the tables the commit writes are read, not the whole lake
+	string sql =
+	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata, table_id.index),
+	                        "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 	DuckLakeMetadataManager::FillMissingTableSizes(global_stats, [&](string query) {
 		return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	});
-
+	shared_ptr<DuckLakeTableStats> table_stats;
 	for (auto &gs : global_stats) {
-		existing_table_stats.emplace(gs.table_id, BuildTableStats(gs));
+		if (gs.table_id == table_id) {
+			table_stats = BuildTableStats(gs);
+		}
 	}
+	existing_table_stats.emplace(table_id, table_stats);
+	return table_stats;
 }
 
 bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {
@@ -676,8 +685,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
-		auto it = existing_table_stats.find(table_id);
-		return it == existing_table_stats.end() ? nullptr : it->second;
+		return GetExistingTableStats(table_id);
 	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
