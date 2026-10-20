@@ -1,0 +1,61 @@
+# name: test/sql/stats/commit_reads_written_table_stats.test
+# description: a commit reads the stats of the tables it writes, not of every table of the lake
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/commit_reads_written_table_stats.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/commit_reads_written_table_stats/')
+
+loop i 0 5
+
+statement ok
+CREATE TABLE lk.t${i}(i INTEGER)
+
+statement ok
+INSERT INTO lk.t${i} VALUES (${i})
+
+endloop
+
+statement ok
+DETACH lk
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/commit_reads_written_table_stats/')
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+INSERT INTO lk.t2 VALUES (20)
+
+statement ok
+CALL disable_logging()
+
+# the stats are read with a table filter
+query II
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s*=')), count(*) > 0
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0	true
+
+query I
+SELECT sum(i) FROM lk.t2
+----
+22
+
+query II
+SELECT table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'lk' ORDER BY table_name
+----
+t0	1
+t1	1
+t2	2
+t3	1
+t4	1
