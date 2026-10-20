@@ -2648,25 +2648,28 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	return snapshot_and_stats;
 }
 
+static void RollbackKeepingError(const DuckLakeCommitContext &context) {
+	try {
+		context.try_rollback();
+	} catch (std::exception &) { // NOLINT
+	}
+}
+
 bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot transaction_snapshot,
                                                             const TransactionChangeInformation &changes,
                                                             const DuckLakeCommitContext &context, ErrorData &error) {
-	// the conflict check of a retry, so a commit that is not retried reports a conflict like one that is
 	bool found_conflict = false;
 	try {
 		context.prepare_retry();
 		CheckForConflicts(transaction_snapshot, changes, context);
 	} catch (std::exception &ex) {
 		ErrorData conflict(ex);
-		if (!context.is_retryable_metadata_error(conflict.Message())) {
+		if (conflict.Type() == ExceptionType::TRANSACTION) {
 			error = std::move(conflict);
 			found_conflict = true;
 		}
 	}
-	try {
-		context.try_rollback();
-	} catch (std::exception &) { // NOLINT
-	}
+	RollbackKeepingError(context);
 	return found_conflict;
 }
 
@@ -2719,10 +2722,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			// keep the commit error when the rollback fails too
-			try {
-				context.try_rollback();
-			} catch (std::exception &) { // NOLINT
-			}
+			RollbackKeepingError(context);
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
@@ -2731,7 +2731,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
 			if (retry_on_error && finished_retrying &&
-			    FindConflictWithOtherCommits(transaction_snapshot, attempt_changes, context, error)) {
+			    FindConflictWithOtherCommits(transaction_snapshot, transaction_changes, context, error)) {
 				retry_on_error = false;
 				finished_retrying = false;
 			}

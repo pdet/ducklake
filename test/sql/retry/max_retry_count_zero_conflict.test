@@ -68,3 +68,27 @@ query I
 SELECT * FROM lake.t
 ----
 1
+
+# a table that another transaction created and dropped in the meantime is no conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE lake.tmp_a AS SELECT 1 AS x
+
+statement ok con2
+CREATE TABLE lake.tmp_b AS SELECT 2 AS x
+
+statement ok con1
+COMMIT
+
+statement ok con1
+DROP TABLE lake.tmp_a
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting.*
