@@ -2648,6 +2648,28 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	return snapshot_and_stats;
 }
 
+bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot transaction_snapshot,
+                                                            const TransactionChangeInformation &changes,
+                                                            const DuckLakeCommitContext &context, ErrorData &error) {
+	// the conflict check of a retry, so a commit that is not retried reports a conflict like one that is
+	bool found_conflict = false;
+	try {
+		context.prepare_retry();
+		CheckForConflicts(transaction_snapshot, changes, context);
+	} catch (std::exception &ex) {
+		ErrorData conflict(ex);
+		if (!context.is_retryable_metadata_error(conflict.Message())) {
+			error = std::move(conflict);
+			found_conflict = true;
+		}
+	}
+	try {
+		context.try_rollback();
+	} catch (std::exception &) { // NOLINT
+	}
+	return found_conflict;
+}
+
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
@@ -2708,16 +2730,23 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
+			if (retry_on_error && finished_retrying &&
+			    FindConflictWithOtherCommits(transaction_snapshot, attempt_changes, context, error)) {
+				retry_on_error = false;
+				finished_retrying = false;
+			}
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();
 				// Add additional information on the number of retries and suggest to increase it
 				string error_message = "Failed to commit DuckLake transaction.\n";
 				if (finished_retrying) {
+					auto suggested_count =
+					    MaxValue<idx_t>(retry_config.max_retry_count * 10, DuckLakeRetryConfig().max_retry_count);
 					error_message += StringUtil::Format(
 					    "Exceeded the maximum retry count of %d set by the ducklake_max_retry_count setting.\n"
-					    ". Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
-					    retry_config.max_retry_count, retry_config.max_retry_count * 10);
+					    "Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
+					    retry_config.max_retry_count, suggested_count);
 				}
 				error_message += context.commit_error_hint(error.Message());
 				error.Throw(error_message);
