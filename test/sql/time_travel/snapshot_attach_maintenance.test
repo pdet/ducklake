@@ -40,6 +40,9 @@ SELECT max(snapshot_id) FROM lake.snapshots()
 5
 
 statement ok
+COPY (SELECT 3 AS i) TO '{TEST_DIR}/snapshot_attach_maintenance_added.parquet'
+
+statement ok
 DETACH lake
 
 statement ok
@@ -54,6 +57,28 @@ statement error
 CALL ducklake_merge_adjacent_files('lake')
 ----
 which is attached in read-only mode
+
+statement error
+CALL ducklake_rewrite_data_files('lake')
+----
+which is attached in read-only mode
+
+statement error
+CALL ducklake_add_data_files('lake', 'big', '{TEST_DIR}/snapshot_attach_maintenance_added.parquet')
+----
+which is attached in read-only mode
+
+# refused at the call, before any file is written
+statement ok
+BEGIN
+
+statement error
+CALL ducklake_flush_inlined_data('lake')
+----
+which is attached in read-only mode
+
+statement ok
+ROLLBACK
 
 statement error
 CALL ducklake_expire_snapshots('lake', versions => [1])
