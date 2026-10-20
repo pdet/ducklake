@@ -2656,7 +2656,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
 	ducklake_entry_oids_t new_entry_oids;
-	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
+	// every attempt either commits and breaks out, or throws once max_retry_count retries are used up
+	for (idx_t i = 0;; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
