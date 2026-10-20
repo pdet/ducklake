@@ -2658,13 +2658,19 @@ static void RollbackKeepingError(const DuckLakeCommitContext &context) {
 bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot transaction_snapshot,
                                                             const TransactionChangeInformation &changes,
                                                             const DuckLakeCommitContext &context, ErrorData &error) {
-	bool found_conflict = false;
 	try {
 		context.prepare_retry();
+	} catch (std::exception &) { // NOLINT
+		RollbackKeepingError(context);
+		return false;
+	}
+	bool found_conflict = false;
+	try {
 		CheckForConflicts(transaction_snapshot, changes, context);
 	} catch (std::exception &ex) {
 		ErrorData conflict(ex);
-		if (conflict.Type() == ExceptionType::TRANSACTION) {
+		if (conflict.Type() == ExceptionType::TRANSACTION &&
+		    StringUtil::StartsWith(conflict.RawMessage(), "Transaction conflict")) {
 			error = std::move(conflict);
 			found_conflict = true;
 		}
@@ -2721,7 +2727,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
-			// keep the commit error when the rollback fails too
 			RollbackKeepingError(context);
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
