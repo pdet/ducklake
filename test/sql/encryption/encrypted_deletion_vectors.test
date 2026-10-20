@@ -30,12 +30,12 @@ parquet	true
 statement error
 SELECT * FROM '{DATA_PATH}/encrypted_deletion_vectors/**/*-delete.parquet'
 ----
-encrypted
+<REGEX>:.*is encrypted, but 'encryption_config' was not set.*
 
-query I
-SELECT count(*) FROM lake.t
+query II
+SELECT count(*), sum(i) FROM lake.t
 ----
-97
+97	4947
 
 # an unencrypted catalog still writes deletion vectors
 statement ok
