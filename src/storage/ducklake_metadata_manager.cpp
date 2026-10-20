@@ -126,6 +126,11 @@ string DuckLakeMetadataManager::GetInliningObstacle(const string &name, const Lo
 	if (name.size() > MaxIdentifierLength()) {
 		return StringUtil::Format("the name of column \"%s\" is longer than %d bytes", name, MaxIdentifierLength());
 	}
+	for (auto &system_column : SystemColumnNames()) {
+		if (StringUtil::CIEquals(name, system_column)) {
+			return StringUtil::Format("column \"%s\" has the name of a system column of the metadata database", name);
+		}
+	}
 	if (TypeVisitor::Contains(type, [&](const LogicalType &t) { return !SupportsInlining(t); })) {
 		return StringUtil::Format("column \"%s\" has type %s, which cannot be inlined", name, type);
 	}
