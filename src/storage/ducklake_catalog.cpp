@@ -1340,10 +1340,8 @@ shared_ptr<const unordered_set<string>>
 DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list) {
 	auto cached_listing = [&]() -> shared_ptr<const unordered_set<string>> {
 		lock_guard<mutex> guard(inlined_deletion_cache_lock);
-		if (!inlined_deletion_tables || inlined_deletion_tables_snapshot != snapshot_id) {
-			return nullptr;
-		}
-		return inlined_deletion_tables;
+		auto entry = inlined_deletion_tables.find(snapshot_id);
+		return entry == inlined_deletion_tables.end() ? nullptr : entry->second;
 	};
 	auto tables = cached_listing();
 	if (tables) {
@@ -1357,8 +1355,12 @@ DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function
 	}
 	tables = make_shared_ptr<const unordered_set<string>>(list());
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
-	inlined_deletion_tables = tables;
-	inlined_deletion_tables_snapshot = snapshot_id;
+	inlined_deletion_tables[snapshot_id] = tables;
+	// transactions at a few recent snapshots can read side by side, older listings are dropped
+	static constexpr idx_t MAX_LISTED_SNAPSHOTS = 8;
+	while (inlined_deletion_tables.size() > MAX_LISTED_SNAPSHOTS) {
+		inlined_deletion_tables.erase(inlined_deletion_tables.begin());
+	}
 	return tables;
 }
 

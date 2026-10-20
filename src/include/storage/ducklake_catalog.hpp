@@ -455,9 +455,8 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
-	//! The inlined deletion tables of the metadata catalog, listed at inlined_deletion_tables_snapshot
-	shared_ptr<const unordered_set<string>> inlined_deletion_tables;
-	idx_t inlined_deletion_tables_snapshot = 0;
+	//! The inlined deletion tables of the metadata catalog, listed per snapshot id for the latest snapshots
+	map<idx_t, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
 	//! Held while the inlined deletion tables are listed
 	mutex inlined_deletion_listing_lock;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
