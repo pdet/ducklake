@@ -378,9 +378,9 @@ public:
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
-	//! The inlined deletion tables listed at the snapshot, or null when they were not listed at it
-	shared_ptr<const unordered_set<string>> GetInlinedDeletionTables(idx_t snapshot_id);
-	void SetInlinedDeletionTables(idx_t snapshot_id, shared_ptr<const unordered_set<string>> tables);
+	//! The inlined deletion tables at the snapshot, list runs once per snapshot even for concurrent callers
+	shared_ptr<const unordered_set<string>>
+	GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list);
 
 	//! The schema versions of the table at the snapshot of the transaction
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
@@ -458,6 +458,8 @@ private:
 	//! The inlined deletion tables of the metadata catalog, listed at inlined_deletion_tables_snapshot
 	shared_ptr<const unordered_set<string>> inlined_deletion_tables;
 	idx_t inlined_deletion_tables_snapshot = 0;
+	//! Held while the inlined deletion tables are listed
+	mutex inlined_deletion_listing_lock;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;

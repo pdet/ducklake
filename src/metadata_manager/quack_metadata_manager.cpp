@@ -68,22 +68,19 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 
 bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	// duckdb_tables() builds a row for every table on the server, so one listing serves every table of the snapshot
-	auto &catalog = transaction.GetCatalog();
-	auto snapshot_id = transaction.GetSnapshot().snapshot_id;
-	auto tables = catalog.GetInlinedDeletionTables(snapshot_id);
-	if (!tables) {
+	// keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot can read too
+	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
 		string query = "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
 		               "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND starts_with(table_name, "
 		               "'ducklake_inlined_delete_')";
 		auto result = Query(query);
 		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
-		auto listed = make_shared_ptr<unordered_set<string>>();
+		unordered_set<string> listed;
 		for (auto &row : *result) {
-			listed->insert(row.GetValue<string>(0));
+			listed.insert(row.GetValue<string>(0));
 		}
-		tables = listed;
-		catalog.SetInlinedDeletionTables(snapshot_id, tables);
-	}
+		return listed;
+	});
 	return tables->count(table_name) > 0;
 }
 
