@@ -28,43 +28,43 @@ INSERT INTO lake.t VALUES (2)
 statement error
 SELECT * FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
 ----
-The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
 
 statement error
 SELECT *
 FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => '0001-01-01 (BC) 00:00:00+00'::TIMESTAMPTZ)
 ----
-The older_than option must be a finite timestamp in the year 1 or later, not '0001-01-01 (BC) 00:00:00+00'
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not '0001-01-01 (BC) 00:00:00+00'
 
 statement error
 SELECT * FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
 ----
-The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
 
 statement error
 SELECT * FROM ducklake_delete_orphaned_files('lake', dry_run => true, older_than => '-infinity'::TIMESTAMPTZ)
 ----
-The older_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not '-infinity'
 
 statement error
 SELECT * FROM ducklake_merge_adjacent_files('lake', older_than => 'infinity'::TIMESTAMPTZ)
 ----
-The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
 
 statement error
 SELECT * FROM ducklake_merge_adjacent_files('lake', newer_than => '-infinity'::TIMESTAMPTZ)
 ----
-The newer_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+Invalid Input Error: The newer_than option must be a finite timestamp in the year 1 or later, not '-infinity'
 
 statement error
 CALL lake.set_option('expire_older_than', '3000 years')
 ----
-The expire_older_than option '3000 years' reaches back before the year 1
+Invalid Input Error: The expire_older_than option '3000 years' reaches back before the year 1
 
 statement error
 CALL lake.set_option('delete_older_than', '3000 years')
 ----
-The delete_older_than option '3000 years' reaches back before the year 1
+Invalid Input Error: The delete_older_than option '3000 years' reaches back before the year 1
 
 statement ok
 CHECKPOINT lake
@@ -89,9 +89,12 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_th
 statement error
 CHECKPOINT lake
 ----
-The expire_older_than option '3000 years' reaches back before the year 1
+<REGEX>:Invalid Input Error: .*The expire_older_than option '3000 years' reaches back before the year 1.*
+
+statement ok
+CALL lake.set_option('expire_older_than', '1 day')
 
 statement error
-SELECT * FROM ducklake_cleanup_old_files('lake', dry_run => true)
+CHECKPOINT lake
 ----
-The delete_older_than option '3000 years' reaches back before the year 1
+<REGEX>:Invalid Input Error: .*The delete_older_than option '3000 years' reaches back before the year 1.*
