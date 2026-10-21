@@ -72,6 +72,15 @@ i	INTEGER
 j	VARCHAR
 k	BIGINT
 
+# an identical CREATE OR REPLACE VIEW keeps the view and binds it too
+statement ok con1
+CREATE OR REPLACE VIEW ducklake.v AS SELECT * FROM ducklake.t
+
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
 # a view that does not parse is still listed and dropped, it is only parsed when it is used
 query I con1
 SELECT count(*) FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'unparsable'
