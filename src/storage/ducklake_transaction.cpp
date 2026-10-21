@@ -349,6 +349,14 @@ void LocalTableChanges::DeleteFromLocalInlinedData(ClientContext &context, DuckL
 		new_data->Append(append_state, chunk);
 	}
 
+	if (new_data->Count() == 0) {
+		table_changes->new_inlined_data.reset();
+		if (table_changes->IsEmpty()) {
+			changes.erase(table.GetTableId());
+		}
+		return;
+	}
+
 	// override the existing collection and row_ids
 	inlined_data.data = std::move(new_data);
 	inlined_data.row_ids = std::move(new_row_ids);
@@ -805,7 +813,12 @@ void DuckLakeTransaction::Commit() {
 		if (ChangesMade()) {
 			FlushChanges();
 		} else if (connection) {
-			connection->Commit();
+			try {
+				connection->Commit();
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
+			}
 			if (!state->flushed_inlined_tables.empty()) {
 				DropEmptySupersededInlinedTablesClientSide();
 			}
@@ -827,8 +840,18 @@ void DuckLakeTransaction::Rollback() {
 	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
-		if (connection->HasActiveTransaction()) {
-			connection->Rollback();
+		try {
+			if (connection->HasActiveTransaction()) {
+				connection->Rollback();
+			}
+		} catch (std::exception &) {
+			// nothing references the written files, so they are removed also when the rollback fails
+			connection.reset();
+			try {
+				state->CleanupFiles();
+			} catch (std::exception &) { // NOLINT
+			}
+			throw;
 		}
 		connection.reset();
 	}
@@ -861,6 +884,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 
 		// set max error reporting to 0 so that during error reporting we don't traverse other schemas / catalogs
 		Settings::Set<CatalogErrorMaxSchemasSetting>(*connection->context, SetScope::SESSION, Value::UBIGINT(0));
+		// metadata queries rely on ascending ORDER BY, which a global SET default_order would change
+		Settings::Set<DefaultOrderSetting>(*connection->context, SetScope::SESSION, Value("ASC"));
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
 			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
@@ -1440,6 +1465,10 @@ void DuckLakeTransaction::FlushChanges() {
 	forget_columns_with_values();
 }
 
+void DuckLakeTransaction::CleanupFiles() {
+	state->CleanupFiles();
+}
+
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	if (snapshot) {
 		for (auto &entry : state->dropped_file_stats) {
@@ -1513,6 +1542,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return metadata_manager->IsRetryableCommitError(message);
+	};
+	context.commit_error_hint = [&](const string &message) {
+		return metadata_manager->CommitErrorHint(message);
 	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
@@ -1654,6 +1686,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
+	context.snapshot_and_stats_query =
+	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 

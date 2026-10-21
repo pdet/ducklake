@@ -111,6 +111,16 @@ static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
 	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
 }
 
+//! Whether the commit writes inlined file deletions, which create the deletion table of a table on first use
+static bool HasNewInlinedFileDeletes(DuckLakeTransaction &transaction) {
+	for (auto &entry : transaction.GetLocalChanges().Changes()) {
+		if (entry.second.new_inlined_file_deletes) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const {
 	if (RequiresClientSideCommit(transaction)) {
 		return false;
@@ -126,9 +136,19 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		return;
 	}
-	transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
-	DuckLakeStagedCommit staged;
-	string batch = staged.Build(flush_transaction, transaction_snapshot, retry_config);
+	string batch;
+	try {
+		transaction.GetCatalog().EnsureCommitInfoProvided(flush_transaction.GetCommitInfo());
+		DuckLakeStagedCommit staged;
+		batch = staged.Build(flush_transaction, transaction_snapshot, retry_config);
+	} catch (std::exception &) {
+		// the server never sees this commit, so its files are only removed here
+		try {
+			flush_transaction.CleanupFiles();
+		} catch (std::exception &) { // NOLINT
+		}
+		throw;
+	}
 	auto result = Query(batch);
 	if (!result) {
 		throw IOException("Failed to invoke server-side ducklake_commit: empty result");
@@ -147,9 +167,10 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 		flush_transaction.DropEmptySupersededInlinedTablesClientSide();
 		// LCOV_EXCL_STOP
 	}
-	// We got clear the cache, if this creates inlined tables (e.g., `ducklake_inlined_data_<id>_<v>` or
-	// `ducklake_inlined_delete_<id>`)
-	ClearCache();
+	// reloading the remote catalog costs a scan of every table on the server, so only after a table can be new
+	if (HasNewInlinedFileDeletes(flush_transaction)) {
+		ClearCache();
+	}
 }
 
 bool QuackMetadataManager::MetadataExists() {
