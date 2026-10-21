@@ -255,15 +255,37 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
 }
 
+static bool EpochTransformSupportsType(const LogicalType &type) {
+	// date_diff also binds through an implicit cast, as from VARIANT, which then fails on values that are not dates
+	return type.id() == LogicalTypeId::DATE || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS ||
+	       LogicalType::TypeIsTimestamp(type);
+}
+
 void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
                                                          const string &column_name, const LogicalType &type) {
-	try {
-		ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(type, 0ULL), field);
-	} catch (std::exception &ex) {
-		ErrorData error(ex);
-		if (error.Type() != ExceptionType::BINDER) {
-			throw;
+	bool supported = true;
+	switch (field.transform.type) {
+	case DuckLakeTransformType::EPOCH_YEAR:
+	case DuckLakeTransformType::EPOCH_MONTH:
+	case DuckLakeTransformType::EPOCH_DAY:
+	case DuckLakeTransformType::EPOCH_HOUR:
+		supported = EpochTransformSupportsType(type);
+		break;
+	default:
+		break;
+	}
+	if (supported) {
+		try {
+			ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(type, 0ULL), field);
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() != ExceptionType::BINDER) {
+				throw;
+			}
+			supported = false;
 		}
+	}
+	if (!supported) {
 		throw InvalidInputException("Cannot partition by %s(%s) - the transform does not support columns of type %s",
 		                            GetTransformName(field.transform.type), column_name, type);
 	}
