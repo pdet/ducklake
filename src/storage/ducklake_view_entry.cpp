@@ -74,6 +74,21 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 	return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChange::SetViewColumnComment(column_name));
 }
 
+unique_ptr<DuckLakeViewEntry> DuckLakeViewEntry::CopyUnbound() const {
+	unique_ptr<CreateInfo> info;
+	{
+		// the base info does not parse the query, and the lock keeps GetQuery from setting it meanwhile
+		lock_guard<mutex> l(lock);
+		info = ViewCatalogEntry::GetInfo();
+	}
+	auto &view_info = info->Cast<CreateViewInfo>();
+	view_info.types.clear();
+	view_info.names.clear();
+	auto result = make_uniq<DuckLakeViewEntry>(catalog, schema, view_info, view_id, view_uuid, query_sql, local_change);
+	result->oid = oid;
+	return result;
+}
+
 unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 	auto info = ViewCatalogEntry::GetInfo();
 	auto &view_info = info->Cast<CreateViewInfo>();

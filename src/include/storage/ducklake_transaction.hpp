@@ -332,8 +332,7 @@ public:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
 	idx_t GetCatalogVersion();
-	//! The committed view as this transaction sees it, a copy once the transaction changed the schema, so that its
-	//! binding is not shared with other transactions
+	//! The committed view, or a copy of it with its own binding once this transaction changed the schema
 	DuckLakeViewEntry &GetTransactionView(DuckLakeViewEntry &view);
 
 protected:

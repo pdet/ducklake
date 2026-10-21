@@ -49,6 +49,8 @@ public:
 	string ToSQL() const override;
 
 	void BindView(ClientContext &context, BindViewAction action = BindViewAction::BIND_IF_UNBOUND) override;
+	//! A copy that is neither parsed nor bound, like a view loaded from the metadata
+	unique_ptr<DuckLakeViewEntry> CopyUnbound() const;
 
 	string GetQuerySQL() const;
 

@@ -2422,12 +2422,7 @@ DuckLakeViewEntry &DuckLakeTransaction::GetTransactionView(DuckLakeViewEntry &vi
 	}
 	auto &copy = transaction_views[&view];
 	if (!copy) {
-		auto info = view.GetInfo();
-		auto &view_info = info->Cast<CreateViewInfo>();
-		// the copy is bound against the schema of this transaction, not with the binding of the committed view
-		view_info.types.clear();
-		view_info.names.clear();
-		copy = make_uniq<DuckLakeViewEntry>(view, view_info, view.GetLocalChange());
+		copy = view.CopyUnbound();
 	}
 	return *copy;
 }

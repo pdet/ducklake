@@ -19,6 +19,12 @@ CREATE TABLE ducklake.t AS SELECT 1::INTEGER AS i
 statement ok
 CREATE VIEW ducklake.v AS SELECT * FROM ducklake.t
 
+statement ok
+CREATE VIEW ducklake.unparsable AS SELECT 42 AS x
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_view SET sql = 'SELECT FROM WHERE' WHERE view_name = 'unparsable'
+
 # a fresh attach leaves the view unbound
 statement ok
 DETACH ducklake
@@ -54,6 +60,15 @@ SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'duckl
 i	INTEGER
 j	VARCHAR
 k	BIGINT
+
+# a view that does not parse is still listed and dropped, it is only parsed when it is used
+query I con1
+SELECT count(*) FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'unparsable'
+----
+1
+
+statement ok con1
+DROP VIEW ducklake.unparsable
 
 statement ok con1
 ROLLBACK
