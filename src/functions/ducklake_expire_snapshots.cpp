@@ -45,7 +45,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		}
 	}
 	Value older_than;
-	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", older_than);
+	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", older_than);
 	if (has_versions && has_timestamp) {
 		throw InvalidInputException(
 		    "ducklake_expire_snapshots: cannot specify both 'versions' and 'older_than' parameters at the "

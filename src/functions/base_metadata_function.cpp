@@ -13,17 +13,9 @@
 
 namespace duckdb {
 
-string DuckLakeTableFunctionUtil::FormatTimestampISO8601(const timestamp_t timestamp) {
-	if (!Value::IsFinite(timestamp)) {
-		return Timestamp::ToString(timestamp);
-	}
-	// metadata times are AD, so the start of the year 1 filters the same as a BC timestamp
-	if (Date::ExtractYear(Timestamp::GetDate(timestamp)) < 1) {
-		return "0001-01-01T00:00:00+00";
-	}
-	auto ts_string = Timestamp::ToString(timestamp);
-	std::replace(ts_string.begin(), ts_string.end(), ' ', 'T');
-	return ts_string + "+00";
+//! the metadata filters cannot cast an infinite or BC timestamp back to TIMESTAMPTZ
+static bool IsFilterTimestamp(const timestamp_t timestamp) {
+	return Value::IsFinite(timestamp) && Date::ExtractYear(Timestamp::GetDate(timestamp)) >= 1;
 }
 
 string DuckLakeTableFunctionUtil::FormatTimestampOlderThan(const string &interval_str) {
@@ -46,6 +38,18 @@ bool DuckLakeTableFunctionUtil::TryGetNonNullOption(const TableFunctionBindInput
 		throw BinderException("The %s option must be a non-null %s.", name, type_name);
 	}
 	result = entry->second;
+	return true;
+}
+
+bool DuckLakeTableFunctionUtil::TryGetTimestampOption(const TableFunctionBindInput &input, const string &name,
+                                                      Value &result) {
+	if (!TryGetNonNullOption(input, name, "timestamp", result)) {
+		return false;
+	}
+	if (!IsFilterTimestamp(timestamp_t(result.GetValue<timestamp_tz_t>().value))) {
+		throw InvalidInputException("The %s option must be a finite timestamp in the year 1 or later, not '%s'", name,
+		                            result.ToString());
+	}
 	return true;
 }
 

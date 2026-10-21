@@ -68,7 +68,7 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		cleanup_all = BooleanValue::Get(cleanup_all_value);
 	}
 	Value older_than;
-	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", older_than);
+	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", older_than);
 	if ((cleanup_all == has_timestamp && cleanup_all == true) ||
 	    (cleanup_all == has_timestamp && cleanup_all == false && older_than_default.empty())) {
 		throw InvalidInputException(

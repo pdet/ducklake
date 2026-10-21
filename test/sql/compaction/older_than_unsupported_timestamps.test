@@ -1,0 +1,45 @@
+# name: test/sql/compaction/older_than_unsupported_timestamps.test
+# description: Maintenance functions reject an infinite or BC older_than
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/older_than_unsupported_timestamps.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_unsupported_timestamps')
+
+statement error
+SELECT * FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT *
+FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => '0001-01-01 (BC) 00:00:00+00'::TIMESTAMPTZ)
+----
+The older_than option must be a finite timestamp in the year 1 or later, not '0001-01-01 (BC) 00:00:00+00'
+
+statement error
+SELECT * FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT * FROM ducklake_delete_orphaned_files('lake', dry_run => true, older_than => '-infinity'::TIMESTAMPTZ)
+----
+The older_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+
+statement error
+SELECT * FROM ducklake_merge_adjacent_files('lake', older_than => 'infinity'::TIMESTAMPTZ)
+----
+The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT * FROM ducklake_merge_adjacent_files('lake', newer_than => '-infinity'::TIMESTAMPTZ)
+----
+The newer_than option must be a finite timestamp in the year 1 or later, not '-infinity'
