@@ -13,6 +13,18 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_unsupported_timestamps')
 
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
 statement error
 SELECT * FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
 ----
