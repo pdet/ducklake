@@ -186,3 +186,60 @@ query I
 SELECT id FROM dl.time_edge WHERE v = '24:00:00'::TIME_NS
 ----
 3
+
+# Infinity sentinels and the finite int64 nanosecond endpoints must not overflow widened bounds.
+foreach type TIMESTAMP_NS TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE dl.limits_{type} (id INTEGER, v {type})
+
+statement ok
+CREATE TABLE reference_{type} (id INTEGER, v {type})
+
+statement ok
+INSERT INTO reference_{type} VALUES
+    (1, '-infinity'),
+    (2, '1677-09-21 00:12:43.145224194+00'),
+    (3, '2262-04-11 23:47:16.854775805+00'),
+    (4, '2262-04-11 23:47:16.854775806+00'),
+    (5, 'infinity'),
+    (6, NULL)
+
+foreach id 1 2 3 4 5 6
+
+statement ok
+INSERT INTO dl.limits_{type} SELECT * FROM reference_{type} WHERE id = {id}
+
+endloop
+
+foreach bound -infinity infinity 1677-09-21T00:12:43.145224194+00 2262-04-11T23:47:16.854775805+00 2262-04-11T23:47:16.854775806+00
+
+foreach comparison = <> < <= > >=
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM dl.limits_{type} WHERE v {comparison} '{bound}'::{type}) IS NOT DISTINCT FROM (SELECT list(id ORDER BY id) FROM reference_{type} WHERE v {comparison} '{bound}'::{type})
+----
+true
+
+endloop
+
+endloop
+
+query I
+SELECT id FROM dl.limits_{type} WHERE v IN ('-infinity'::{type}, 'infinity'::{type}, '2262-04-11 23:47:16.854775806+00'::{type}) ORDER BY id
+----
+1
+4
+5
+
+query I
+SELECT id FROM dl.limits_{type} ORDER BY v ASC NULLS LAST LIMIT 1
+----
+1
+
+query I
+SELECT id FROM dl.limits_{type} ORDER BY v DESC NULLS LAST LIMIT 1
+----
+5
+
+endloop
