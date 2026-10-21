@@ -18,13 +18,16 @@ static bool IsFilterTimestamp(const timestamp_t timestamp) {
 	return Value::IsFinite(timestamp) && Date::ExtractYear(Timestamp::GetDate(timestamp)) >= 1;
 }
 
-string DuckLakeTableFunctionUtil::FormatTimestampOlderThan(const string &interval_str) {
+string DuckLakeTableFunctionUtil::FormatTimestampOlderThan(const string &option, const string &interval_str) {
 	interval_t interval;
 	if (!Interval::FromString(interval_str, interval)) {
 		throw InvalidInputException("Failed to parse interval: '%s'", interval_str);
 	}
 	auto current_time = Timestamp::GetCurrentTimestamp();
 	auto target_timestamp = SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
+	if (!IsFilterTimestamp(target_timestamp)) {
+		throw InvalidInputException("The %s option '%s' reaches back before the year 1", option, interval_str);
+	}
 	return FormatTimestampISO8601(target_timestamp);
 }
 

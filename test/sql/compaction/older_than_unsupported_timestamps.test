@@ -1,5 +1,5 @@
 # name: test/sql/compaction/older_than_unsupported_timestamps.test
-# description: Maintenance functions reject an infinite or BC older_than
+# description: Maintenance functions reject an infinite or BC older_than, and an age that reaches back before year 1
 # group: [compaction]
 
 require ducklake
@@ -43,3 +43,43 @@ statement error
 SELECT * FROM ducklake_merge_adjacent_files('lake', newer_than => '-infinity'::TIMESTAMPTZ)
 ----
 The newer_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+
+statement error
+CALL lake.set_option('expire_older_than', '3000 years')
+----
+The expire_older_than option '3000 years' reaches back before the year 1
+
+statement error
+CALL lake.set_option('delete_older_than', '3000 years')
+----
+The delete_older_than option '3000 years' reaches back before the year 1
+
+statement ok
+CHECKPOINT lake
+
+# an age stored by an older DuckLake fails at the checkpoint
+statement ok
+CALL lake.set_option('expire_older_than', '1 day')
+
+statement ok
+CALL lake.set_option('delete_older_than', '1 day')
+
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_metadata SET value = '3000 years'
+WHERE key IN ('expire_older_than', 'delete_older_than')
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_unsupported_timestamps')
+
+statement error
+CHECKPOINT lake
+----
+The expire_older_than option '3000 years' reaches back before the year 1
+
+statement error
+SELECT * FROM ducklake_cleanup_old_files('lake', dry_run => true)
+----
+The delete_older_than option '3000 years' reaches back before the year 1

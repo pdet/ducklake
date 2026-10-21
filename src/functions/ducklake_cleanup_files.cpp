@@ -81,7 +81,8 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
 		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 	} else if (!cleanup_all && !older_than_default.empty()) {
-		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampOlderThan(older_than_default);
+		result->timestamp_filter =
+		    DuckLakeTableFunctionUtil::FormatTimestampOlderThan("delete_older_than", older_than_default);
 	}
 
 	// orphans belong to no table, so only the global auto_compact option can turn their cleanup off

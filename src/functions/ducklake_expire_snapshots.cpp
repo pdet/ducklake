@@ -68,7 +68,8 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else if (!has_versions) {
-		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampOlderThan(older_than_default);
+		auto timestamp_filter =
+		    DuckLakeTableFunctionUtil::FormatTimestampOlderThan("expire_older_than", older_than_default);
 		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
