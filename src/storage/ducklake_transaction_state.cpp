@@ -2754,14 +2754,13 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (retry_on_error && finished_retrying &&
 			    FindConflictWithOtherCommits(transaction_snapshot, transaction_changes, context, error)) {
 				retry_on_error = false;
-				finished_retrying = false;
 			}
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
 				CleanupFiles();
-				// Add additional information on the number of retries and suggest to increase it
 				string error_message = "Failed to commit DuckLake transaction.\n";
-				if (finished_retrying) {
+				// only an error that another retry could solve gets the advice to raise the retry count
+				if (retry_on_error) {
 					auto suggested_count =
 					    MaxValue<idx_t>(retry_config.max_retry_count * 10, DuckLakeRetryConfig().max_retry_count);
 					error_message += StringUtil::Format(
