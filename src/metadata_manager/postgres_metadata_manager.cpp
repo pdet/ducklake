@@ -19,12 +19,6 @@ static bool HasFourDigitDatePrefix(const string &value) {
 	       StringUtil::CharacterIsDigit(value[8]) && StringUtil::CharacterIsDigit(value[9]);
 }
 
-static bool HasTimePrefix(const string &value) {
-	return value.size() >= 8 && StringUtil::CharacterIsDigit(value[0]) && StringUtil::CharacterIsDigit(value[1]) &&
-	       value[2] == ':' && StringUtil::CharacterIsDigit(value[3]) && StringUtil::CharacterIsDigit(value[4]) &&
-	       value[5] == ':' && StringUtil::CharacterIsDigit(value[6]) && StringUtil::CharacterIsDigit(value[7]);
-}
-
 static bool IsInfinityLiteral(const string &value) {
 	return value == "infinity" || value == "-infinity";
 }
@@ -87,13 +81,12 @@ static string GetPostgresStatsType(const LogicalType &type) {
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_NS:
 		return "TIMESTAMP";
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		return "TIMESTAMPTZ";
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_NS:
-		return "TIME";
 	case LogicalTypeId::DECIMAL:
 		return type.ToString();
 	default:
@@ -109,9 +102,6 @@ static bool CanCastPostgresStatsForValueComparison(const LogicalType &type) {
 
 static bool CanCastPostgresTemporalValue(const Value &value, const LogicalType &type) {
 	auto string_value = value.ToString();
-	if (IsTimeOfDayType(type)) {
-		return HasTimePrefix(string_value);
-	}
 	if (IsInfinityLiteral(string_value)) {
 		return true;
 	}
@@ -135,12 +125,20 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {
 		return string();
 	}
+	if (IsTimeOfDayType(type)) {
+		if (value.type().id() != type.id()) {
+			return string();
+		}
+		// Anchor time to the epoch date so timestamp bounds can widen without wrapping.
+		auto micros = value.GetValueUnsafe<int64_t>();
+		if (type.id() == LogicalTypeId::TIME_NS) {
+			micros /= Interval::NANOS_PER_MICRO;
+		}
+		return CastValueToTarget(Value::TIMESTAMP(timestamp_t(micros)), LogicalType::TIMESTAMP);
+	}
 	if (IsNanosecondTemporalType(type) && value.type().id() == type.id()) {
 		// Postgres keeps microseconds: floor the constant, stats bounds are widened to match
 		auto nanos = value.GetValueUnsafe<int64_t>();
-		if (type.id() == LogicalTypeId::TIME_NS) {
-			return to_string(nanos / Interval::NANOS_PER_MICRO);
-		}
 		if (timestamp_t(nanos).IsFinite()) {
 			auto micros = nanos / Interval::NANOS_PER_MICRO - (nanos % Interval::NANOS_PER_MICRO < 0 ? 1 : 0);
 			auto floored = type.id() == LogicalTypeId::TIMESTAMP_NS ? Value::TIMESTAMP(timestamp_t(micros))
@@ -181,7 +179,7 @@ static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalTy
 	if (IsTimeOfDayType(type)) {
 		regex = StringUtil::Format("'^(([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,%s})?|24:00:00(\\.0+)?)$'",
 		                           fraction);
-		return StringUtil::Format("(CASE WHEN %s ~ %s THEN %s::TIME END)", stats, regex, value);
+		return StringUtil::Format("(CASE WHEN %s ~ %s THEN DATE '1970-01-01' + %s::TIME END)", stats, regex, value);
 	}
 	if (type.id() == LogicalTypeId::DATE) {
 		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])$'";
@@ -204,10 +202,9 @@ static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalTy
 	    "THEN 29 ELSE 28 END WHEN %s IN (4, 6, 9, 11) THEN 30 ELSE 31 END)",
 	    month, year, year, year, month);
 	auto valid_date = StringUtil::Format("%s > 0 AND %s <= %s", year, day, max_day);
-	auto pg_type = GetPostgresStatsType(type);
 	return StringUtil::Format(
 	    "(CASE WHEN %s ~ %s THEN CASE WHEN %s THEN %s::%s END WHEN %s IN ('infinity', '-infinity') THEN %s::%s END)",
-	    stats, regex, valid_date, value, pg_type, stats, stats, pg_type);
+	    stats, regex, valid_date, value, GetPostgresStatsType(type), stats, stats, GetPostgresStatsType(type));
 }
 
 string PostgresMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
@@ -216,16 +213,6 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 		auto cast = PostgresSafeTemporalStatsCast(stats, type);
 		if (cast_type == StatsCastType::ORDERING) {
 			return cast;
-		}
-		if (IsTimeOfDayType(type)) {
-			if (type.id() == LogicalTypeId::TIME_NS) {
-				// Numeric microseconds let widened bounds extend beyond midnight without wrapping.
-				return StringUtil::Format("COALESCE((EXTRACT(EPOCH FROM %s) * 1000000 %s 1), %s)", cast,
-				                          cast_type == StatsCastType::MIN ? "-" : "+",
-				                          cast_type == StatsCastType::MIN ? "-1" : "86400000001");
-			}
-			return StringUtil::Format("COALESCE(%s, '%s'::TIME)", cast,
-			                          cast_type == StatsCastType::MIN ? "00:00:00" : "24:00:00");
 		}
 		if (IsNanosecondTemporalType(type)) {
 			// widen truncated bounds by a microsecond
