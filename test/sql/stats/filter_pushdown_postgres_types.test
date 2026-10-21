@@ -41,19 +41,19 @@ analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 foreach type TIME TIME_NS
 
 statement ok
-CREATE TABLE dl.t_${type} (id INTEGER, v ${type})
+CREATE TABLE dl.t_{type} (id INTEGER, v {type})
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (1, '01:00:00')
+INSERT INTO dl.t_{type} VALUES (1, '01:00:00')
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (2, '12:00:00')
+INSERT INTO dl.t_{type} VALUES (2, '12:00:00')
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (3, '24:00:00')
+INSERT INTO dl.t_{type} VALUES (3, '24:00:00')
 
 query II
-EXPLAIN ANALYZE SELECT id FROM dl.t_${type} WHERE v > '18:00:00'
+EXPLAIN ANALYZE SELECT id FROM dl.t_{type} WHERE v > '18:00:00'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
@@ -62,19 +62,19 @@ endloop
 foreach type DATE TIMESTAMP_NS
 
 statement ok
-CREATE TABLE dl.inf_${type} (id INTEGER, v ${type})
+CREATE TABLE dl.inf_{type} (id INTEGER, v {type})
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (1, '-infinity')
+INSERT INTO dl.inf_{type} VALUES (1, '-infinity')
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (2, '2024-01-01')
+INSERT INTO dl.inf_{type} VALUES (2, '2024-01-01')
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (3, 'infinity')
+INSERT INTO dl.inf_{type} VALUES (3, 'infinity')
 
 query II
-EXPLAIN ANALYZE SELECT id FROM dl.inf_${type} WHERE v > '2024-03-01'
+EXPLAIN ANALYZE SELECT id FROM dl.inf_{type} WHERE v > '2024-03-01'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
@@ -96,3 +96,93 @@ query II
 EXPLAIN ANALYZE SELECT id FROM dl.u WHERE v > '80000000-0000-0000-0000-000000000000'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Exercise flooring before the Unix epoch, sub-microsecond comparisons, and both timestamp types.
+foreach type TIMESTAMP_NS TIMESTAMPTZ_NS
+
+statement ok
+CREATE TABLE dl.edge_{type} (id INTEGER, v {type})
+
+statement ok
+INSERT INTO dl.edge_{type} VALUES (1, '1969-12-31 23:59:59.999999400+00')
+
+statement ok
+INSERT INTO dl.edge_{type} VALUES (2, '1969-12-31 23:59:59.999999600+00')
+
+statement ok
+INSERT INTO dl.edge_{type} VALUES (3, '1970-01-02 00:00:00+00')
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v > '1969-12-31 23:59:59.999999500+00'::{type} ORDER BY id
+----
+2
+3
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v >= '1969-12-31 23:59:59.999999600+00'::{type} ORDER BY id
+----
+2
+3
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v < '1969-12-31 23:59:59.999999500+00'::{type} ORDER BY id
+----
+1
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v <= '1969-12-31 23:59:59.999999400+00'::{type} ORDER BY id
+----
+1
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v = '1969-12-31 23:59:59.999999600+00'::{type}
+----
+2
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v <> '1969-12-31 23:59:59.999999400+00'::{type} ORDER BY id
+----
+2
+3
+
+query I
+SELECT id FROM dl.edge_{type} WHERE v IN ('1969-12-31 23:59:59.999999400+00'::{type}, '1970-01-02 00:00:00+00'::{type}) ORDER BY id
+----
+1
+3
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.edge_{type} WHERE v > '1970-01-01 12:00:00+00'::{type}
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+endloop
+
+# Widening a TIME_NS bound must not wrap at midnight or discard the end-of-day value.
+statement ok
+CREATE TABLE dl.time_edge (id INTEGER, v TIME_NS)
+
+statement ok
+INSERT INTO dl.time_edge VALUES (1, '00:00:00.000000400')
+
+statement ok
+INSERT INTO dl.time_edge VALUES (2, '23:59:59.999999600')
+
+statement ok
+INSERT INTO dl.time_edge VALUES (3, '24:00:00')
+
+query I
+SELECT id FROM dl.time_edge WHERE v < '00:00:00.000000500'::TIME_NS
+----
+1
+
+query I
+SELECT id FROM dl.time_edge WHERE v > '23:59:59.999999500'::TIME_NS ORDER BY id
+----
+2
+3
+
+query I
+SELECT id FROM dl.time_edge WHERE v = '24:00:00'::TIME_NS
+----
+3

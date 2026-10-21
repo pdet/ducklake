@@ -139,7 +139,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 		// Postgres keeps microseconds: floor the constant, stats bounds are widened to match
 		auto nanos = value.GetValueUnsafe<int64_t>();
 		if (type.id() == LogicalTypeId::TIME_NS) {
-			return CastValueToTarget(Value::TIME(dtime_t(nanos / Interval::NANOS_PER_MICRO)), LogicalType::TIME);
+			return to_string(nanos / Interval::NANOS_PER_MICRO);
 		}
 		if (timestamp_t(nanos).IsFinite()) {
 			auto micros = nanos / Interval::NANOS_PER_MICRO - (nanos % Interval::NANOS_PER_MICRO < 0 ? 1 : 0);
@@ -219,14 +219,10 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 		}
 		if (IsTimeOfDayType(type)) {
 			if (type.id() == LogicalTypeId::TIME_NS) {
-				// time arithmetic wraps at midnight
-				cast = cast_type == StatsCastType::MIN
-				           ? StringUtil::Format("(CASE WHEN %s > '00:00:00'::TIME THEN %s - INTERVAL '1 microsecond' "
-				                                "ELSE %s END)",
-				                                cast, cast, cast)
-				           : StringUtil::Format("(CASE WHEN %s < '23:59:59.999999'::TIME THEN %s + INTERVAL '1 "
-				                                "microsecond' ELSE '24:00:00'::TIME END)",
-				                                cast, cast);
+				// Numeric microseconds let widened bounds extend beyond midnight without wrapping.
+				return StringUtil::Format("COALESCE((EXTRACT(EPOCH FROM %s) * 1000000 %s 1), %s)", cast,
+				                          cast_type == StatsCastType::MIN ? "-" : "+",
+				                          cast_type == StatsCastType::MIN ? "-1" : "86400000001");
 			}
 			return StringUtil::Format("COALESCE(%s, '%s'::TIME)", cast,
 			                          cast_type == StatsCastType::MIN ? "00:00:00" : "24:00:00");
