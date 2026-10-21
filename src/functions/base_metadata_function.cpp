@@ -13,7 +13,7 @@
 
 namespace duckdb {
 
-//! the metadata filters cannot cast an infinite or BC timestamp back to TIMESTAMPTZ
+//! the maintenance filters only take finite timestamps from the year 1 on
 static bool IsFilterTimestamp(const timestamp_t timestamp) {
 	return Value::IsFinite(timestamp) && Date::ExtractYear(Timestamp::GetDate(timestamp)) >= 1;
 }
