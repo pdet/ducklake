@@ -263,17 +263,7 @@ static bool EpochTransformSupportsType(const LogicalType &type) {
 
 void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
                                                          const string &column_name, const LogicalType &type) {
-	bool supported = true;
-	switch (field.transform.type) {
-	case DuckLakeTransformType::EPOCH_YEAR:
-	case DuckLakeTransformType::EPOCH_MONTH:
-	case DuckLakeTransformType::EPOCH_DAY:
-	case DuckLakeTransformType::EPOCH_HOUR:
-		supported = EpochTransformSupportsType(type);
-		break;
-	default:
-		break;
-	}
+	bool supported = !IsEpochTransform(field.transform.type) || EpochTransformSupportsType(type);
 	if (supported) {
 		try {
 			ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(type, 0ULL), field);
