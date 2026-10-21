@@ -332,6 +332,9 @@ public:
 	//! If there are no uncommitted changes, this is the schema version of the snapshot.
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
 	idx_t GetCatalogVersion();
+	//! The committed view as this transaction sees it, a copy once the transaction changed the schema, so that its
+	//! binding is not shared with other transactions
+	DuckLakeViewEntry &GetTransactionView(DuckLakeViewEntry &view);
 
 protected:
 	void SetMetadataManager(unique_ptr<DuckLakeMetadataManager> metadata_manager) {
@@ -415,6 +418,12 @@ private:
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
 
 	atomic<idx_t> catalog_version;
+	mutex transaction_views_lock;
+	//! The catalog version that the copies in transaction_views were made at
+	idx_t transaction_views_version = 0;
+	unordered_map<const DuckLakeViewEntry *, unique_ptr<DuckLakeViewEntry>> transaction_views;
+	//! Copies of an earlier catalog version, kept alive for the references to them
+	vector<unique_ptr<DuckLakeViewEntry>> outdated_transaction_views;
 };
 
 } // namespace duckdb
