@@ -38,6 +38,17 @@ BEGIN
 statement ok con1
 ALTER TABLE ducklake.t ADD COLUMN j VARCHAR
 
+# a query of the view binds it too
+query II con1
+SELECT * FROM ducklake.v
+----
+1	NULL
+
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
 query TT con1
 SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
 ----

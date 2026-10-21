@@ -22,7 +22,7 @@ DuckLakeViewEntry::DuckLakeViewEntry(Catalog &catalog, SchemaCatalogEntry &schem
       query_sql(std::move(query_sql_p)), local_change(local_change) {
 }
 
-DuckLakeViewEntry::DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change)
+DuckLakeViewEntry::DuckLakeViewEntry(const DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change)
     : DuckLakeViewEntry(parent.catalog, parent.schema, info, parent.GetViewId(), parent.GetViewUUID(), parent.query_sql,
                         local_change) {
 	oid = parent.oid;
@@ -84,9 +84,7 @@ unique_ptr<DuckLakeViewEntry> DuckLakeViewEntry::CopyUnbound() const {
 	auto &view_info = info->Cast<CreateViewInfo>();
 	view_info.types.clear();
 	view_info.names.clear();
-	auto result = make_uniq<DuckLakeViewEntry>(catalog, schema, view_info, view_id, view_uuid, query_sql, local_change);
-	result->oid = oid;
-	return result;
+	return make_uniq<DuckLakeViewEntry>(*this, view_info, local_change);
 }
 
 unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
