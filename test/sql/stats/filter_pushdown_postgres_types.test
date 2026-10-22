@@ -96,3 +96,41 @@ query II
 EXPLAIN ANALYZE SELECT id FROM dl.u WHERE v > '80000000-0000-0000-0000-000000000000'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+CREATE TABLE dl.neg (id INTEGER, v TIMESTAMP_NS)
+
+statement ok
+INSERT INTO dl.neg VALUES (1, make_timestamp_ns(-200))
+
+statement ok
+INSERT INTO dl.neg VALUES (2, make_timestamp_ns(-2000000000))
+
+query I
+SELECT id FROM dl.neg WHERE v > make_timestamp_ns(-500)
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.neg WHERE v > make_timestamp_ns(-500)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+CREATE TABLE dl.tz (id INTEGER, v TIMESTAMPTZ_NS)
+
+statement ok
+INSERT INTO dl.tz VALUES (1, '2024-01-01 00:00:00.000000600+00')
+
+statement ok
+INSERT INTO dl.tz VALUES (2, '2024-01-02 00:00:00+00')
+
+query I
+SELECT id FROM dl.tz WHERE v < '2024-01-01 00:00:00.000000700+00'::TIMESTAMPTZ_NS
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.tz WHERE v < '2024-01-01 00:00:00.000000700+00'::TIMESTAMPTZ_NS
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

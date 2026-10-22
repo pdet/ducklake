@@ -137,7 +137,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 		return CastValueToTarget(Value::TIMESTAMP(timestamp_t(micros)), LogicalType::TIMESTAMP);
 	}
 	if (IsNanosecondTemporalType(type) && value.type().id() == type.id()) {
-		// Postgres keeps microseconds: floor the constant, stats bounds are widened to match
+		// postgres keeps microseconds, so floor the constant and widen the stats bounds to match
 		auto nanos = value.GetValueUnsafe<int64_t>();
 		if (timestamp_t(nanos).IsFinite()) {
 			auto micros = nanos / Interval::NANOS_PER_MICRO - (nanos % Interval::NANOS_PER_MICRO < 0 ? 1 : 0);
