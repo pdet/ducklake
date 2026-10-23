@@ -55,7 +55,7 @@ NULL	60
 
 # the merged files stay in the table directory and keep the spec and their partition values
 query I
-SELECT bool_and(regexp_matches(data_file, '/main/t/[^/]+\.parquet$')) FROM ducklake_list_files('lake', 't')
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]t[/\\][^/\\]+\.parquet$')) FROM ducklake_list_files('lake', 't')
 ----
 true
 
@@ -129,7 +129,7 @@ SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_f
 e	2	1
 
 query II
-SELECT bool_and(regexp_matches(data_file, '/main/e/[^/]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'e')
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]e[/\\][^/\\]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'e')
 ----
 true	1
 
@@ -170,7 +170,7 @@ SELECT count(*) FROM ducklake_rewrite_data_files('lake', 'r', delete_threshold =
 1
 
 query II
-SELECT bool_and(regexp_matches(data_file, '/main/r/[^/]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'r')
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]r[/\\][^/\\]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'r')
 ----
 true	1
 
