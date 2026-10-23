@@ -1,0 +1,70 @@
+# name: test/sql/attach/detach_evicts_object_cache.test
+# description: DETACH removes the entries a DuckLake put in the object cache, so attaching in a loop does not grow it
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/detach_evicts_object_cache.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+loop i 0 50
+
+statement ok
+CREATE TABLE lake.t{i}(c0 BIGINT, c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT, c6 BIGINT, c7 BIGINT)
+
+endloop
+
+statement ok
+INSERT INTO lake.t0 VALUES (1, 2, 3, 4, 5, 6, 7, 8)
+
+statement ok
+DETACH lake
+
+statement ok
+SET VARIABLE cache_before = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+loop i 0 5
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+query I
+SELECT count(*) FROM lake.t0
+----
+1
+
+statement ok
+DETACH lake
+
+endloop
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# a DuckLake replaced by ATTACH OR REPLACE also removes its entries
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+query I
+SELECT count(*) FROM lake.t0
+----
+1
+
+statement ok
+ATTACH OR REPLACE 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+statement ok
+DETACH lake
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
