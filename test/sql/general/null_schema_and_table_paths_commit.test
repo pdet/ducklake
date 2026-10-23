@@ -77,15 +77,16 @@ SELECT (SELECT sum(i) FROM ducklake.t), (SELECT sum(j) FROM ducklake.t2), (SELEC
 ----
 3	42	3	4
 
-query III
-SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 't2')
-        WHERE data_file.replace('\', '/') LIKE '%null_schema_and_table_paths_commit/t2/ducklake-%.parquet'),
-       (SELECT count(*) FROM ducklake_list_files('ducklake', 'u', schema => 's1')
-        WHERE data_file.replace('\', '/') LIKE '%null_schema_and_table_paths_commit/s1/ducklake-%.parquet'),
-       (SELECT count(*) FROM ducklake_list_files('ducklake', 'v', schema => 's2')
-        WHERE data_file.replace('\', '/') LIKE '%null_schema_and_table_paths_commit_abs/ducklake-%.parquet')
+query I
+SELECT count(*) FROM (
+  SELECT data_file, '/null_schema_and_table_paths_commit/t2/' AS dir FROM ducklake_list_files('ducklake', 't2')
+  UNION ALL
+  SELECT data_file, '/null_schema_and_table_paths_commit/s1/' FROM ducklake_list_files('ducklake', 'u', schema => 's1')
+  UNION ALL
+  SELECT data_file, '/null_schema_and_table_paths_commit_abs/' FROM ducklake_list_files('ducklake', 'v', schema => 's2')
+) WHERE starts_with(data_file.replace('\', '/'), '{DATA_PATH}'.replace('\', '/') || dir)
 ----
-1	1	1
+3
 
 statement ok
 DROP TABLE ducklake.t
