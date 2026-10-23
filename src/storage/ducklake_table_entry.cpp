@@ -728,7 +728,33 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 		}
 	}
 
-	return make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
+	auto result = make_uniq<DuckLakeTableEntry>(*this, table_info, std::move(partition_data));
+	result->starts_partition_spec = BucketTypesChanged(transaction, *result);
+	return std::move(result);
+}
+
+bool DuckLakeTableEntry::BucketTypesChanged(DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
+	if (!IsTransactionLocal()) {
+		return false;
+	}
+	auto committed_entry =
+	    ParentCatalog().Cast<DuckLakeCatalog>().GetEntryById(transaction, transaction.GetSnapshot(), GetTableId());
+	if (!committed_entry) {
+		return false;
+	}
+	// the committed files keep the buckets of the committed column types
+	auto &committed = committed_entry->Cast<DuckLakeTableEntry>();
+	for (auto &field : table.partition_data->fields) {
+		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+			continue;
+		}
+		auto committed_field = committed.GetFieldId(field.field_id);
+		if (committed_field && DuckLakePartitionUtils::BucketChangesWithType(
+		                           committed_field->Type(), table.GetFieldId(field.field_id)->Type())) {
+			return true;
+		}
+	}
+	return false;
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
