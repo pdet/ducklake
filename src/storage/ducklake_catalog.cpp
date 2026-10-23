@@ -1413,6 +1413,34 @@ InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(Table
 	return InlinedDeletionCacheResult::UNKNOWN;
 }
 
+shared_ptr<const unordered_set<string>>
+DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list) {
+	auto cached_listing = [&]() -> shared_ptr<const unordered_set<string>> {
+		lock_guard<mutex> guard(inlined_deletion_cache_lock);
+		auto entry = inlined_deletion_tables.find(snapshot_id);
+		return entry == inlined_deletion_tables.end() ? nullptr : entry->second;
+	};
+	auto tables = cached_listing();
+	if (tables) {
+		return tables;
+	}
+	lock_guard<mutex> listing_guard(inlined_deletion_listing_lock);
+	// another caller may have listed the tables while this one waited
+	tables = cached_listing();
+	if (tables) {
+		return tables;
+	}
+	tables = make_shared_ptr<const unordered_set<string>>(list());
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	inlined_deletion_tables[snapshot_id] = tables;
+	// transactions at a few recent snapshots can read side by side, older listings are dropped
+	static constexpr idx_t MAX_LISTED_SNAPSHOTS = 8;
+	while (inlined_deletion_tables.size() > MAX_LISTED_SNAPSHOTS) {
+		inlined_deletion_tables.erase(inlined_deletion_tables.begin());
+	}
+	return tables;
+}
+
 void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (exists) {
