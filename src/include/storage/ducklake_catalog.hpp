@@ -384,6 +384,12 @@ public:
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+	//! The rewrite snapshots of the table in the range, unless the snapshot changes were not read up to its end
+	bool TryGetRewriteSnapshots(TableIndex table_id, idx_t start_snapshot, idx_t end_snapshot, set<idx_t> &result);
+	//! The first snapshot whose changes were not read for rewrites yet
+	idx_t GetFirstUnreadRewriteSnapshot();
+	//! Cache the rewrite snapshots of every table, read from the snapshot changes up to end_snapshot
+	void CacheRewriteSnapshots(const vector<pair<TableIndex, idx_t>> &rewrites, idx_t end_snapshot);
 
 	//! The schema versions of the table at the snapshot of the transaction
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
@@ -458,6 +464,10 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	//! The rewrite snapshots of each table, read from the snapshot changes of committed snapshots
+	mutex rewrite_snapshots_lock;
+	optional_idx rewrite_snapshots_read_until;
+	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;

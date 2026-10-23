@@ -4,6 +4,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -2427,18 +2428,6 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	return files;
 }
 
-//! The snapshots of the range that rewrote data files of the table without changing its rows
-static string RewriteSnapshotsCte(TableIndex table_id, DuckLakeSnapshot start_snapshot) {
-	// a rewrite snapshot lists no quoted names, which could contain the pattern
-	return StringUtil::Format(R"(rewrite_snapshots AS (
-	SELECT snapshot_id
-	FROM {METADATA_CATALOG}.ducklake_snapshot_changes
-	WHERE snapshot_id >= %d AND snapshot_id <= {SNAPSHOT_ID} AND changes_made NOT LIKE '%%"%%'
-		AND ',' || changes_made || ',' LIKE '%%,rewrite_delete:%d,%%'
-))",
-	                          start_snapshot.snapshot_id, table_id.index);
-}
-
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table,
                                                                           DuckLakeSnapshot start_snapshot,
                                                                           DuckLakeSnapshot end_snapshot) {
@@ -2450,12 +2439,9 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
 	// Rows deleted in the snapshot that inserted them were never visible
-	// The rows a rewrite wrote were inserted before, so the files it wrote are skipped
 	auto query = StringUtil::Format(R"(
-WITH %s
-SELECT %s, rewrites.snapshot_ids
+SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
-CROSS JOIN (SELECT LIST(snapshot_id) AS snapshot_ids FROM rewrite_snapshots) rewrites
 LEFT JOIN (
 	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -2464,14 +2450,14 @@ LEFT JOIN (
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
-) AND (data.partial_max IS NOT NULL OR data.begin_snapshot NOT IN (SELECT snapshot_id FROM rewrite_snapshots));
+);
 		)",
-	                                RewriteSnapshotsCte(table_id, start_snapshot), select_list, table_id.index,
-	                                start_snapshot.snapshot_id, table_id.index, start_snapshot.snapshot_id,
-	                                start_snapshot.snapshot_id);
+	                                select_list, table_id.index, start_snapshot.snapshot_id, table_id.index,
+	                                start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = Query(end_snapshot, query);
 	result->ThrowIfError("Failed to get table insertion file list from DuckLake: ");
+	auto rewrite_snapshots = GetTableRewriteSnapshots(table_id, start_snapshot, end_snapshot);
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
 		DuckLakeFileListEntry file_entry;
@@ -2480,16 +2466,23 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		file_entry.row_id_start = OptIdx(row, col_idx++);
 		auto begin_snapshot = row.GetValue<idx_t>(col_idx++);
 		file_entry.snapshot_id = begin_snapshot;
-		optional_idx partial_max;
 		if (!row.IsNull(col_idx)) {
-			partial_max = row.GetValue<idx_t>(col_idx);
+			auto partial_max = row.GetValue<idx_t>(col_idx);
 			// Set upper bound filter if partial_max > end_snapshot
-			SetSnapshotFilter(end_snapshot, partial_max.GetIndex(), file_entry);
+			SetSnapshotFilter(end_snapshot, partial_max, file_entry);
 			// Set lower bound filter if begin_snapshot < start_snapshot
 			// This means the file contains rows from before start_snapshot that we need to filter out
 			if (begin_snapshot < start_snapshot.snapshot_id) {
 				file_entry.snapshot_filter_min = start_snapshot.snapshot_id;
 			}
+			for (auto snapshot_id : rewrite_snapshots) {
+				if (snapshot_id >= begin_snapshot && snapshot_id <= partial_max) {
+					file_entry.snapshot_filter_excluded.push_back(snapshot_id);
+				}
+			}
+		} else if (rewrite_snapshots.count(begin_snapshot)) {
+			// the rows of a file written by a rewrite were inserted before
+			continue;
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
@@ -2497,16 +2490,6 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
-		if (partial_max.IsValid() && !row.IsNull(col_idx)) {
-			// a merged file keeps the snapshot of the rewrite that wrote some of its rows
-			auto rewrite_snapshots = row.GetValue<Value>(col_idx);
-			for (auto &rewrite_snapshot : ListValue::GetChildren(rewrite_snapshots)) {
-				auto snapshot_id = rewrite_snapshot.GetValue<idx_t>();
-				if (snapshot_id >= begin_snapshot && snapshot_id <= partial_max.GetIndex()) {
-					file_entry.snapshot_filter_excluded.push_back(snapshot_id);
-				}
-			}
-		}
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -2526,19 +2509,29 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot, include_local_changes);
 	bool has_inlined_table = !inlined_table_name.empty();
 
+	// a rewrite ends data files without deleting their rows
+	string rewrite_end_filter;
+	string rewrite_end_condition;
+	auto rewrite_snapshots = GetTableRewriteSnapshots(table_id, start_snapshot, end_snapshot);
+	if (!rewrite_snapshots.empty()) {
+		auto snapshot_list =
+		    StringUtil::Join(rewrite_snapshots, ", ", [](idx_t snapshot_id) { return to_string(snapshot_id); });
+		rewrite_end_filter = StringUtil::Format(" AND end_snapshot NOT IN (%s)", snapshot_list);
+		rewrite_end_condition = StringUtil::Format(" OR data.end_snapshot IN (%s)", snapshot_list);
+	}
+
 	// Build the query with optional CTE for inlined deletions
 	// Deletes come in three flavors:
 	// 1. Deletes stored in the ducklake_delete_file table (partial deletes)
 	// 2. Data files being deleted entirely through setting end_snapshot (full file deletes)
 	// 3. Inlined file deletions stored in the metadata database
 	// For all deletes, we need to obtain any PREVIOUS deletes as well to exclude rows already deleted
-	// A rewrite ends data files without deleting their rows
-	string query = "\nWITH " + RewriteSnapshotsCte(table_id, start_snapshot) + ",";
+	string query;
 
 	// Add CTE for aggregated inlined deletions if the table exists
 	if (has_inlined_table) {
-		query += StringUtil::Format(R"(
-inlined_dels AS (
+		query = StringUtil::Format(R"(
+WITH inlined_dels AS (
 	SELECT file_id,
 	       LIST(STRUCT_PACK(row_id := row_id, snapshot_id := begin_snapshot)) as deletions,
 	       MIN(begin_snapshot) as min_snapshot
@@ -2548,13 +2541,14 @@ inlined_dels AS (
 ),
 main_results AS (
 )",
-		                            inlined_table_name, start_snapshot.snapshot_id);
+		                           inlined_table_name, start_snapshot.snapshot_id);
 	} else {
-		query += "\nmain_results AS (\n";
+		query = "WITH main_results AS (\n";
 	}
 
 	// Main query: partial deletes from delete_file table and full file deletes
-	query += StringUtil::Format(R"(
+	query +=
+	    StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -2586,8 +2580,7 @@ UNION ALL
 SELECT %s, data.end_snapshot, true FROM (
 	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_data_file
-	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}
-		AND end_snapshot NOT IN (SELECT snapshot_id FROM rewrite_snapshots)
+	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}%s
 ) AS data
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -2611,8 +2604,8 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
-	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                            select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
+	                       select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
+	                       select_list, table_id.index, start_snapshot.snapshot_id, rewrite_end_filter, table_id.index);
 
 	if (has_inlined_table) {
 		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
@@ -2635,11 +2628,10 @@ WHERE data.table_id = %d
       SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_delete_file
       WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
   )
-  AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID}
-      OR data.end_snapshot IN (SELECT snapshot_id FROM rewrite_snapshots))
+  AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID}%s)
 )",
 		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
-		                            table_id.index, table_id.index, start_snapshot.snapshot_id);
+		                            table_id.index, table_id.index, start_snapshot.snapshot_id, rewrite_end_condition);
 	}
 
 	// Close the main_results CTE and do the final SELECT with LEFT JOIN on inlined_dels
@@ -2734,6 +2726,33 @@ WHERE begin_snapshot < %d AND file_id IN (%s)
 		entry.inlined_file_deletions[row.GetValue<idx_t>(1)] = row.GetValue<idx_t>(2);
 	}
 	return files;
+}
+
+set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
+                                                             DuckLakeSnapshot snapshot) {
+	auto &catalog = transaction.GetCatalog();
+	set<idx_t> rewrite_snapshots;
+	if (catalog.TryGetRewriteSnapshots(table_id, start_snapshot.snapshot_id, snapshot.snapshot_id, rewrite_snapshots)) {
+		return rewrite_snapshots;
+	}
+	// the changes of committed snapshots never change, so the catalog reads each of them once
+	auto result = Query(snapshot, StringUtil::Format(R"(
+SELECT snapshot_id, changes_made
+FROM {METADATA_CATALOG}.ducklake_snapshot_changes
+WHERE snapshot_id >= %d AND snapshot_id <= {SNAPSHOT_ID} AND changes_made LIKE '%%rewrite_delete:%%'
+)",
+	                                                 catalog.GetFirstUnreadRewriteSnapshot()));
+	result->ThrowIfError("Failed to get rewrite snapshots from DuckLake: ");
+	vector<pair<TableIndex, idx_t>> rewrites;
+	for (auto &row : *result) {
+		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(1));
+		for (auto &rewritten_table : changes.tables_rewrite_delete) {
+			rewrites.emplace_back(rewritten_table, row.GetValue<idx_t>(0));
+		}
+	}
+	catalog.CacheRewriteSnapshots(rewrites, snapshot.snapshot_id);
+	catalog.TryGetRewriteSnapshots(table_id, start_snapshot.snapshot_id, snapshot.snapshot_id, rewrite_snapshots);
+	return rewrite_snapshots;
 }
 
 vector<DuckLakeFileListExtendedEntry>
