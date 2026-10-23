@@ -1,0 +1,75 @@
+# name: test/sql/general/null_schema_and_table_paths_commit.test
+# description: commits and snapshot expiry in a schema and table without a stored path
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT 1 AS i
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_schema SET path = NULL, path_is_relative = NULL
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table SET path = NULL, path_is_relative = NULL
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_data_file SET path = 'main/t/' || path WHERE path_is_relative
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT 42 AS j
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT (SELECT sum(i) FROM ducklake.t), (SELECT sum(j) FROM ducklake.t2)
+----
+3	42
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't2')
+WHERE data_file LIKE '%null_schema_and_table_paths_commit/t2/%.parquet'
+----
+1
+
+statement ok
+DROP TABLE ducklake.t
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+----
+2
+
+query II
+SELECT (SELECT count(*) FROM glob('{DATA_PATH}/null_schema_and_table_paths_commit/main/t/*.parquet')),
+       (SELECT count(*) FROM glob('{DATA_PATH}/null_schema_and_table_paths_commit/*.parquet'))
+----
+0	0
