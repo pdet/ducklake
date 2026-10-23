@@ -515,7 +515,9 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 	if (cached) {
 		return cached;
 	}
-	return cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, LoadSchemaForSnapshot(transaction, snapshot));
+	auto entry = cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, LoadSchemaForSnapshot(transaction, snapshot));
+	TrackCacheEntry(key, entry);
+	return entry;
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
@@ -1065,7 +1067,9 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		if (current_id == table_id) {
 			requested_entry = entry;
 		}
-		cache.Put(StatsCacheKey(snapshot.next_file_id, current_id), std::move(entry));
+		auto entry_key = StatsCacheKey(snapshot.next_file_id, current_id);
+		TrackCacheEntry(entry_key, entry);
+		cache.Put(std::move(entry_key), std::move(entry));
 	}
 	if (!requested_entry || !requested_entry->has_stats) {
 		return nullptr;
@@ -1082,6 +1086,7 @@ idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, Tab
 	if (!cached) {
 		auto record_counts = transaction.GetMetadataManager().GetTableRecordCounts(snapshot);
 		cached = make_shared_ptr<DuckLakeTableRecordCountCacheEntry>(std::move(record_counts));
+		TrackCacheEntry(key, cached);
 		cache.Put(std::move(key), cached);
 	}
 	auto entry = cached->record_counts.find(table_id);
@@ -1171,6 +1176,7 @@ optional_ptr<BoundAtClause> DuckLakeCatalog::CatalogSnapshot() const {
 }
 
 void DuckLakeCatalog::OnDetach(ClientContext &context) {
+	EvictCacheEntries();
 	// the metadata database stays attached while another DuckLake uses it
 	if (!UnregisterCatalog()) {
 		return;
@@ -1505,6 +1511,36 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
 	return GetDatabase().GetObjectCache();
+}
+
+void DuckLakeCatalog::TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry) {
+	lock_guard<mutex> guard(cache_entries_lock);
+	cache_entries[key] = entry;
+	if (cache_entries.size() < cache_entries_prune_size) {
+		return;
+	}
+	for (auto it = cache_entries.begin(); it != cache_entries.end();) {
+		if (it->second.expired()) {
+			it = cache_entries.erase(it);
+		} else {
+			++it;
+		}
+	}
+	cache_entries_prune_size = MaxValue<idx_t>(cache_entries_prune_size, cache_entries.size() * 2);
+}
+
+void DuckLakeCatalog::EvictCacheEntries() {
+	unordered_map<string, weak_ptr<ObjectCacheEntry>> entries;
+	{
+		lock_guard<mutex> guard(cache_entries_lock);
+		std::swap(entries, cache_entries);
+	}
+	auto &cache = GetObjectCacheInstance();
+	for (auto &entry : entries) {
+		if (!entry.second.expired()) {
+			cache.Delete(entry.first);
+		}
+	}
 }
 
 void DuckLakeCatalog::RegisterCatalog() {

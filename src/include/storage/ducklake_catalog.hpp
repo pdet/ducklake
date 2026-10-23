@@ -417,6 +417,10 @@ private:
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
+	//! Remembers an entry this DuckLake put in the object cache, so detaching can remove it
+	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
+	//! Removes the entries of this DuckLake from the object cache, as their keys belong to this instance only
+	void EvictCacheEntries();
 	//! Fails when the name or the metadata catalog of this DuckLake belongs to another DuckLake
 	void RegisterCatalog();
 	//! Returns whether no other DuckLake uses the metadata catalog
@@ -447,6 +451,11 @@ private:
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
+	mutex cache_entries_lock;
+	//! The entries this DuckLake put in the object cache, an expired one was evicted
+	unordered_map<string, weak_ptr<ObjectCacheEntry>> cache_entries;
+	//! The number of tracked entries at which the evicted ones are forgotten
+	idx_t cache_entries_prune_size = 1024;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
