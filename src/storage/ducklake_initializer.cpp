@@ -30,13 +30,15 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
-	if (options.access_mode != AccessMode::AUTOMATIC) {
+	const string metadata_type = catalog.MetadataType();
+	// a Quack server rejects read-only attaches, so the read-only DuckLake catalog refuses the writes itself
+	bool is_quack = metadata_type == "quack" || metadata_type == "quack_scanner";
+	if (options.access_mode != AccessMode::AUTOMATIC && !(is_quack && options.access_mode == AccessMode::READ_ONLY)) {
 		attach_options.push_back(EnumUtil::ToString(options.access_mode));
 	}
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
-	const string metadata_type = catalog.MetadataType();
 	bool user_set_type = options.metadata_parameters.find("type") != options.metadata_parameters.end();
 	if (metadata_type.empty() && !user_set_type && !options.hide_metadata_catalog) {
 		// open a visible metadata catalog as DuckDB explicitly so DuckDB does not warn that it is a DuckLake catalog
@@ -86,6 +88,10 @@ void DuckLakeInitializer::Initialize() {
 		if (!options.create_if_not_exists) {
 			throw InvalidInputException("Existing DuckLake at metadata catalog \"%s\" does not exist - and creating a "
 			                            "new DuckLake is explicitly disabled",
+			                            options.metadata_path);
+		}
+		if (options.access_mode == AccessMode::READ_ONLY) {
+			throw InvalidInputException("Cannot create a new DuckLake at metadata catalog \"%s\" in read-only mode",
 			                            options.metadata_path);
 		}
 		try {
@@ -250,6 +256,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value, DuckLakeVersionToString(target_version));
+			}
+			if (catalog_version < target_version && options.access_mode == AccessMode::READ_ONLY) {
+				throw InvalidInputException(
+				    "Cannot migrate the DuckLake catalog from version %s to %s in read-only mode", tag.value,
+				    DuckLakeVersionToString(target_version));
 			}
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
