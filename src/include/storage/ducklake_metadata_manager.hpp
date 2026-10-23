@@ -361,7 +361,7 @@ public:
 	                                                          DuckLakeSnapshot start_snapshot,
 	                                                          DuckLakeSnapshot snapshot,
 	                                                          bool include_local_changes = true);
-	//! The snapshots of the range that rewrote data files of the table, which changes none of its rows
+	//! The snapshots of the range that rewrote data files of the table without changing its rows
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
