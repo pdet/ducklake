@@ -155,6 +155,22 @@ ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(4, nonexistent_col));
 ----
 does not exist
 
+# The failed statements keep the partitioning of the table
+query I
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = 1
+----
+bucket(4)
+
+statement error
+CREATE TABLE bucket_null_create(i INTEGER) PARTITIONED BY (bucket(NULL, i))
+----
+Bucket count cannot be NULL
+
+statement error
+CREATE TABLE bucket_null_ctas PARTITIONED BY (bucket(NULL, i)) AS SELECT 1 AS i
+----
+Bucket count cannot be NULL
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Case insensitivity tests
 # ----------------------------------------------------------------------------------------------------------------------
