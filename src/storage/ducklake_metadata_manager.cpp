@@ -5243,7 +5243,7 @@ string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery() const {
            '/'
        ) AS full_path
 FROM
-  (SELECT s.path AS schema_path, t.path AS table_path, file_path, s.path_is_relative AS schema_relative, t.path_is_relative AS table_relative, file_relative FROM (
+  (SELECT COALESCE(s.path, '') AS schema_path, COALESCE(t.path, '') AS table_path, file_path, (s.path IS NULL OR s.path_is_relative) AS schema_relative, (t.path IS NULL OR t.path_is_relative) AS table_relative, file_relative FROM (
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
     UNION ALL
