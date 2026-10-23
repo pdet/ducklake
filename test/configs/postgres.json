@@ -19,6 +19,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Postgres text cannot hold a NUL byte, test/sql/general/postgres_nul_byte_text.test covers the error",
+      "paths": [
+        "test/sql/snapshot_info/commit_message_nul_byte.test"
+      ]
+    },
+    {
       "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
       "paths": [
         "test/sql/alter/alter_drops_empty_inlined_tables.test"
