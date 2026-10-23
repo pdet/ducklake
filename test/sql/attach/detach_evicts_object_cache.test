@@ -39,6 +39,11 @@ SELECT count(*) FROM lake.t0
 ----
 1
 
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 't0'
+----
+1
+
 statement ok
 DETACH lake
 
@@ -63,6 +68,78 @@ ATTACH OR REPLACE 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PAT
 
 statement ok
 DETACH lake
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# entries of many snapshots, also after the evicted ones are forgotten
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+loop i 0 15
+
+statement ok
+INSERT INTO lake.t{i} VALUES ({i}, 2, 3, 4, 5, 6, 7, 8)
+
+query I
+SELECT count(*) > 0 FROM lake.t0
+----
+true
+
+endloop
+
+statement ok
+DETACH lake
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# a transaction that keeps reading after another connection detached the DuckLake
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM lake.t20
+----
+0
+
+statement ok
+DETACH lake
+
+query I con1
+SELECT count(*) FROM lake.t0
+----
+2
+
+statement ok con1
+COMMIT
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+# an ATTACH that is rolled back
+statement ok
+BEGIN
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
+
+query I
+SELECT count(*) FROM lake.t0
+----
+2
+
+statement ok
+ROLLBACK
 
 query I
 SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
