@@ -2262,6 +2262,15 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                                     data_path, separator, context.supports_v1_1_metadata);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
+		auto unchanged_partition_ids =
+		    DuckLakeMetadataManager::GetUnchangedPartitionIds(existing_catalog.partitions, result.new_partition_keys);
+		for (auto &partition_id : commit_state.committed_partition_ids) {
+			// files of a spec that equals the committed one keep the committed spec
+			auto unchanged = unchanged_partition_ids.find(partition_id.second);
+			if (unchanged != unchanged_partition_ids.end()) {
+				partition_id.second = unchanged->second;
+			}
+		}
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);

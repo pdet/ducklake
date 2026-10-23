@@ -4924,6 +4924,31 @@ static unordered_map<idx_t, T> GetChangedSpecs(const vector<T> &old_specs, const
 	return new_spec_map;
 }
 
+unordered_map<idx_t, idx_t>
+DuckLakeMetadataManager::GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
+                                                  const vector<DuckLakePartitionInfo> &new_partitions) {
+	unordered_map<idx_t, idx_t> last_partition_index;
+	unordered_set<idx_t> replaced_tables;
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		last_partition_index[new_partitions[i].table_id.index] = i;
+		if (new_partitions[i].replaces_equal_spec) {
+			replaced_tables.insert(new_partitions[i].table_id.index);
+		}
+	}
+	unordered_map<idx_t, idx_t> result;
+	for (auto &existing : existing_partitions) {
+		auto entry = last_partition_index.find(existing.table_id.index);
+		if (entry == last_partition_index.end() || replaced_tables.count(existing.table_id.index)) {
+			continue;
+		}
+		auto &last = new_partitions[entry->second];
+		if (last.id.IsValid() && existing.id.IsValid() && last == existing) {
+			result[last.id.GetIndex()] = existing.id.GetIndex();
+		}
+	}
+	return result;
+}
+
 string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
                                                       const vector<DuckLakePartitionInfo> &new_partitions) {
 	if (new_partitions.empty()) {

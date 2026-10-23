@@ -416,6 +416,10 @@ public:
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
 	                                    const vector<DuckLakePartitionInfo> &new_partitions);
+	//! Maps the id of a last new spec that equals the committed spec, which is not written, to the committed id
+	static unordered_map<idx_t, idx_t>
+	GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
+	                         const vector<DuckLakePartitionInfo> &new_partitions);
 	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
 	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
