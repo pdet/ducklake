@@ -90,10 +90,7 @@ void DuckLakeInitializer::Initialize() {
 			                            "new DuckLake is explicitly disabled",
 			                            options.metadata_path);
 		}
-		if (options.access_mode == AccessMode::READ_ONLY) {
-			throw InvalidInputException("Cannot create a new DuckLake at metadata catalog \"%s\" in read-only mode",
-			                            options.metadata_path);
-		}
+		catalog.VerifyWritable();
 		try {
 			InitializeNewDuckLake(transaction, has_explicit_schema);
 		} catch (std::exception &ex) {
@@ -257,10 +254,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value, DuckLakeVersionToString(target_version));
 			}
-			if (catalog_version < target_version && options.access_mode == AccessMode::READ_ONLY) {
-				throw InvalidInputException(
-				    "Cannot migrate the DuckLake catalog from version %s to %s in read-only mode", tag.value,
-				    DuckLakeVersionToString(target_version));
+			if (catalog_version < target_version) {
+				catalog.VerifyWritable();
 			}
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
