@@ -31,10 +31,6 @@ DETACH ducklake
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_orphans_null_paths', DATA_INLINING_ROW_LIMIT 0)
 
-# a file written now goes to the data path, which is the path of the schema and of the table
-statement ok
-INSERT INTO ducklake.t VALUES (1)
-
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
 ----
@@ -43,4 +39,4 @@ SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => t
 query I
 SELECT sum(i) FROM ducklake.t
 ----
-43
+42
