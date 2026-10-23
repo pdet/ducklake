@@ -98,28 +98,20 @@ SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM 
 ----
 true
 
-# a transaction that keeps reading after another connection detached the DuckLake
+# a DuckLake whose name changed
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/detach_evicts_object_cache')
 
-statement ok con1
-BEGIN
-
-query I con1
-SELECT count(*) FROM lake.t20
-----
-0
-
-statement ok
-DETACH lake
-
-query I con1
+query I
 SELECT count(*) FROM lake.t0
 ----
 2
 
-statement ok con1
-COMMIT
+statement ok
+ALTER DATABASE lake SET ALIAS TO renamed_lake
+
+statement ok
+DETACH renamed_lake
 
 query I
 SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
