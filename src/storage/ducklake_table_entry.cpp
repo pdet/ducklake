@@ -733,6 +733,22 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	return std::move(result);
 }
 
+//! Whether a bucket column of the spec hashes its values differently in the two tables
+static bool BucketTypeChanged(const DuckLakePartition &partition, const DuckLakeTableEntry &before,
+                              const DuckLakeTableEntry &after) {
+	for (auto &field : partition.fields) {
+		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+			continue;
+		}
+		auto before_field = before.GetFieldId(field.field_id);
+		if (before_field && DuckLakePartitionUtils::BucketChangesWithType(before_field->Type(),
+		                                                                  after.GetFieldId(field.field_id)->Type())) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool DuckLakeTableEntry::BucketTypesChanged(DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
 	if (!IsTransactionLocal()) {
 		return false;
@@ -743,18 +759,7 @@ bool DuckLakeTableEntry::BucketTypesChanged(DuckLakeTransaction &transaction, Du
 		return false;
 	}
 	// the committed files keep the buckets of the committed column types
-	auto &committed = committed_entry->Cast<DuckLakeTableEntry>();
-	for (auto &field : table.partition_data->fields) {
-		if (field.transform.type != DuckLakeTransformType::BUCKET) {
-			continue;
-		}
-		auto committed_field = committed.GetFieldId(field.field_id);
-		if (committed_field && DuckLakePartitionUtils::BucketChangesWithType(
-		                           committed_field->Type(), table.GetFieldId(field.field_id)->Type())) {
-			return true;
-		}
-	}
-	return false;
+	return BucketTypeChanged(*table.partition_data, committed_entry->Cast<DuckLakeTableEntry>(), table);
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
@@ -1180,19 +1185,11 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
 			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, field, new_field.Name(), new_field.Type());
 		}
 	}
-	for (auto &field : partition->fields) {
-		if (field.transform.type != DuckLakeTransformType::BUCKET) {
-			continue;
-		}
-		auto &old_type = GetFieldId(field.field_id)->Type();
-		auto &new_type = result->GetFieldId(field.field_id)->Type();
-		if (DuckLakePartitionUtils::BucketChangesWithType(old_type, new_type)) {
-			// files written before the change keep the buckets of the old type under the old spec
-			partition->partition_id = transaction.GetLocalCatalogId();
-			partition->local_partition_id = partition->partition_id;
-			result->starts_partition_spec = true;
-			break;
-		}
+	if (BucketTypeChanged(*partition, *this, *result)) {
+		// files written before the change keep the buckets of the old type under the old spec
+		partition->partition_id = transaction.GetLocalCatalogId();
+		partition->local_partition_id = partition->partition_id;
+		result->starts_partition_spec = true;
 	}
 	return std::move(result);
 }
