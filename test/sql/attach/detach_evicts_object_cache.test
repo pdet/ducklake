@@ -107,8 +107,19 @@ SELECT count(*) FROM lake.t0
 ----
 2
 
+query I
+SELECT count(*) FROM lake.current_snapshot()
+----
+1
+
 statement ok
 ALTER DATABASE lake SET ALIAS TO renamed_lake
+
+# the schema is loaded again under the new name
+query I
+SELECT count(*) FROM renamed_lake.current_snapshot()
+----
+1
 
 statement ok
 DETACH renamed_lake
