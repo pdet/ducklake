@@ -138,6 +138,11 @@ ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(-1, user_id));
 ----
 Bucket count must be positive
 
+statement error
+ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(NULL, user_id));
+----
+Bucket count cannot be NULL
+
 # Bucket count exceeding INT32 maximum leads to error.
 statement error
 ALTER TABLE bucketed_tbl SET PARTITIONED BY (bucket(2147483648, user_id));
