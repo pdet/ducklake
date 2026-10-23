@@ -2040,7 +2040,8 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 		return "";
 	}
 
-	auto cte_keyword = MaterializeStatsCTEs() ? " AS MATERIALIZED (\n" : " AS (\n";
+	// a single stats join is planned well either way
+	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS MATERIALIZED (\n" : " AS (\n";
 	vector<string> ctes;
 	for (const auto &entry : requirements) {
 		const auto &req = entry.second;

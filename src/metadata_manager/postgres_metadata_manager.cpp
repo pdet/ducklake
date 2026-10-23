@@ -499,7 +499,8 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
 }
 
 bool PostgresMetadataManager::MaterializeStatsCTEs() const {
-	// Postgres inlines the CTEs it sees, then rescans the stats in nested loops for every file that survives pruning
+	// Postgres inlines the CTEs, then underestimates the rows after several stats joins and rescans the stats in
+	// nested loops for every file that survives pruning
 	return true;
 }
 
