@@ -498,6 +498,11 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
 	return PostgresQuery(remote_query);
 }
 
+bool PostgresMetadataManager::MaterializeStatsCTEs() const {
+	// Postgres inlines the CTEs it sees, then rescans the stats in nested loops for every file that survives pruning
+	return true;
+}
+
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
