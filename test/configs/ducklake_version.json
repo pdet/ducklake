@@ -57,7 +57,8 @@
         "test/sql/partitioning/partition_transform_column_types.test",
         "test/sql/stats/filter_pushdown_postgres_types.test",
         "test/sql/stats/timestamptz_retype_stats_time_zone.test",
-        "test/sql/stats/timestamptz_retype_topn_time_zone.test"
+        "test/sql/stats/timestamptz_retype_topn_time_zone.test",
+        "test/sql/types/timestamptz_ns_values.test"
       ]
     },
     {
