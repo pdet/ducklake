@@ -1487,7 +1487,7 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
-	// the instance id alone keeps the keys apart, the name can change with ALTER DATABASE
+	// the instance id alone keeps the keys apart, and the stats do not depend on the name of the DuckLake
 	return StringUtil::Format("ducklake:%s:stats:%llu:table:%llu", instance_id, next_file_id, table_id.index);
 }
 
@@ -1496,7 +1496,8 @@ string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
-	return StringUtil::Format("ducklake:%s:schema:%llu", instance_id, schema_version);
+	// a loaded schema holds the name of the DuckLake, its macros for one, so a new name loads it again
+	return StringUtil::Format("ducklake:%s:%s:schema:%llu", instance_id, GetName(), schema_version);
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
