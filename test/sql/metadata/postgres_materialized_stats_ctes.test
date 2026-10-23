@@ -30,7 +30,7 @@ statement ok
 INSERT INTO lake.t SELECT i, i * 2, i * 3 FROM range(20, 30) t(i)
 
 statement ok
-DELETE FROM lake.t WHERE a = 25
+DELETE FROM lake.t WHERE a = 24
 
 statement ok
 CALL truncate_duckdb_logs()
@@ -41,7 +41,7 @@ CALL enable_logging('QueryLog', storage = 'memory')
 query I
 SELECT count(*) FROM lake.t WHERE a >= 12 AND b < 50 AND c > 30
 ----
-13
+12
 
 statement ok
 CALL disable_logging()
@@ -59,4 +59,4 @@ true
 query II
 SELECT count(*), sum(a) FROM lake.t WHERE a >= 12 AND b < 50 AND c > 30
 ----
-13	234
+12	210
