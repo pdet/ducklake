@@ -417,7 +417,16 @@ private:
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
-	//! Remembers an entry this DuckLake put in the object cache, so detaching can remove it
+	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table
+	struct TrackedStatsEntry {
+		idx_t next_file_id;
+		TableIndex table_id;
+		weak_ptr<ObjectCacheEntry> entry;
+	};
+	//! Puts entries in the object cache and remembers them, under one lock so the entry kept is the one remembered
+	void PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry);
+	void PutStatsCacheEntries(idx_t next_file_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
+	//! Requires cache_entries_lock
 	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
 	//! Removes the entries of this DuckLake from the object cache, as their keys belong to this instance only
 	void EvictCacheEntries();
@@ -452,10 +461,12 @@ private:
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	mutex cache_entries_lock;
-	//! The entries this DuckLake put in the object cache, an expired one was evicted
+	//! The schema and record count entries this DuckLake put in the object cache, an expired one was evicted
 	unordered_map<string, weak_ptr<ObjectCacheEntry>> cache_entries;
+	vector<TrackedStatsEntry> stats_cache_entries;
 	//! The number of tracked entries at which the evicted ones are forgotten
-	idx_t cache_entries_prune_size = 1024;
+	idx_t cache_entries_prune_size = 64;
+	idx_t stats_cache_entries_prune_size = 512;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
