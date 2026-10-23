@@ -31,7 +31,7 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
 	const string metadata_type = catalog.MetadataType();
-	// a Quack server rejects read-only attaches, so the read-only DuckLake catalog refuses the writes itself
+	// Quack does not enforce read-only attaches and newer versions reject them, the DuckLake catalog refuses writes
 	bool is_quack = metadata_type == "quack" || metadata_type == "quack_scanner";
 	if (options.access_mode != AccessMode::AUTOMATIC && !(is_quack && options.access_mode == AccessMode::READ_ONLY)) {
 		attach_options.push_back(EnumUtil::ToString(options.access_mode));

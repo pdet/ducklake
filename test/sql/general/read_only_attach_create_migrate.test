@@ -19,7 +19,6 @@ CREATE TABLE lake.t AS SELECT 1 AS i
 statement ok
 DETACH lake
 
-# a read-only attach creates no catalog and migrates none
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_new (READ_ONLY, CREATE_IF_NOT_EXISTS true,
     METADATA_SCHEMA 'read_only_new_lake', DATA_PATH '{DATA_PATH}/read_only_new_lake')

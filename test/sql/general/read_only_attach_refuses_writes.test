@@ -75,4 +75,3 @@ query II
 SELECT count(*), max(snapshot_id) FROM lake.snapshots()
 ----
 3	2
-
