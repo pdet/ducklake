@@ -2735,7 +2735,7 @@ set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id
 	if (catalog.TryGetRewriteSnapshots(table_id, start_snapshot.snapshot_id, snapshot.snapshot_id, rewrite_snapshots)) {
 		return rewrite_snapshots;
 	}
-	// the changes of committed snapshots never change, so the catalog reads each of them once
+	// the changes of committed snapshots never change, so the catalog caches them
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT snapshot_id, changes_made
 FROM {METADATA_CATALOG}.ducklake_snapshot_changes

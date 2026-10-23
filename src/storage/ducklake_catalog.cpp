@@ -1420,7 +1420,7 @@ bool DuckLakeCatalog::TryGetRewriteSnapshots(TableIndex table_id, idx_t start_sn
 		return false;
 	}
 	auto entry = rewrite_snapshots.find(table_id.index);
-	if (entry != rewrite_snapshots.end()) {
+	if (entry != rewrite_snapshots.end() && start_snapshot <= end_snapshot) {
 		auto &snapshots = entry->second;
 		result.insert(snapshots.lower_bound(start_snapshot), snapshots.upper_bound(end_snapshot));
 	}

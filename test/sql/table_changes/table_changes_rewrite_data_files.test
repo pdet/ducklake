@@ -138,6 +138,11 @@ SELECT COUNT(*) FROM table_changes('t', 10, 10)
 ----
 0
 
+query I
+SELECT COUNT(*) FROM table_changes('t', 10, 5)
+----
+0
+
 query IIII
 SELECT snapshot_id, rowid, change_type, id FROM table_changes('t', 6, 10) ORDER BY ALL
 ----
