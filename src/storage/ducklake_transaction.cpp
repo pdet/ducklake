@@ -1538,6 +1538,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
+	context.tagged_snapshots_guard = [&](const vector<idx_t> &snapshot_ids) {
+		return metadata_manager->TaggedSnapshotsGuardSql(snapshot_ids);
+	};
 	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
@@ -1854,14 +1857,16 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshots(const string &
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const string &filter) {
 	auto &metadata_manager = GetMetadataManager();
-	// the candidates are read under the mutex, after the commits that pinned any of them
-	if (ducklake_catalog.SupportsSnapshotTags()) {
+	if (ducklake_catalog.SupportsSnapshotTags() && !metadata_manager.CommitsEachStatement()) {
+		// the candidates are read under the mutex, after the commits that pinned any of them
 		metadata_manager.TakeCatalogMutex();
 	}
-	auto expired = ExpirableSnapshotsInternal(filter);
-	if (!expired.empty()) {
-		metadata_manager.DeleteSnapshots(expired);
+	auto candidates = ExpirableSnapshotsInternal(filter);
+	if (candidates.empty()) {
+		return candidates;
 	}
+	// a server that commits each statement takes the mutex in the batch that deletes
+	auto expired = metadata_manager.DeleteSnapshots(candidates);
 	set<idx_t> expired_ids;
 	for (auto &snapshot : expired) {
 		ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);

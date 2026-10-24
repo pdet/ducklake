@@ -32,6 +32,10 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
+	//! A statement that fails the batch when a tagged snapshot is gone, empty where the conflict check covers it
+	std::function<string(const vector<idx_t> &)> tagged_snapshots_guard = [](const vector<idx_t> &) {
+		return string();
+	};
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};

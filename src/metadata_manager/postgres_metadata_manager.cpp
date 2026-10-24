@@ -353,7 +353,35 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+string PostgresMetadataManager::TaggedSnapshotsGuardSql(const vector<idx_t> &snapshot_ids) {
+	// under READ COMMITTED the mutex only waits, so the check runs after it in the batch
+	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
+	auto body = StringUtil::Format("BEGIN IF EXISTS (SELECT 1 FROM %s WHERE snapshot_id NOT IN (SELECT snapshot_id "
+	                               "FROM %s.ducklake_snapshot)) THEN RAISE EXCEPTION %s; END IF; END",
+	                               SnapshotIdValuesSql(snapshot_ids), schema,
+	                               SQLString::ToString(TaggedSnapshotsGuardMessage()));
+	return "DO " + SQLString::ToString(body) + ";\n";
+}
+
+static bool IsTaggedSnapshotsGuardError(const string &message) {
+	// the server raised it for the batch, a name in a client side conflict can hold the same text
+	if (!StringUtil::StartsWith(message, "Failed to execute query \"")) {
+		return false;
+	}
+	auto server_error_start = message.rfind("\": ");
+	if (server_error_start == string::npos) {
+		return false;
+	}
+	// the severity before the text is translated, the text of the guard is not
+	auto text_start = message.find(":  ", server_error_start + 3);
+	auto guard = DuckLakeMetadataManager::TaggedSnapshotsGuardMessage();
+	return text_start != string::npos && message.compare(text_start + 3, guard.size(), guard) == 0;
+}
+
 bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+	if (IsTaggedSnapshotsGuardError(message)) {
+		return true;
+	}
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);

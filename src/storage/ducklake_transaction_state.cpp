@@ -2786,9 +2786,16 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			// a commit that pins a snapshot is ordered with expiry through the catalog mutex
-			string batch_queries =
-			    attempt_changes.created_snapshot_tags.empty() ? string() : DuckLakeMetadataManager::CatalogMutexSql();
+			string batch_queries;
+			if (!attempt_changes.created_snapshot_tags.empty()) {
+				// a commit that pins a snapshot is ordered with expiry through the catalog mutex
+				batch_queries = DuckLakeMetadataManager::CatalogMutexSql();
+				vector<idx_t> tagged_snapshots;
+				for (auto &tag : new_snapshot_tags) {
+					tagged_snapshots.push_back(tag.second);
+				}
+				batch_queries += context.tagged_snapshots_guard(tagged_snapshots);
+			}
 			// write the new snapshot
 			batch_queries += DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);

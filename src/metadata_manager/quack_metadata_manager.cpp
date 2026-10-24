@@ -61,6 +61,18 @@ unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 
+string QuackMetadataManager::TaggedSnapshotsGuardSql(const vector<idx_t> &snapshot_ids) {
+	// the server runs the batch in one transaction, so the check holds under the mutex
+	return StringUtil::Format("SELECT error(%s) FROM %s WHERE snapshot_id NOT IN (SELECT snapshot_id FROM "
+	                          "{METADATA_CATALOG}.ducklake_snapshot);\n",
+	                          SQLString::ToString(TaggedSnapshotsGuardMessage()), SnapshotIdValuesSql(snapshot_ids));
+}
+
+bool QuackMetadataManager::IsRetryableCommitError(const string &message) const {
+	// exactly the error the server raised for the batch, a name in a client side conflict can hold the same text
+	return message == TaggedSnapshotsGuardMessage();
+}
+
 string QuackMetadataManager::MetadataExistsQuery() const {
 	return "SELECT COUNT(*) FROM information_schema.tables "
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";

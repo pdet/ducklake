@@ -582,10 +582,18 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	//! Adds the row of ducklake_metadata that expiry and the commits that pin snapshots update to serialize
 	static string CatalogMutexRowSql();
-	//! The statement that takes the catalog mutex, the first of a batch that pins snapshots
+	//! The statement that takes the catalog mutex, the first of a batch that is ordered with expiry
 	static string CatalogMutexSql();
+	//! The snapshot ids as a VALUES list with the column snapshot_id
+	static string SnapshotIdValuesSql(const vector<idx_t> &snapshot_ids);
+	//! A statement that fails the batch when one of the snapshots is gone, for a server that checks in the batch
+	virtual string TaggedSnapshotsGuardSql(const vector<idx_t> &snapshot_ids);
+	//! The error of that guard, a retryable error whose retry reports the expired snapshot
+	static string TaggedSnapshotsGuardMessage();
 	//! Fails with a transaction conflict when a concurrent transaction took the mutex
 	void TakeCatalogMutex();
+	//! Throws a transaction conflict for a retryable error of a batch under the mutex, the error otherwise
+	void ThrowMutexError(QueryResult &result, const string &prefix);
 	//! The live snapshot tags
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 	//! The snapshot of the live snapshot tag with the name, if any
@@ -594,7 +602,8 @@ public:
 	idx_t ResolveSnapshotVersion(const Value &version);
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
-	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the snapshots and returns them, a server that commits each statement keeps a snapshot tagged meanwhile
+	virtual vector<DuckLakeSnapshotInfo> DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
