@@ -212,12 +212,6 @@
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"
       ]
-    },
-    {
-      "reason": "FIXME: a READ_ONLY attach of a DuckLake catalog on Quack fails, because Quack now rejects READ_ONLY attaches (pdet/ducklake_internal#296)",
-      "paths": [
-        "test/sql/cleanup/read_only_attach_cleanup.test"
-      ]
     }
   ]
 }
