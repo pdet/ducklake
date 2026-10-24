@@ -77,6 +77,32 @@ INSERT INTO ducklake.t VALUES (2)
 ----
 The sort keys of table t use database
 
+statement ok
+CREATE MACRO next_id(i) AS list_transform([i], lambda id: nextval('seq'))
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (next_id(id))
+
+statement error
+INSERT INTO ducklake.t VALUES (2)
+----
+The sort keys of table t use database
+
+# a prepared insert is bound again when the sort changes
+statement ok
+ALTER TABLE ducklake.t RESET SORTED BY
+
+statement ok
+PREPARE insert_t AS INSERT INTO ducklake.t VALUES ($1)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (nextval('seq'))
+
+statement error
+EXECUTE insert_t(2)
+----
+The sort keys of table t use database
+
 # other volatile functions are fine
 statement ok
 ALTER TABLE ducklake.t SET SORTED BY (random())
