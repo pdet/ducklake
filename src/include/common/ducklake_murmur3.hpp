@@ -22,10 +22,9 @@ struct DuckLakeMurmur3 {
 		const uint32_t c1 = 0xcc9e2d51;
 		const uint32_t c2 = 0x1b873593;
 
-		// body, copied from the bytes since the data can start at any address
+		// body
 		for (idx_t i = 0; i < nblocks; i++) {
-			uint32_t k1;
-			memcpy(&k1, data + i * sizeof(uint32_t), sizeof(uint32_t));
+			auto k1 = Load<uint32_t>(data + i * sizeof(uint32_t));
 
 			k1 *= c1;
 			k1 = (k1 << 15) | (k1 >> 17);
