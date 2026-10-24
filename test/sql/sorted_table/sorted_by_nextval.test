@@ -1,0 +1,52 @@
+# name: test/sql/sorted_table/sorted_by_nextval.test
+# description: sort keys that modify a database are rejected when inserting, without invalidating the database
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/sorted_by_nextval', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE SEQUENCE seq
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (nextval('seq'))
+
+statement error
+INSERT INTO ducklake.t VALUES (2)
+----
+The sort keys of table t modify a database
+
+statement error
+CREATE TABLE ducklake.t2 SORTED BY (nextval('seq')) AS SELECT 1 AS id
+----
+The sort keys of table t2 modify a database
+
+# the flush registers the write of its sort keys and works
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+ALTER TABLE ducklake.t RESET SORTED BY
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+query I
+SELECT id FROM ducklake.t ORDER BY id
+----
+1
+2

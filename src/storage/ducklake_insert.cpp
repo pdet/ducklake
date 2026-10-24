@@ -709,6 +709,12 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	TableIndex table_index(0);
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
 	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
+	// the statement does not know about writes of the sort keys, which are bound after it
+	if (!binder->GetStatementProperties().IsReadOnly()) {
+		throw BinderException("The sort keys of table %s modify a database, which is not supported when inserting. "
+		                      "Use ALTER TABLE ... RESET SORTED BY to remove them",
+		                      SQLIdentifier(table_name.GetIdentifierName()));
+	}
 	if (orders.empty()) {
 		return nullptr;
 	}
