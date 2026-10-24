@@ -39,6 +39,8 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 
@@ -710,10 +712,16 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
 	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
 	// the statement does not know about writes of the sort keys, which are bound after it
-	if (!binder->GetStatementProperties().IsReadOnly()) {
-		throw BinderException("The sort keys of table %s modify a database, which is not supported when inserting. "
-		                      "Use ALTER TABLE ... RESET SORTED BY to remove them",
-		                      SQLIdentifier(table_name.GetIdentifierName()));
+	auto &db_manager = DatabaseManager::Get(context);
+	for (auto &entry : binder->GetStatementProperties().modified_databases) {
+		auto db = db_manager.GetDatabase(context, entry.first);
+		// a transaction can always write the temporary and system databases
+		if (db && !db->IsTemporary() && !db->IsSystem()) {
+			throw BinderException("The sort keys of table %s modify database %s, which is not supported when "
+			                      "inserting. Use ALTER TABLE ... RESET SORTED BY to remove them",
+			                      SQLIdentifier(table_name.GetIdentifierName()),
+			                      SQLIdentifier(db->GetName().GetIdentifierName()));
+		}
 	}
 	if (orders.empty()) {
 		return nullptr;

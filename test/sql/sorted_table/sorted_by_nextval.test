@@ -17,6 +17,9 @@ statement ok
 CREATE SEQUENCE seq
 
 statement ok
+CREATE TEMP SEQUENCE temp_seq
+
+statement ok
 CREATE TABLE ducklake.t (id INTEGER)
 
 statement ok
@@ -28,25 +31,43 @@ ALTER TABLE ducklake.t SET SORTED BY (nextval('seq'))
 statement error
 INSERT INTO ducklake.t VALUES (2)
 ----
-The sort keys of table t modify a database
+The sort keys of table t modify database
 
 statement error
 CREATE TABLE ducklake.t2 SORTED BY (nextval('seq')) AS SELECT 1 AS id
 ----
-The sort keys of table t2 modify a database
+The sort keys of table t2 modify database
 
 # the flush registers the write of its sort keys and works
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
+# a transaction can always write a temporary sequence, and currval only reads
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (nextval('temp.temp_seq'))
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+SELECT nextval('seq')
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (currval('seq'))
+
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
 statement ok
 ALTER TABLE ducklake.t RESET SORTED BY
 
 statement ok
-INSERT INTO ducklake.t VALUES (2)
+INSERT INTO ducklake.t VALUES (4)
 
 query I
 SELECT id FROM ducklake.t ORDER BY id
 ----
 1
 2
+3
+4
