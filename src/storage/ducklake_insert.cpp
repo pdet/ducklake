@@ -39,8 +39,6 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/function_binder.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 
@@ -702,21 +700,6 @@ string DuckLakeCatalog::GenerateEncryptionKey(ClientContext &context) const {
 	return string(char_ptr_cast(bytes), ENCRYPTION_KEY_SIZE);
 }
 
-//! Sequence functions like nextval hold the sequence, and register it with the statement that binds them
-static void VerifySortKeyHasNoSequence(const Expression &expr, const Identifier &table_name) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &function = expr.Cast<BoundFunctionExpression>().Function();
-		if (function.HasModifiedDatabasesCallback()) {
-			throw BinderException("The sort keys of table %s use %s, which is not supported when inserting. Use "
-			                      "ALTER TABLE ... RESET SORTED BY to remove them",
-			                      SQLIdentifier(table_name.GetIdentifierName()),
-			                      function.GetName().GetIdentifierName());
-		}
-	}
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { VerifySortKeyHasNoSequence(child, table_name); });
-}
-
 //! Wrap the plan in an ORDER BY on the sort keys, usable before the table entry exists (CTAS)
 static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      PhysicalOperator &plan, SchemaCatalogEntry &schema,
@@ -726,9 +709,22 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	TableIndex table_index(0);
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
 	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
-	// the statement does not track the sequences of sort keys, which are bound after it
-	for (auto &order : orders) {
-		VerifySortKeyHasNoSequence(*order.expression, table_name);
+	// the sort keys are bound after the statement, which can neither register their writes nor rebind for them
+	auto &properties = binder->GetStatementProperties();
+	auto &catalog_name = schema.ParentCatalog().GetName();
+	auto verify_database = [&](const Identifier &database) {
+		if (!(database == catalog_name)) {
+			throw BinderException("The sort keys of table %s use database %s, which is not supported when inserting. "
+			                      "Use ALTER TABLE ... RESET SORTED BY to remove them",
+			                      SQLIdentifier(table_name.GetIdentifierName()),
+			                      SQLIdentifier(database.GetIdentifierName()));
+		}
+	};
+	for (auto &entry : properties.modified_databases) {
+		verify_database(entry.first);
+	}
+	for (auto &entry : properties.read_databases) {
+		verify_database(entry.first);
 	}
 	if (orders.empty()) {
 		return nullptr;

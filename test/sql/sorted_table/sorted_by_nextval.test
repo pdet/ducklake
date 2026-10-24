@@ -1,5 +1,5 @@
 # name: test/sql/sorted_table/sorted_by_nextval.test
-# description: sort keys that use a sequence are rejected when inserting, without invalidating the database
+# description: sort keys that use another database are rejected when inserting, without invalidating the database
 # group: [sorted_table]
 
 require ducklake
@@ -31,14 +31,14 @@ ALTER TABLE ducklake.t SET SORTED BY (nextval('seq'))
 statement error
 INSERT INTO ducklake.t VALUES (2)
 ----
-The sort keys of table t use nextval
+The sort keys of table t use database
 
 statement error
 CREATE TABLE ducklake.t2 SORTED BY (nextval('seq')) AS SELECT 1 AS id
 ----
-The sort keys of table t2 use nextval
+The sort keys of table t2 use database
 
-# the flush registers the sequence of its sort keys and works
+# the flush registers the sequence of its sort keys with its statement and works
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
@@ -48,7 +48,7 @@ ALTER TABLE ducklake.t SET SORTED BY (nextval('temp.temp_seq'))
 statement error
 INSERT INTO ducklake.t VALUES (2)
 ----
-The sort keys of table t use nextval
+The sort keys of table t use database
 
 statement ok
 SELECT nextval('seq')
@@ -59,7 +59,7 @@ ALTER TABLE ducklake.t SET SORTED BY (currval('seq'))
 statement error
 INSERT INTO ducklake.t VALUES (2)
 ----
-The sort keys of table t use currval
+The sort keys of table t use database
 
 statement ok
 ALTER TABLE ducklake.t SET SORTED BY (id + setval('seq', 5))
@@ -67,7 +67,15 @@ ALTER TABLE ducklake.t SET SORTED BY (id + setval('seq', 5))
 statement error
 INSERT INTO ducklake.t VALUES (2)
 ----
-The sort keys of table t use setval
+The sort keys of table t use database
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (list_transform([id], lambda id: nextval('seq')))
+
+statement error
+INSERT INTO ducklake.t VALUES (2)
+----
+The sort keys of table t use database
 
 # other volatile functions are fine
 statement ok
