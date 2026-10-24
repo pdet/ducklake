@@ -419,6 +419,8 @@ private:
 	vector<MappingIndex> pending_name_map_cache_invalidations;
 	//! Previous values of config options set by this transaction, for rollback
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
+	//! Whether a retried commit attempt wrote the options again
+	bool rewrote_config_options = false;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;

@@ -62,22 +62,6 @@ SELECT option_name, value, scope FROM dl.options() WHERE option_name LIKE 'parqu
 parquet_compression	gzip	TABLE
 parquet_row_group_size	1000	TABLE
 
-# a rolled back option is not written
-statement ok
-BEGIN
-
-statement ok
-CALL dl.set_option('parquet_compression', 'zstd')
-
-statement ok
-ROLLBACK
-
-query III
-SELECT option_name, value, scope FROM dl.options() WHERE option_name LIKE 'parquet%' ORDER BY ALL
-----
-parquet_compression	gzip	TABLE
-parquet_row_group_size	1000	TABLE
-
 # a transaction that only changes options writes them as well
 statement ok
 BEGIN

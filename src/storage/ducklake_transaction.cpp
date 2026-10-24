@@ -828,13 +828,16 @@ void DuckLakeTransaction::Commit() {
 		UndoConfigOptions();
 		throw;
 	}
-	// a commit that was retried wrote its options last, also where another transaction set them meanwhile
-	for (auto &change : config_option_undo) {
-		if (change.reset) {
-			ducklake_catalog.ResetConfigOption(change.option);
-		} else {
-			ducklake_catalog.SetConfigOption(change.option);
+	if (rewrote_config_options) {
+		// the retried commit wrote its options last, also where another transaction set them meanwhile
+		for (auto &change : config_option_undo) {
+			if (change.reset) {
+				ducklake_catalog.ResetConfigOption(change.option);
+			} else {
+				ducklake_catalog.SetConfigOption(change.option);
+			}
 		}
+		rewrote_config_options = false;
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
@@ -1574,6 +1577,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
 		snapshot.reset();
+	};
+	context.rewrite_before_retry = [&]() {
 		RewriteConfigOptions();
 	};
 	context.query_metadata = [&](string q) {
@@ -1714,13 +1719,17 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 void DuckLakeTransaction::RewriteConfigOptions() {
-	// the rollback of a failed commit attempt also undid the option writes of the transaction
+	if (metadata_manager->CommitsEachStatement()) {
+		// the option writes were committed when they were made, the rollback kept them
+		return;
+	}
 	for (auto &change : config_option_undo) {
 		if (change.reset) {
 			metadata_manager->ResetConfigOption(change.option);
 		} else {
 			metadata_manager->SetConfigOption(change.option);
 		}
+		rewrote_config_options = true;
 	}
 }
 
