@@ -1,5 +1,5 @@
 # name: test/sql/tags/tags_version_gate.test
-# description: snapshot tags need a 1.2 catalog
+# description: snapshot tags need a 2.0 catalog
 # group: [tags]
 
 require ducklake

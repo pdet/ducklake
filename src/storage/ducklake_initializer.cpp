@@ -17,7 +17,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
-#include "metadata_manager/ducklake_metadata_manager_v1_2.hpp"
+#include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
@@ -299,7 +299,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
 				metadata_manager.MigrateV11();
-				catalog_version = DuckLakeVersion::V1_2_DEV1;
+				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
@@ -391,8 +391,8 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
-	} else if (version == DuckLakeVersion::V1_2_DEV1) {
-		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_2>(transaction);
+	} else if (version == DuckLakeVersion::V2_0_DEV1) {
+		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");
 	}

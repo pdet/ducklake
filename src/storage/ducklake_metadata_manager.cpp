@@ -639,9 +639,9 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 
 void DuckLakeMetadataManager::MigrateV11() {
 	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + CatalogMutexRowSql() + R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.2-dev1' WHERE key = 'version';
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
-	ExecuteMigration(migrate_query, false, "1.1", "1.2-dev1");
+	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
