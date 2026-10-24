@@ -1071,8 +1071,7 @@ static bool IsRowLineageFieldId(idx_t field_id) {
 	       field_id == idx_t(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
 }
 
-//! Whether the file has a field id that the table never gave out, so that another writer such as Iceberg wrote it
-static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
+static bool HasFieldIdNotGivenOut(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
 	for (auto &column : columns) {
 		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
 			auto field_id = column->field_id.GetIndex();
@@ -1080,11 +1079,22 @@ static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns,
 				return true;
 			}
 		}
-		if (HasForeignFieldIds(column->child_columns, next_column_id)) {
+		if (HasFieldIdNotGivenOut(column->child_columns, next_column_id)) {
 			return true;
 		}
 	}
 	return false;
+}
+
+//! Whether another writer such as Iceberg wrote the file: it has a field id the table never gave out, and none of the
+//! internal columns that DuckLake writes
+static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
+	for (auto &column : columns) {
+		if (StringUtil::StartsWith(column->name, "_ducklake_internal_")) {
+			return false;
+		}
+	}
+	return HasFieldIdNotGivenOut(columns, next_column_id);
 }
 
 void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,

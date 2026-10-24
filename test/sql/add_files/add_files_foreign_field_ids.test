@@ -127,3 +127,12 @@ statement error
 CALL ducklake_add_data_files('lake', 'ice', '{DATA_PATH}/foreign_row_id.parquet', ignore_extra_columns => true)
 ----
 field ID 2147483540 is not a live field
+
+# a file with DuckLake's internal columns was written by DuckLake, so its ids are checked
+statement ok
+COPY (SELECT 1::BIGINT AS a, 100::BIGINT AS _ducklake_internal_row_id) TO '{DATA_PATH}/internal_row_id.parquet' (FIELD_IDS {a: 7, _ducklake_internal_row_id: 2147483540})
+
+statement error
+CALL ducklake_add_data_files('lake', 'ice', '{DATA_PATH}/internal_row_id.parquet', ignore_extra_columns => true)
+----
+field ID 7 is not a live field
