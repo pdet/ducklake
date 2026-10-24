@@ -280,7 +280,10 @@ public:
 	//! Record that a delete predicate was evaluated against a table, even if no rows matched
 	void MarkDeleteAttempted(TableIndex table_id);
 
-	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! The snapshots that live tags protect from expiry, as the transaction sees them
+	set<idx_t> TaggedSnapshots();
+	//! Expires the snapshots that no tag protects and returns them
+	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -298,6 +301,11 @@ public:
 	void ResetConfigOption(const DuckLakeConfigOption &option);
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
+
+	void CreateSnapshotTag(const string &name, idx_t snapshot_id);
+	void DropSnapshotTag(const string &name);
+	//! The live snapshot tags, with the changes of this transaction
+	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 
 	Identifier GetDefaultSchemaName();
 
@@ -373,6 +381,14 @@ private:
 	                                               const DuckLakeDeleteFile &file);
 	//! Return the set of changes made by this transaction
 	TransactionChangeInformation GetTransactionChanges() const;
+	//! The stored name of the live snapshot tag that matches the name, empty when there is none
+	string FindSnapshotTag(const string &name);
+	//! The committed tag that matches the name and this transaction did not drop
+	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
+	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
+	vector<DuckLakeSnapshotTagInfo> GetSnapshotTagsInternal();
+	set<idx_t> TaggedSnapshotsInternal();
+	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -393,6 +409,8 @@ private:
 	mutex flushed_inlined_lock;
 	//! The delete and insert actions of a MERGE finalize in parallel
 	mutex delete_attempted_lock;
+	//! The tag functions of one statement execute in parallel
+	mutex snapshot_tag_lock;
 	//! The snapshots expired by this transaction, deleted when it commits
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
 	DuckLakeSnapshot GetLatestSnapshot();

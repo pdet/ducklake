@@ -321,6 +321,9 @@ public:
 	bool SupportsV1_1Metadata() const {
 		return ducklake_version >= DuckLakeVersion::V1_1;
 	}
+	bool SupportsSnapshotTags() const {
+		return ducklake_version >= DuckLakeVersion::V1_2_DEV1;
+	}
 
 	void OnDetach(ClientContext &context) override;
 

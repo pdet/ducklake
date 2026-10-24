@@ -318,6 +318,15 @@ struct DuckLakeSnapshotInfo {
 	Value commit_extra_info;
 };
 
+struct DuckLakeSnapshotTagInfo {
+	string name;
+	idx_t snapshot_id;
+	//! NULL when the tagged snapshot is gone
+	Value snapshot_time;
+	//! The snapshot that created the tag, unset until its transaction commits
+	optional_idx created_snapshot_id;
+};
+
 struct DuckLakeViewColumnTag {
 	string column_name;
 	string key;

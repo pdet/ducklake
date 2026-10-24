@@ -130,6 +130,21 @@ public:
 	DuckLakeSetCommitMessage();
 };
 
+class DuckLakeCreateTagFunction : public TableFunction {
+public:
+	DuckLakeCreateTagFunction();
+};
+
+class DuckLakeDropTagFunction : public TableFunction {
+public:
+	DuckLakeDropTagFunction();
+};
+
+class DuckLakeTagsFunction : public DuckLakeBaseMetadataFunction {
+public:
+	DuckLakeTagsFunction();
+};
+
 class DuckLakeOptionsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeOptionsFunction();

@@ -580,6 +580,10 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	//! The live snapshot tags
+	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
+	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped

@@ -5521,6 +5521,51 @@ WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id 
 	                          file_id_column, file_table, filter);
 }
 
+vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags() {
+	if (!transaction.GetCatalog().SupportsSnapshotTags()) {
+		return vector<DuckLakeSnapshotTagInfo>();
+	}
+	auto result = Query(R"(
+SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot
+FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id
+WHERE tag.end_snapshot IS NULL
+ORDER BY tag.begin_snapshot ASC, tag_name ASC;)");
+	result->ThrowIfError("Failed to get snapshot tags from DuckLake: ");
+	auto context = transaction.context.lock();
+	vector<DuckLakeSnapshotTagInfo> tags;
+	for (auto &row : *result) {
+		DuckLakeSnapshotTagInfo tag;
+		tag.name = row.GetValue<string>(0);
+		tag.snapshot_id = row.GetValue<idx_t>(1);
+		tag.snapshot_time = row.IsNull(2) ? Value(LogicalType::TIMESTAMP_TZ)
+		                                  : row.GetBaseValue(2).CastAs(*context, LogicalType::TIMESTAMP_TZ);
+		tag.created_snapshot_id = row.GetValue<idx_t>(3);
+		tags.push_back(std::move(tag));
+	}
+	return tags;
+}
+
+string
+DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+                                                 const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped) {
+	string result;
+	for (auto &entry : dropped) {
+		// the snapshots single out the row when the collation of the catalog folds names
+		auto &tag = entry.second;
+		result += StringUtil::Format(
+		    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS "
+		    "NULL AND tag_name = %s AND snapshot_id = %d AND begin_snapshot = %d;\n",
+		    SQLString(tag.name), tag.snapshot_id, tag.created_snapshot_id.GetIndex());
+	}
+	for (auto &tag : created) {
+		result += StringUtil::Format(
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_tag VALUES (%s, %d, {SNAPSHOT_ID}, NULL);\n",
+		    SQLString(tag.first), tag.second);
+	}
+	return result;
+}
+
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 	GetSnapshot();
@@ -5679,6 +5724,9 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 	tables_to_delete_from = {"ducklake_schema", "ducklake_view", "ducklake_tag", "ducklake_macro"};
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
+	}
+	if (transaction.GetCatalog().SupportsSnapshotTags()) {
+		tables_to_delete_from.push_back("ducklake_snapshot_tag");
 	}
 	bool deleted_schemas = false;
 	for (auto &delete_tbl : tables_to_delete_from) {

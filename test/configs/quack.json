@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Quack expires snapshots before the transaction commits, so a tag dropped in the transaction keeps protecting its snapshot",
+      "paths": [
+        "test/sql/tags/tags_expire_dropped.test"
+      ]
+    },
+    {
       "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
       "paths": [
         "test/sql/alter/alter_drops_empty_inlined_tables.test"

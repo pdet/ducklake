@@ -176,6 +176,10 @@ public:
 	                                  ErrorData &error);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
+	//! Fails when a snapshot tagged by this transaction was expired meanwhile
+	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
+	//! The ids of the snapshots the tags point at, as a SQL list
+	static string TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags);
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                        const DuckLakeCommitContext &context) const;
 
@@ -291,6 +295,10 @@ public:
 	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
+	//! The snapshot tags this transaction creates, with the tagged snapshot
+	case_insensitive_map_t<idx_t> new_snapshot_tags;
+	//! The committed snapshot tags this transaction drops, by their stored name
+	case_insensitive_map_t<DuckLakeSnapshotTagInfo> dropped_snapshot_tags;
 };
 
 } // namespace duckdb
