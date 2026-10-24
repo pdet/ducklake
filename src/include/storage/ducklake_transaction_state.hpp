@@ -285,8 +285,6 @@ public:
 	//! The tables whose inlined file deletions were flushed, with the snapshot of the flush
 	map<TableIndex, idx_t> flushed_inlined_file_deletions;
 	vector<DuckLakeConfigOption> committed_table_options;
-	//! The options set and reset in the transaction, in order, with the values a rollback restores in the catalog
-	vector<DuckLakeConfigOptionUndo> config_option_changes;
 	//! The statistics written for the fields that this commit adds to existing tables
 	map<TableIndex, map<FieldIndex, DuckLakeColumnStats>> added_field_stats;
 	//! The tables whose stored size this commit reads back from their live data files

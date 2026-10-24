@@ -5822,7 +5822,23 @@ static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope,
 	}
 }
 
-bool DuckLakeMetadataManager::ConfigOptionExists(const DuckLakeConfigOption &option) {
+bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	result->ThrowIfError("Failed to reset config option in DuckLake: ");
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
+}
+
+void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
+	// check if the option already exists
+	auto &option_key = option.option.key;
+	auto &option_value = option.option.value;
 	string scope;
 	string scope_id;
 	string scope_filter;
@@ -5832,28 +5848,23 @@ SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE key = %s AND %s
 )",
-	                                       SQLString(option.option.key), scope_filter));
-	result->ThrowIfError("Failed to read config option in DuckLake: ");
-	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
-}
+	                                       SQLString(option_key), scope_filter));
 
-string DuckLakeMetadataManager::WriteConfigOptionChanges(const vector<DuckLakeConfigOptionUndo> &changes) {
-	string batch_query;
-	for (auto &change : changes) {
-		auto &option = change.option;
-		string scope;
-		string scope_id;
-		string scope_filter;
-		ConfigOptionScope(option, scope, scope_id, scope_filter);
-		batch_query += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;",
-		                                  SQLString(option.option.key), scope_filter);
-		if (!change.reset) {
-			batch_query +=
-			    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);",
-			                       SQLString(option.option.key), SQLString(option.option.value), scope, scope_id);
-		}
+	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	if (count == 0) {
+		// option does not yet exist - insert the value
+		result = Execute(StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
+)",
+		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
+	} else {
+		// option already exists - update it
+		result = Execute(StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
+)",
+		                                    SQLString(option_value), SQLString(option_key), scope_filter));
 	}
-	return batch_query;
+	result->ThrowIfError("Failed to insert config option in DuckLake: ");
 }
 
 bool DuckLakeMetadataManager::IsEncrypted() const {

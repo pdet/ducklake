@@ -1003,39 +1003,20 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 //! The field ids of `table_id`'s skip_stats_columns option, read from the metadata rather than the catalog so
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
 //! which TryMergeInlinedStats only produces for scalar roots.
-static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id,
-                                              const vector<DuckLakeConfigOptionUndo> &option_changes,
-                                              const DuckLakeCommitContext &context) {
-	// a change of the option in this transaction is only written later in the commit
-	optional_ptr<const DuckLakeConfigOptionUndo> option_change;
-	for (auto &change : option_changes) {
-		if (change.option.option.key == "skip_stats_columns" && change.option.table_id == table_id) {
-			option_change = &change;
-		}
-	}
-	vector<string> values;
-	if (option_change) {
-		if (!option_change->reset) {
-			values.push_back(option_change->option.option.value);
-		}
-	} else {
-		auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
-		                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
-		                                table_id.index);
-		auto stats_option = context.query_metadata(query);
-		stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
-		for (auto &row : *stats_option) {
-			if (row.IsNull(0)) {
-				// LCOV_EXCL_START
-				continue;
-				// LCOV_EXCL_STOP
-			}
-			values.push_back(row.GetValue<string>(0));
-		}
-	}
+static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
 	set<FieldIndex> result;
-	for (auto &value : values) {
-		for (auto &entry : StringUtil::Split(value, ',')) {
+	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
+	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
+	                                table_id.index);
+	auto stats_option = context.query_metadata(query);
+	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
+	for (auto &row : *stats_option) {
+		if (row.IsNull(0)) {
+			// LCOV_EXCL_START
+			continue;
+			// LCOV_EXCL_STOP
+		}
+		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
 			idx_t field_index;
 			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
 				result.insert(FieldIndex(field_index));
@@ -1193,7 +1174,7 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 
 	// 4. A column the table opted out of bounds for does not get them back here - no file records bounds for it,
 	//    so step 3 would hand back bounds describing the inlined rows alone.
-	for (auto &field_index : ReadSkippedStatsFields(table_id, config_option_changes, context)) {
+	for (auto &field_index : ReadSkippedStatsFields(table_id, context)) {
 		auto entry = new_stats.column_stats.find(field_index);
 		if (entry == new_stats.column_stats.end()) {
 			continue;
@@ -2434,7 +2415,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
-	batch_queries += DuckLakeMetadataManager::WriteConfigOptionChanges(config_option_changes);
 
 	return batch_queries;
 }

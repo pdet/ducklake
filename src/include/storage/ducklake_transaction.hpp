@@ -296,7 +296,6 @@ public:
 	}
 	void SetConfigOption(const DuckLakeConfigOption &option);
 	void ResetConfigOption(const DuckLakeConfigOption &option);
-	const vector<DuckLakeConfigOptionUndo> &GetConfigOptionChanges() const;
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
@@ -366,6 +365,8 @@ private:
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
+	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
+	void RewriteConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -416,6 +417,8 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
+	//! Previous values of config options set by this transaction, for rollback
+	vector<DuckLakeConfigOptionUndo> config_option_undo;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;
