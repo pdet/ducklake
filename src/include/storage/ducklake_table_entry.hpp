@@ -35,6 +35,8 @@ class ParsedExpression;
 struct ColumnChangeInfo {
 	vector<DuckLakeNewColumn> new_fields;
 	vector<FieldIndex> dropped_fields;
+	//! Fields retyped to a finer timestamp unit
+	vector<FieldIndex> refined_timestamp_fields;
 
 	void DropField(const DuckLakeFieldId &field_id);
 };
@@ -203,6 +205,7 @@ public:
 	                                              const vector<unique_ptr<ParsedExpression>> &sort_keys);
 
 private:
+	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, DuckLakeTransaction &transaction, AlterTableInfo &info);
 	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);
