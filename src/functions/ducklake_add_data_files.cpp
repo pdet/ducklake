@@ -187,6 +187,7 @@ private:
 	void CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids, unordered_set<idx_t> &result);
 	void ValidateParquetFieldIds(const ParquetFileMetadata &file, const vector<unique_ptr<ParquetColumn>> &columns,
 	                             const unordered_set<idx_t> &live_field_ids, const string &prefix = string());
+	bool IsDroppedField(idx_t field_id, const string &name);
 	void MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result);
 	DuckLakeColumnStats ConstantColumnStats(const ParquetFileMetadata &file_metadata, FieldIndex field_index,
 	                                        const LogicalType &field_type, const Value &value) const;
@@ -217,6 +218,8 @@ private:
 	vector<string> partition_key_names;
 	//! The hive keys of the identity partitions by field index
 	unordered_map<idx_t, string> identity_hive_keys;
+	//! The names the table gave its column ids, loaded when a file has an id that is not live
+	unique_ptr<unordered_map<idx_t, vector<string>>> column_names_by_id;
 };
 
 static string GetStringOrEmpty(const VectorIterator<string_t>::ValueEntry &entry) {
@@ -1063,6 +1066,26 @@ void DuckLakeFileProcessor::CollectLiveFieldIds(const vector<unique_ptr<DuckLake
 	}
 }
 
+bool DuckLakeFileProcessor::IsDroppedField(idx_t field_id, const string &name) {
+	if (IsTransactionLocal(table.GetTableId())) {
+		return false;
+	}
+	if (!column_names_by_id) {
+		column_names_by_id = make_uniq<unordered_map<idx_t, vector<string>>>(
+		    transaction.GetMetadataManager().GetColumnNamesById(table.GetTableId()));
+	}
+	auto entry = column_names_by_id->find(field_id);
+	if (entry == column_names_by_id->end()) {
+		return false;
+	}
+	for (auto &column_name : entry->second) {
+		if (StringUtil::CIEquals(column_name, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,
                                                     const vector<unique_ptr<ParquetColumn>> &columns,
                                                     const unordered_set<idx_t> &live_field_ids, const string &prefix) {
@@ -1070,7 +1093,10 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
 		const auto full_name = prefix.empty() ? column->name : StringUtil::Format("%s.%s", prefix, column->name);
 		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
 			const auto source_field_id = column->field_id.GetIndex();
-			if (live_field_ids.find(source_field_id) == live_field_ids.end()) {
+			// columns map by name, so only the id of a dropped column of that name marks a file written before the
+			// drop, the ids of other writers such as Iceberg are not DuckLake's
+			if (live_field_ids.find(source_field_id) == live_field_ids.end() &&
+			    IsDroppedField(source_field_id, column->name)) {
 				throw InvalidInputException(
 				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
 				    "table \"%s\"",

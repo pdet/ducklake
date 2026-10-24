@@ -5369,6 +5369,17 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 	throw InternalException("Invalid result for GetNextColumnId");
 }
 
+unordered_map<idx_t, vector<string>> DuckLakeMetadataManager::GetColumnNamesById(TableIndex table_id) {
+	auto result = Query(StringUtil::Format(
+	    "SELECT column_id, column_name FROM {METADATA_CATALOG}.ducklake_column WHERE table_id = %d", table_id.index));
+	result->ThrowIfError("Failed to get the column names of a table in DuckLake: ");
+	unordered_map<idx_t, vector<string>> names;
+	for (auto &row : *result) {
+		names[row.GetValue<idx_t>(0)].push_back(row.GetValue<string>(1));
+	}
+	return names;
+}
+
 string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
                                                    const vector<DuckLakePath> &resolved_paths) {
 	if (compactions.empty()) {
