@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_foreign_field_ids')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_foreign_field_ids', DATA_INLINING_ROW_LIMIT 0)
 
 # the field ids an Iceberg table has after dropping its column 2 and adding columns 4 and 5
 statement ok
@@ -85,3 +85,45 @@ query I
 SELECT count(*) FROM lake.r
 ----
 0
+
+# also for a column added and dropped in the transaction
+statement ok
+CREATE TABLE lake.tx (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.tx ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.tx VALUES (1, 99)
+
+statement ok
+COPY (SELECT content FROM read_blob('{DATA_PATH}/add_files_foreign_field_ids/main/tx/*.parquet')) TO '{DATA_PATH}/stale_tx.parquet' (FORMAT BLOB)
+
+statement ok
+ALTER TABLE lake.tx DROP COLUMN b
+
+statement ok
+ALTER TABLE lake.tx ADD COLUMN b INTEGER
+
+statement error
+CALL ducklake_add_data_files('lake', 'tx', '{DATA_PATH}/stale_tx.parquet')
+----
+field ID 2 is not a live field
+
+statement ok
+ROLLBACK
+
+# the field ids of the row lineage columns are refused also in a file of another writer
+statement ok
+CREATE TABLE lake.ice (a BIGINT)
+
+statement ok
+COPY (SELECT 1::BIGINT AS a, 100::BIGINT AS _row_id) TO '{DATA_PATH}/foreign_row_id.parquet' (FIELD_IDS {a: 7, _row_id: 2147483540})
+
+statement error
+CALL ducklake_add_data_files('lake', 'ice', '{DATA_PATH}/foreign_row_id.parquet', ignore_extra_columns => true)
+----
+field ID 2147483540 is not a live field

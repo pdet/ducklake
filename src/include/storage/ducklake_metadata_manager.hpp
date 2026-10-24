@@ -540,8 +540,6 @@ public:
 	                                                 idx_t newest_snapshot_id);
 
 	virtual idx_t GetNextColumnId(TableIndex table_id);
-	//! The names the table gave each of its column ids, also those of dropped columns
-	unordered_map<idx_t, vector<string>> GetColumnNamesById(TableIndex table_id);
 	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
 	                                                const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
