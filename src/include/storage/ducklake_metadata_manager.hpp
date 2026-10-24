@@ -432,6 +432,8 @@ public:
 	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
+	//! Writes the options a transaction set and reset, in order
+	static string WriteConfigOptionChanges(const vector<DuckLakeConfigOptionUndo> &changes);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
 	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
 	//! SQL that writes new data files, shared with the server-side commit path. Returns SQL with
@@ -577,8 +579,7 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
-	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	bool ConfigOptionExists(const DuckLakeConfigOption &option);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

@@ -92,6 +92,45 @@ static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, c
 	        scope_entry.empty() ? Value() : Value(scope_entry)};
 }
 
+//! Replaces or removes the option in the settings of its scope, as the commit of the change does
+template <class T, class IN_SCOPE, class GET_TAG>
+static void ApplyOptionChange(vector<T> &settings, const DuckLakeConfigOptionUndo &change, T new_setting,
+                              IN_SCOPE in_scope, GET_TAG get_tag) {
+	for (idx_t i = 0; i < settings.size(); i++) {
+		if (in_scope(settings[i]) && get_tag(settings[i]).key == change.option.option.key) {
+			settings.erase_at(i);
+			break;
+		}
+	}
+	if (!change.reset) {
+		settings.push_back(std::move(new_setting));
+	}
+}
+
+//! The options as the transaction sees them, with the changes its commit writes
+static void ApplyOptionChanges(DuckLakeMetadata &metadata, const vector<DuckLakeConfigOptionUndo> &changes) {
+	for (auto &change : changes) {
+		auto &option = change.option;
+		if (option.table_id.IsValid()) {
+			DuckLakeTableSetting setting {option.table_id, option.option};
+			ApplyOptionChange(
+			    metadata.table_settings, change, std::move(setting),
+			    [&](const DuckLakeTableSetting &entry) { return entry.table_id == option.table_id; },
+			    [](DuckLakeTableSetting &entry) -> DuckLakeTag & { return entry.tag; });
+		} else if (option.schema_id.IsValid()) {
+			DuckLakeSchemaSetting setting {option.schema_id, option.option};
+			ApplyOptionChange(
+			    metadata.schema_settings, change, std::move(setting),
+			    [&](const DuckLakeSchemaSetting &entry) { return entry.schema_id == option.schema_id; },
+			    [](DuckLakeSchemaSetting &entry) -> DuckLakeTag & { return entry.tag; });
+		} else {
+			ApplyOptionChange(
+			    metadata.tags, change, option.option, [](const DuckLakeTag &) { return true; },
+			    [](DuckLakeTag &entry) -> DuckLakeTag & { return entry; });
+		}
+	}
+}
+
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
 	auto &ducklake_catalog = bind_data.catalog;
@@ -100,6 +139,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto result = make_uniq<DuckLakeOptionsState>();
 	auto metadata = metadata_manager.LoadDuckLake();
+	ApplyOptionChanges(metadata, transaction.GetConfigOptionChanges());
 
 	// Global options
 	for (auto &tag : metadata.tags) {

@@ -790,10 +790,11 @@ void DuckLakeTransaction::Start() {
 }
 
 void DuckLakeTransaction::UndoConfigOptions() {
-	for (auto it = config_option_undo.rbegin(); it != config_option_undo.rend(); ++it) {
+	auto &changes = state->config_option_changes;
+	for (auto it = changes.rbegin(); it != changes.rend(); ++it) {
 		ducklake_catalog.UndoConfigOption(*it);
 	}
-	config_option_undo.clear();
+	changes.clear();
 }
 
 void DuckLakeTransaction::Commit() {
@@ -812,7 +813,13 @@ void DuckLakeTransaction::Commit() {
 	try {
 		if (ChangesMade()) {
 			FlushChanges();
-		} else if (connection) {
+		} else if (connection || !state->config_option_changes.empty()) {
+			if (!state->config_option_changes.empty()) {
+				// options are written without a new snapshot
+				auto result = metadata_manager->Execute(
+				    DuckLakeMetadataManager::WriteConfigOptionChanges(state->config_option_changes));
+				result->ThrowIfError("Failed to write config options in DuckLake: ");
+			}
 			try {
 				connection->Commit();
 			} catch (std::exception &ex) {
@@ -831,7 +838,7 @@ void DuckLakeTransaction::Commit() {
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
-	config_option_undo.clear();
+	state->config_option_changes.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
@@ -1692,16 +1699,31 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
-	// write the config option to the metadata
-	metadata_manager->SetConfigOption(option);
-	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
-	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
+	// the commit writes the option - the catalog copy is not transactional, so a rollback restores its previous value
+	state->config_option_changes.push_back(ducklake_catalog.SetConfigOption(option));
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
-	if (metadata_manager->ResetConfigOption(option)) {
-		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
+	// an option this transaction does not see is left in place, also when a newer transaction has set it since
+	bool is_set = false;
+	bool changed_here = false;
+	for (auto &change : state->config_option_changes) {
+		if (change.option.option.key == option.option.key && change.option.table_id == option.table_id &&
+		    change.option.schema_id == option.schema_id) {
+			is_set = !change.reset;
+			changed_here = true;
+		}
 	}
+	if (!changed_here) {
+		is_set = metadata_manager->ConfigOptionExists(option);
+	}
+	if (is_set) {
+		state->config_option_changes.push_back(ducklake_catalog.ResetConfigOption(option));
+	}
+}
+
+const vector<DuckLakeConfigOptionUndo> &DuckLakeTransaction::GetConfigOptionChanges() const {
+	return state->config_option_changes;
 }
 
 DuckLakeSnapshotCommit &DuckLakeTransaction::GetCommitInfo() {

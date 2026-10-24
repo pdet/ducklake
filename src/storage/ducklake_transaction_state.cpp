@@ -2415,6 +2415,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+	batch_queries += DuckLakeMetadataManager::WriteConfigOptionChanges(config_option_changes);
 
 	return batch_queries;
 }
