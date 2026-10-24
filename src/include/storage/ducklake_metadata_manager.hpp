@@ -364,6 +364,8 @@ public:
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr);
+	//! Sets the schema version of the partition spec of the files written with an older spec
+	void SetPartitionSchemaVersions(DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> &files);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
