@@ -74,3 +74,38 @@ JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_sna
 WHERE tbl.table_name='kept'
 ----
 new	new
+
+# the option set in the transaction of the rewrite applies as well
+statement ok
+CREATE TABLE ducklake.staged(s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.staged VALUES ('old')
+
+statement ok
+DELETE FROM ducklake.staged
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+INSERT INTO ducklake.staged VALUES ('new')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.staged SET (skip_stats_columns = ['s'])
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'staged', delete_threshold => 0)
+
+statement ok
+COMMIT
+
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats t
+JOIN ducklake_meta.ducklake_table tbl ON tbl.table_id=t.table_id AND tbl.end_snapshot IS NULL
+WHERE tbl.table_name='staged'
+----
+NULL	NULL

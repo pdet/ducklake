@@ -815,9 +815,9 @@ void DuckLakeTransaction::Commit() {
 			FlushChanges();
 		} else if (connection || !state->config_option_changes.empty()) {
 			if (!state->config_option_changes.empty()) {
-				// options are written without a new snapshot
-				auto result = metadata_manager->Execute(
-				    DuckLakeMetadataManager::WriteConfigOptionChanges(state->config_option_changes));
+				// options are written without a new snapshot, in one statement batch like a commit
+				auto options_query = DuckLakeMetadataManager::WriteConfigOptionChanges(state->config_option_changes);
+				auto result = metadata_manager->Execute(DuckLakeSnapshot(), options_query);
 				result->ThrowIfError("Failed to write config options in DuckLake: ");
 			}
 			try {
@@ -834,6 +834,14 @@ void DuckLakeTransaction::Commit() {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
 		UndoConfigOptions();
 		throw;
+	}
+	// the commit wrote the options last, so the catalog takes their values also where another transaction set them
+	for (auto &change : state->config_option_changes) {
+		if (change.reset) {
+			ducklake_catalog.ResetConfigOption(change.option);
+		} else {
+			ducklake_catalog.SetConfigOption(change.option);
+		}
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
