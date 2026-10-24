@@ -632,6 +632,18 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 	ExecuteMigration(V1_1MigrationQuery(has_additions), from_dev1, from_dev1 ? "1.1-dev1" : "1.0", "1.1");
 }
 
+string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, "
+	       "begin_snapshot BIGINT, end_snapshot BIGINT);";
+}
+
+void DuckLakeMetadataManager::MigrateV11() {
+	auto migrate_query = GetSnapshotTagTableStatement() + R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.2-dev1' WHERE key = 'version';
+)";
+	ExecuteMigration(migrate_query, false, "1.1", "1.2-dev1");
+}
+
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
 	auto tables = Query(R"(
 SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
