@@ -606,7 +606,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
 	copy.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
 	copy.rotate = true;
-	// the batch copy of DuckDB fails on sizes above the largest BIGINT, which no row group reaches anyway
+	// the batch copy computes with its sizes as BIGINT, and no row group reaches a larger size
 	static constexpr idx_t MAXIMUM_BATCH_SIZE = NumericLimits<int64_t>::Maximum();
 	copy.batch_size = MinValue<idx_t>(catalog.GetConfigOption<idx_t>("parquet_row_group_size", schema_id, table_id,
 	                                                                 DEFAULT_ROW_GROUP_SIZE, &copy_input.table_options),
