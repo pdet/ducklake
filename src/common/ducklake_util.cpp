@@ -710,7 +710,7 @@ static string ParseMemorySize(ClientContext &, const string &, const Value &val)
 
 static string ParseDeleteThreshold(ClientContext &, const string &, const Value &val) {
 	double threshold = val.GetValue<double>();
-	if (threshold < 0 || threshold > 1) {
+	if (!(threshold >= 0 && threshold <= 1)) {
 		throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
 	}
 	return to_string(threshold);
