@@ -46,6 +46,8 @@ public:
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
 	//! Casts stored text to a type when the value prints as the same text
 	static bool TryReadTextAs(const Value &text, const LogicalType &type, Value &result);
+	//! The snapshot id a VERSION string reads as, such a string is never the name of a snapshot tag
+	static optional<Value> TryParseSnapshotId(const Value &version);
 	//! The expression of a literal default stored as text, for a column of the given type
 	static unique_ptr<ParsedExpression> LiteralDefaultExpression(const Value &text, const LogicalType &type);
 	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type

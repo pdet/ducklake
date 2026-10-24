@@ -814,6 +814,11 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	return true;
 }
 
+optional<Value> DuckLakeUtil::TryParseSnapshotId(const Value &version) {
+	// the cast of a string to the BIGINT version parameters
+	return version.DefaultTryCastAs(LogicalType::BIGINT);
+}
+
 bool DuckLakeUtil::TryReadTextAs(const Value &text, const LogicalType &type, Value &result) {
 	auto typed_value = text.DefaultTryCastAs(type);
 	if (!typed_value || typed_value->ToString() != text.ToString()) {

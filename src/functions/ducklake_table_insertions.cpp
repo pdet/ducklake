@@ -74,7 +74,7 @@ static void DuckLakeChangesExecute(ClientContext &context, TableFunctionInput &d
 
 static TableFunctionSet GetChangesFunctions(const char *name, table_function_bind_t bind) {
 	TableFunctionSet set(name);
-	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ};
+	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ, LogicalType::VARCHAR};
 	for (auto &type : at_types) {
 		set.AddFunction(TableFunction(FunctionSignature()
 		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)

@@ -1928,12 +1928,30 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		// no AT-clause - get the latest snapshot
 		return GetSnapshot();
 	}
+	auto &version = at_clause->GetValue();
+	if (version.IsNull()) {
+		throw InvalidInputException("Snapshot identifier cannot be NULL");
+	}
+	if (at_clause->Unit() == "version" && version.type().id() == LogicalTypeId::VARCHAR &&
+	    !DuckLakeUtil::TryParseSnapshotId(version)) {
+		// the tags of this transaction are not in the metadata yet
+		auto &name = StringValue::Get(version);
+		lock_guard<mutex> tag_guard(snapshot_tag_lock);
+		auto local_tag = state->new_snapshot_tags.find(name);
+		if (local_tag != state->new_snapshot_tags.end()) {
+			BoundAtClause local_clause("version", Value::BIGINT(NumericCast<int64_t>(local_tag->second)));
+			return GetSnapshot(&local_clause, bound);
+		}
+		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end()) {
+			throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
+		}
+	}
 	// snapshots committed after the transaction started are not visible to it
 	auto newest_snapshot_id = GetNewestVisibleSnapshotId();
 	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
 	// this is used as a caching key for the snapshot
 	child_list_t<Value> values;
-	values.push_back(make_pair(Identifier(at_clause->Unit()), at_clause->GetValue()));
+	values.push_back(make_pair(Identifier(at_clause->Unit()), version));
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
 	lock_guard<mutex> guard(snapshot_lock);

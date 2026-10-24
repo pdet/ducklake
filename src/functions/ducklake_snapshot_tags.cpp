@@ -1,3 +1,4 @@
+#include "common/ducklake_util.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -46,6 +47,10 @@ static unique_ptr<FunctionData> CreateTagBind(ClientContext &context, TableFunct
                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = GetTagCatalog(context, input, DatabaseModificationType::CREATE_CATALOG_ENTRY);
 	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
+	// a string that reads as a snapshot id keeps naming that snapshot
+	if (DuckLakeUtil::TryParseSnapshotId(input.inputs[1])) {
+		throw BinderException("A snapshot tag cannot be named like a snapshot id, got \"%s\"", result->name);
+	}
 	TagReturnTypes(return_types, names);
 	Value version;
 	Value timestamp;

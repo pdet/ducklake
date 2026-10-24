@@ -4889,12 +4889,11 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
 	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
 	if (unit == "version") {
-		result =
-		    Query(StringUtil::Format(R"(
+		result = Query(StringUtil::Format(R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu%s;)",
-		                             val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>(), visible_condition));
+		                                  ResolveSnapshotVersion(val), visible_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
@@ -5544,6 +5543,35 @@ ORDER BY tag.begin_snapshot ASC, tag_name ASC;)");
 		tags.push_back(std::move(tag));
 	}
 	return tags;
+}
+
+optional_idx DuckLakeMetadataManager::GetTaggedSnapshot(const string &name) {
+	for (auto &tag : GetSnapshotTags()) {
+		if (StringUtil::CIEquals(tag.name, name)) {
+			return tag.snapshot_id;
+		}
+	}
+	return optional_idx();
+}
+
+idx_t DuckLakeMetadataManager::ResolveSnapshotVersion(const Value &version) {
+	if (version.type().id() != LogicalTypeId::VARCHAR) {
+		return version.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	}
+	// a number in a string is a snapshot id, as before snapshot tags existed
+	auto snapshot_id = DuckLakeUtil::TryParseSnapshotId(version);
+	if (snapshot_id) {
+		return snapshot_id->DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	}
+	auto &name = StringValue::Get(version);
+	auto tagged = GetTaggedSnapshot(name);
+	if (tagged.IsValid()) {
+		return tagged.GetIndex();
+	}
+	if (transaction.GetCatalog().SupportsSnapshotTags()) {
+		throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
+	}
+	throw InvalidInputException("No snapshot found at version %s", name);
 }
 
 string

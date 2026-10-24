@@ -68,6 +68,23 @@ CALL ducklake_create_tag('dl', '')
 ----
 Tag name cannot be NULL or empty
 
+# a name that reads as a snapshot id keeps naming that snapshot
+statement error
+CALL ducklake_create_tag('dl', '2')
+----
+A snapshot tag cannot be named like a snapshot id, got "2"
+
+statement error
+CALL ducklake_create_tag('dl', '-0.4')
+----
+A snapshot tag cannot be named like a snapshot id, got "-0.4"
+
+# a drop takes any name, so no tag is out of its reach
+statement error
+CALL ducklake_drop_tag('dl', '2')
+----
+A snapshot tag with the name "2" does not exist
+
 statement error
 CALL ducklake_create_tag('dl', 'both', version => 1, timestamp => '2000-01-01 00:00:00+00')
 ----

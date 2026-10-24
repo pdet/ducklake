@@ -62,6 +62,12 @@ SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
 1
 2
 
+query I
+SELECT i FROM dl.t AT (VERSION => 'v3') ORDER BY i
+----
+1
+2
+
 # after dropping the tag the snapshot expires like any other
 statement ok
 CALL ducklake_drop_tag('dl', 'v3')

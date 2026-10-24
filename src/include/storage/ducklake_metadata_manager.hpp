@@ -582,6 +582,10 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	//! The live snapshot tags
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
+	//! The snapshot of the live snapshot tag with the name, if any
+	optional_idx GetTaggedSnapshot(const string &name);
+	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
+	idx_t ResolveSnapshotVersion(const Value &version);
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);

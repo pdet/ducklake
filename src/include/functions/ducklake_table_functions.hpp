@@ -35,6 +35,8 @@ public:
 	static string GetStringOption(const TableFunctionBindInput &input, const string &name);
 	static string GetTableName(const Value &input);
 	static BoundAtClause AtClauseFromValue(const Value &input);
+	//! A string is the name of a snapshot tag, any other value a snapshot id
+	static BoundAtClause VersionAtClauseFromValue(const Value &input);
 };
 
 struct MetadataBindData : public TableFunctionData {
