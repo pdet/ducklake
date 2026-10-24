@@ -53,6 +53,9 @@ statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_tag')
 
 statement ok
+CALL postgres_execute('pg', 'DELETE FROM dev1_skips_present_ddl.ducklake_metadata WHERE key = ''catalog_mutex''')
+
+statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
 
 # ALTER TABLE fails on a view even when the column exists

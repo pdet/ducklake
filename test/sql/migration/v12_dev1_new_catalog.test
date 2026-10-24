@@ -1,5 +1,5 @@
 # name: test/sql/migration/v12_dev1_new_catalog.test
-# description: a new catalog is created at 1.2-dev1 with the snapshot tag table
+# description: a new catalog is created at 1.2-dev1 with the snapshot tag table and the catalog mutex row
 # group: [migration]
 
 require ducklake
@@ -28,6 +28,11 @@ end_snapshot	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+0
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'catalog_mutex'
 ----
 0
 

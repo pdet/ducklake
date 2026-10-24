@@ -186,6 +186,35 @@ SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [0, 3])
 ----
 0
 
+# a snapshot expired earlier in the transaction cannot be tagged
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+BEGIN
+
+# the version is resolved before the expiry, so it is cached
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 6)
+----
+2
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [6])
+
+statement error
+CALL ducklake_create_tag('dl', 'expired_here', version => 6)
+----
+<REGEX>:.*(expired by this transaction|No snapshot found at version 6).*
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 6
+----
+1
+
 # a read-only transaction cannot create or drop tags
 statement ok
 BEGIN TRANSACTION READ ONLY

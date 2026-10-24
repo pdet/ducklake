@@ -26,6 +26,12 @@
       ]
     },
     {
+      "reason": "Quack expires snapshots when the transaction commits, so an expiry in a transaction does not conflict with a concurrent tag",
+      "paths": [
+        "test/sql/tags/tags_expire_conflict.test"
+      ]
+    },
+    {
       "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
       "paths": [
         "test/sql/alter/alter_drops_empty_inlined_tables.test"

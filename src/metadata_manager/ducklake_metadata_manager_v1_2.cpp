@@ -10,6 +10,7 @@ template <typename Base>
 string DuckLakeMetadataManagerV1_2<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::CatalogMutexRowSql();
 	return result;
 }
 

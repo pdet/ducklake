@@ -638,7 +638,7 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + R"(
+	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + CatalogMutexRowSql() + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.2-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "1.2-dev1");
@@ -5230,6 +5230,31 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 		                                  table_id.index, table_id.index);
 	}
 	return batch_query;
+}
+
+string DuckLakeMetadataManager::CatalogMutexRowSql() {
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) SELECT 'catalog_mutex', '0' "
+	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'catalog_mutex');\n";
+}
+
+string DuckLakeMetadataManager::CatalogMutexSql() {
+	// the value changes, an update to the same value is no write on DuckDB, a missing row is added
+	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = CAST(CAST(value AS BIGINT) + 1 AS VARCHAR) "
+	       "WHERE key = 'catalog_mutex';\n" +
+	       CatalogMutexRowSql();
+}
+
+void DuckLakeMetadataManager::TakeCatalogMutex() {
+	auto result = Execute(CatalogMutexSql());
+	if (!result->HasError()) {
+		return;
+	}
+	auto &error = result->GetErrorObject();
+	if (IsRetryableCommitError(error.RawMessage()) || DuckLakeTransaction::RetryOnError(error.RawMessage())) {
+		throw TransactionException(
+		    "Transaction conflict: a concurrent transaction tagged or expired snapshots, retry the transaction");
+	}
+	error.Throw("Failed to take the catalog mutex in DuckLake: ");
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {

@@ -1,0 +1,73 @@
+# name: test/sql/tags/tags_mutex_row.test
+# description: the catalog mutex row counts the commits that create tags and the expiries, and is added when a catalog lacks it
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_mutex_row_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+0
+
+statement ok
+CALL ducklake_create_tag('dl', 'one')
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+1
+
+# a drop pins nothing and a commit without tag changes leaves it alone
+statement ok
+CALL ducklake_drop_tag('dl', 'one')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+1
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+2
+
+# a catalog without the row gets it back
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+
+statement ok
+CALL ducklake_create_tag('dl', 'again')
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+0
+
+statement ok
+CALL ducklake_create_tag('dl', 'more')
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'catalog_mutex'
+----
+1

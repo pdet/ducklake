@@ -580,6 +580,12 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	//! Adds the row of ducklake_metadata that expiry and the commits that pin snapshots update to serialize
+	static string CatalogMutexRowSql();
+	//! The statement that takes the catalog mutex, the first of a batch that pins snapshots
+	static string CatalogMutexSql();
+	//! Fails with a transaction conflict when a concurrent transaction took the mutex
+	void TakeCatalogMutex();
 	//! The live snapshot tags
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 	//! The snapshot of the live snapshot tag with the name, if any

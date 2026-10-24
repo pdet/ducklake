@@ -10,7 +10,8 @@ struct ExpireSnapshotsBindData : public MetadataBindData {
 	}
 
 	DuckLakeCatalog &catalog;
-	vector<DuckLakeSnapshotInfo> snapshots;
+	//! The criterion of the expiry, empty when nothing is expired
+	string filter;
 	bool dry_run = false;
 };
 
@@ -85,15 +86,12 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
-	auto tagged_snapshots = transaction.TaggedSnapshots();
-	for (auto &snapshot : metadata_manager.GetAllSnapshots(filter)) {
-		if (tagged_snapshots.find(snapshot.id) != tagged_snapshots.end()) {
-			continue;
+	result->filter = filter;
+	if (result->dry_run) {
+		auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
+		for (auto &snapshot : transaction.ExpirableSnapshots(filter)) {
+			result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
 		}
-		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
-		result->snapshots.push_back(std::move(snapshot));
 	}
 	return std::move(result);
 }
@@ -106,10 +104,8 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 		if (data.dry_run) {
 			state.rows = data.rows;
 		} else {
-			// an earlier function of the same statement may have tagged a candidate
 			auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-			for (auto &snapshot : transaction.ExpireSnapshots(data.snapshots)) {
-				data.catalog.InvalidateSchemaCache(snapshot.schema_version);
+			for (auto &snapshot : transaction.ExpireSnapshots(data.filter)) {
 				state.rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
 			}
 		}

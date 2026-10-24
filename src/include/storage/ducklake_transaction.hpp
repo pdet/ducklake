@@ -280,10 +280,10 @@ public:
 	//! Record that a delete predicate was evaluated against a table, even if no rows matched
 	void MarkDeleteAttempted(TableIndex table_id);
 
-	//! The snapshots that live tags protect from expiry, as the transaction sees them
-	set<idx_t> TaggedSnapshots();
-	//! Expires the snapshots that no tag protects and returns them
-	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! The snapshots the criterion selects that no tag protects, as the transaction sees them
+	vector<DuckLakeSnapshotInfo> ExpirableSnapshots(const string &filter);
+	//! Expires the snapshots the criterion selects, under the catalog mutex, and returns them
+	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const string &filter);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -388,7 +388,8 @@ private:
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTagsInternal();
 	set<idx_t> TaggedSnapshotsInternal();
-	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
+	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -411,8 +412,8 @@ private:
 	mutex delete_attempted_lock;
 	//! The tag functions of one statement execute in parallel
 	mutex snapshot_tag_lock;
-	//! The snapshots expired by this transaction, deleted when it commits
-	vector<DuckLakeSnapshotInfo> expired_snapshots;
+	//! The expiry criteria of this transaction, applied when it commits
+	vector<string> expiry_filters;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

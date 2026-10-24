@@ -164,6 +164,63 @@ SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'expired'
 ----
 0
 
+# a tag of a snapshot that another transaction expired while the tag was pending is not created
+statement ok
+INSERT INTO dl.t VALUES (5)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'gone', version => 9)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [9])
+
+statement error con1
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'gone'
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 9
+----
+0
+
+# the same when the expiry runs in a transaction that commits before the tag
+statement ok
+INSERT INTO dl.t VALUES (6)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [10])
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'gone', version => 10)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 10
+----
+0
+
 # the drop of a tag conflicts with a tag committed after the drop was validated, also without immediate transactions
 statement ok
 SET immediate_transaction_mode=false
@@ -184,7 +241,7 @@ statement ok con2
 CALL ducklake_drop_tag('dl', 'replaced')
 
 statement ok con2
-CALL ducklake_create_tag('dl', 'replaced', version => 9)
+CALL ducklake_create_tag('dl', 'replaced', version => 11)
 
 statement ok con2
 COMMIT
@@ -197,7 +254,7 @@ Transaction conflict
 query II
 SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'replaced'
 ----
-replaced	9
+replaced	11
 
 # a tag created again after a committed drop conflicts with that drop
 statement ok con1
@@ -213,7 +270,7 @@ statement ok con2
 CALL ducklake_drop_tag('dl', 'replaced')
 
 statement ok con2
-CALL ducklake_create_tag('dl', 'replaced', version => 10)
+CALL ducklake_create_tag('dl', 'replaced', version => 12)
 
 statement ok con1
 COMMIT
