@@ -5177,44 +5177,35 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 		    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%s, file_size_bytes=%d, "
 		    "next_row_id=%d WHERE table_id=%d;",
 		    record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index);
-		// One UPDATE for all columns, choosing each column's values with a CASE on column_id. A single
-		// `UPDATE ... FROM (VALUES ...)` corrupts string payloads on DuckDB-backed catalogs when the VALUES list mixes
-		// NULLs with long strings, as geometry and other extra_stats do. The UPDATE only changes existing rows, so a
-		// column without a stats row, such as a struct container, stays without one. ANSI CAST(... AS BOOLEAN) works
-		// on DuckDB, Postgres and SQLite, where `::` does not parse.
+		// One UPDATE for all columns, which only changes existing rows: a column without a stats row, such as a struct
+		// container, stays without one. ANSI CAST(... AS BOOLEAN) works on DuckDB, Postgres and SQLite, where `::` does
+		// not parse.
 		if (!stats.column_stats.empty()) {
-			string column_ids;
-			string contains_null;
-			string contains_nan;
-			string min_value;
-			string max_value;
-			string extra_stats;
-			string min_is_exact;
-			string max_is_exact;
+			vector<string> new_values;
 			for (auto &col_stats : stats.column_stats) {
 				auto sql = ColumnStatsSQL::FromColumnStats(col_stats);
-				auto when = StringUtil::Format(" WHEN %d THEN ", col_stats.column_id.index);
-				column_ids += (column_ids.empty() ? "" : ", ") + to_string(col_stats.column_id.index);
-				contains_null += when + "CAST(" + sql.contains_null + " AS BOOLEAN)";
-				contains_nan += when + "CAST(" + sql.contains_nan + " AS BOOLEAN)";
-				min_value += when + sql.min_val;
-				max_value += when + sql.max_val;
-				extra_stats += when + sql.extra_stats;
-				min_is_exact += when + "CAST(" + sql.min_is_exact + " AS BOOLEAN)";
-				max_is_exact += when + "CAST(" + sql.max_is_exact + " AS BOOLEAN)";
+				auto value = StringUtil::Format("(%d, CAST(%s AS BOOLEAN), CAST(%s AS BOOLEAN), %s, %s, %s",
+				                                col_stats.column_id.index, sql.contains_null, sql.contains_nan,
+				                                sql.min_val, sql.max_val, sql.extra_stats);
+				if (write_stats_exactness) {
+					value += StringUtil::Format(", CAST(%s AS BOOLEAN), CAST(%s AS BOOLEAN)", sql.min_is_exact,
+					                            sql.max_is_exact);
+				}
+				new_values.push_back(value + ")");
 			}
+			string exactness_columns;
 			string exactness_set;
 			if (write_stats_exactness) {
-				exactness_set =
-				    StringUtil::Format(", min_is_exact=CASE column_id%s END, max_is_exact=CASE column_id%s END",
-				                       min_is_exact, max_is_exact);
+				exactness_columns = ", new_min_is_exact, new_max_is_exact";
+				exactness_set = ", min_is_exact=new_min_is_exact, max_is_exact=new_max_is_exact";
 			}
 			batch_query += StringUtil::Format(
-			    "UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET contains_null=CASE column_id%s END, "
-			    "contains_nan=CASE column_id%s END, min_value=CASE column_id%s END, max_value=CASE column_id%s END, "
-			    "extra_stats=CASE column_id%s END%s WHERE table_id=%d AND column_id IN (%s);",
-			    contains_null, contains_nan, min_value, max_value, extra_stats, exactness_set, stats.table_id.index,
-			    column_ids);
+			    "WITH new_values(cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats%s) AS "
+			    "(VALUES %s) UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET "
+			    "contains_null=new_contains_null, "
+			    "contains_nan=new_contains_nan, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats%s "
+			    "FROM new_values WHERE table_id=%d AND column_id=cid;",
+			    exactness_columns, StringUtil::Join(new_values, ", "), exactness_set, stats.table_id.index);
 		}
 	}
 	return batch_query;
