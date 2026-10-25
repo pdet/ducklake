@@ -64,6 +64,16 @@ SELECT count(*) FROM lake.table_changes('t', getvariable('after_last'), get_curr
 ----
 0
 
+query I con1
+SELECT count(*) FROM lake.t AT (TIMESTAMP => getvariable('after_last'))
+----
+1
+
+query I con1
+SELECT count(*) FROM lake.table_changes('t', now() - INTERVAL '1 week', getvariable('after_last'))
+----
+1
+
 statement ok con1
 COMMIT
 

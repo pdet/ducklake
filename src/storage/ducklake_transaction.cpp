@@ -1821,7 +1821,10 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	}
 	// find the snapshot and cache it
 	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound, newest_snapshot_id);
-	snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
+	// a change feed start after the newest snapshot is not a snapshot that AT clauses can read
+	if (result_snapshot.snapshot_id <= newest_snapshot_id) {
+		snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
+	}
 	return result_snapshot;
 }
 
