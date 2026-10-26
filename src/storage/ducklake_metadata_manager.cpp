@@ -2526,11 +2526,13 @@ main_results AS (
 	}
 
 	// A delete file holds deletes up to its partial_max, or up to its begin_snapshot without one, except that a flush
-	// of inlined rows writes deletes of several snapshots without a partial_max next to data files that have one
+	// of inlined rows writes deletes of several snapshots without a partial_max next to data files that have one.
+	// Inlined deletes of the range are matched against all delete files of their data file.
 	auto delete_file_in_range = StringUtil::Format(
 	    "(begin_snapshot >= %d OR partial_max >= %d OR (partial_max IS NULL AND data_file_id IN (SELECT data_file_id "
-	    "FROM {METADATA_CATALOG}.ducklake_data_file WHERE table_id = %d AND partial_max IS NOT NULL)))",
-	    start_snapshot.snapshot_id, start_snapshot.snapshot_id, table_id.index);
+	    "FROM {METADATA_CATALOG}.ducklake_data_file WHERE table_id = %d AND partial_max IS NOT NULL))%s)",
+	    start_snapshot.snapshot_id, start_snapshot.snapshot_id, table_id.index,
+	    has_inlined_table ? " OR data_file_id IN (SELECT file_id FROM inlined_dels)" : "");
 
 	// Main query: partial deletes from delete_file table and full file deletes
 	query += StringUtil::Format(R"(
@@ -2612,12 +2614,12 @@ JOIN inlined_dels ON data.data_file_id = inlined_dels.file_id
 WHERE data.table_id = %d
   AND data.data_file_id NOT IN (
       SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_delete_file
-      WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND %s
+      WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
   )
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID})
 )",
 		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
-		                            table_id.index, table_id.index, delete_file_in_range, start_snapshot.snapshot_id);
+		                            table_id.index, table_id.index, start_snapshot.snapshot_id);
 	}
 
 	// Close the main_results CTE and do the final SELECT with LEFT JOIN on inlined_dels
