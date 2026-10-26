@@ -1951,14 +1951,21 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const string &filter) {
 	auto &metadata_manager = GetMetadataManager();
-	// checks the catalog version, and is read before the snapshots so a commit they miss is newer than it
-	auto latest_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
+	optional_idx latest_snapshot_id;
+	if (ExpiresSnapshotsOnCommit()) {
+		// read before the snapshots, so a commit they miss is newer than the snapshot the commit checks for
+		latest_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
+	}
 	auto expired = ExpirableSnapshotsInternal(filter);
 	if (expired.empty()) {
 		return expired;
 	}
+	if (!latest_snapshot_id.IsValid()) {
+		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
+		metadata_manager.GetSnapshot();
+	}
 	metadata_manager.DeleteSnapshots(expired);
-	if (ExpiresSnapshotsOnCommit()) {
+	if (latest_snapshot_id.IsValid()) {
 		if (!expiry_snapshot_id.IsValid()) {
 			expiry_snapshot_id = latest_snapshot_id;
 		}
