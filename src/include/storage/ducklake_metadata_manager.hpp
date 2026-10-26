@@ -621,6 +621,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
+	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);
