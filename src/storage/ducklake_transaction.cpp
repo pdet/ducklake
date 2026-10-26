@@ -1807,10 +1807,11 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	}
 	// snapshots committed after the transaction started are not visible to it
 	auto newest_snapshot_id = GetNewestVisibleSnapshotId();
-	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
-	// this is used as a caching key for the snapshot
+	// construct a struct value from the AT clause and the bound in the form of {"unit": value, "bound": bound}
+	// this is used as a caching key for the snapshot, as a timestamp resolves to another snapshot per bound
 	child_list_t<Value> values;
 	values.push_back(make_pair(Identifier(at_clause->Unit()), at_clause->GetValue()));
+	values.push_back(make_pair(Identifier("bound"), Value::UTINYINT(static_cast<uint8_t>(bound))));
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
 	lock_guard<mutex> guard(snapshot_lock);
