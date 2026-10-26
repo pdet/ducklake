@@ -5520,16 +5520,23 @@ WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id 
 	                          file_id_column, file_table, filter);
 }
 
-vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags() {
+vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
 	if (!transaction.GetCatalog().SupportsSnapshotTags()) {
 		return vector<DuckLakeSnapshotTagInfo>();
 	}
-	auto result = Query(R"(
+	string query = R"(
+SELECT tag_name, snapshot_id, NULL, begin_snapshot
+FROM {METADATA_CATALOG}.ducklake_snapshot_tag
+WHERE end_snapshot IS NULL;)";
+	if (with_snapshot_time) {
+		query = R"(
 SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id
 WHERE tag.end_snapshot IS NULL
-ORDER BY tag.begin_snapshot ASC, tag_name ASC;)");
+ORDER BY tag.begin_snapshot ASC, tag_name ASC;)";
+	}
+	auto result = Query(query);
 	result->ThrowIfError("Failed to get snapshot tags from DuckLake: ");
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotTagInfo> tags;

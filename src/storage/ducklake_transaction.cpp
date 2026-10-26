@@ -1818,10 +1818,10 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTags() {
 	return GetSnapshotTagsInternal();
 }
 
-vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal() {
+vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(bool with_snapshot_time) {
 	auto &metadata_manager = GetMetadataManager();
 	vector<DuckLakeSnapshotTagInfo> result;
-	for (auto &tag : metadata_manager.GetSnapshotTags()) {
+	for (auto &tag : metadata_manager.GetSnapshotTags(with_snapshot_time)) {
 		if (state->dropped_snapshot_tags.find(tag.name) == state->dropped_snapshot_tags.end()) {
 			result.push_back(std::move(tag));
 		}
@@ -1831,9 +1831,11 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal() {
 	}
 	// the times of the snapshots this transaction tagged
 	map<idx_t, Value> snapshot_times;
-	for (auto &snapshot : metadata_manager.GetAllSnapshots(StringUtil::Format(
-	         "snapshot_id IN (%s)", DuckLakeTransactionState::TaggedSnapshotIdList(state->new_snapshot_tags)))) {
-		snapshot_times[snapshot.id] = Value::TIMESTAMPTZ(snapshot.time);
+	if (with_snapshot_time) {
+		for (auto &snapshot : metadata_manager.GetAllSnapshots(StringUtil::Format(
+		         "snapshot_id IN (%s)", DuckLakeTransactionState::TaggedSnapshotIdList(state->new_snapshot_tags)))) {
+			snapshot_times[snapshot.id] = Value::TIMESTAMPTZ(snapshot.time);
+		}
 	}
 	for (auto &tag : state->new_snapshot_tags) {
 		DuckLakeSnapshotTagInfo info;
@@ -1864,7 +1866,7 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 
 set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
 	set<idx_t> result;
-	for (auto &tag : GetSnapshotTagsInternal()) {
+	for (auto &tag : GetSnapshotTagsInternal(false)) {
 		result.insert(tag.snapshot_id);
 	}
 	return result;
