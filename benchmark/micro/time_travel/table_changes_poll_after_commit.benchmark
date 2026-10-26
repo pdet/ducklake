@@ -1,0 +1,49 @@
+# name: benchmark/micro/time_travel/table_changes_poll_after_commit.benchmark
+# description: Ten commits into a lake with 20001 snapshots, each followed by a table_changes poll of its snapshot
+# group: [time_travel]
+
+name Table Changes Poll After Commit
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work poll_after_commit_work
+
+# Warming with a poll of the last fixture snapshot also reads the changes of the whole history before the run
+argument warm_table lake.table_changes('t',20000,20000)
+
+include benchmark/micro/fixtures/snap20k.benchmark.in
+
+run
+INSERT INTO lake.t VALUES (1, 'v1');
+SELECT * FROM lake.table_changes('t', 20001, 20001);
+INSERT INTO lake.t VALUES (2, 'v2');
+SELECT * FROM lake.table_changes('t', 20002, 20002);
+INSERT INTO lake.t VALUES (3, 'v3');
+SELECT * FROM lake.table_changes('t', 20003, 20003);
+INSERT INTO lake.t VALUES (4, 'v4');
+SELECT * FROM lake.table_changes('t', 20004, 20004);
+INSERT INTO lake.t VALUES (5, 'v5');
+SELECT * FROM lake.table_changes('t', 20005, 20005);
+INSERT INTO lake.t VALUES (6, 'v6');
+SELECT * FROM lake.table_changes('t', 20006, 20006);
+INSERT INTO lake.t VALUES (7, 'v7');
+SELECT * FROM lake.table_changes('t', 20007, 20007);
+INSERT INTO lake.t VALUES (8, 'v8');
+SELECT * FROM lake.table_changes('t', 20008, 20008);
+INSERT INTO lake.t VALUES (9, 'v9');
+SELECT * FROM lake.table_changes('t', 20009, 20009);
+INSERT INTO lake.t VALUES (10, 'v10');
+SELECT * FROM lake.table_changes('t', 20010, 20010);
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset gives the polled snapshots other rows, and an extra commit a snapshot after 20010
+result_query III
+SELECT count(*), sum(id), (SELECT max(snapshot_id) FROM lake.snapshots())
+FROM lake.table_changes('t', 20001, 20010) WHERE change_type = 'insert'
+----
+10	55	20010
