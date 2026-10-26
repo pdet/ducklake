@@ -18,26 +18,10 @@ argument warm_table lake.table_changes('t',20000,20000)
 include benchmark/micro/fixtures/snap20k.benchmark.in
 
 run
-INSERT INTO lake.t VALUES (1, 'v1');
-SELECT * FROM lake.table_changes('t', 20001, 20001);
-INSERT INTO lake.t VALUES (2, 'v2');
-SELECT * FROM lake.table_changes('t', 20002, 20002);
-INSERT INTO lake.t VALUES (3, 'v3');
-SELECT * FROM lake.table_changes('t', 20003, 20003);
-INSERT INTO lake.t VALUES (4, 'v4');
-SELECT * FROM lake.table_changes('t', 20004, 20004);
-INSERT INTO lake.t VALUES (5, 'v5');
-SELECT * FROM lake.table_changes('t', 20005, 20005);
-INSERT INTO lake.t VALUES (6, 'v6');
-SELECT * FROM lake.table_changes('t', 20006, 20006);
-INSERT INTO lake.t VALUES (7, 'v7');
-SELECT * FROM lake.table_changes('t', 20007, 20007);
-INSERT INTO lake.t VALUES (8, 'v8');
-SELECT * FROM lake.table_changes('t', 20008, 20008);
-INSERT INTO lake.t VALUES (9, 'v9');
-SELECT * FROM lake.table_changes('t', 20009, 20009);
-INSERT INTO lake.t VALUES (10, 'v10');
-SELECT * FROM lake.table_changes('t', 20010, 20010);
+@for k in range(1, 11)
+INSERT INTO lake.t VALUES (@{k}, 'v@{k}');
+SELECT * FROM lake.table_changes('t', @{20000 + k}, @{20000 + k});
+@end
 
 include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
