@@ -3091,6 +3091,10 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(string &query) {
 	return Query(query);
 }
 
+unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteDropInTransaction(string &query) {
+	return ExecuteInTransaction(query);
+}
+
 unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &query) {
 	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
 	auto result = Query(batch);
