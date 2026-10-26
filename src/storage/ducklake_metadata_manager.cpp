@@ -5609,8 +5609,6 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 }
 
 void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
-	GetSnapshot();
 	unique_ptr<QueryResult> result;
 	vector<TableIndex> stats_table_ids;
 	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");

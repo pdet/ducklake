@@ -589,8 +589,9 @@ public:
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
-	//! Deletes the metadata that only the deleted snapshots referenced
+	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
