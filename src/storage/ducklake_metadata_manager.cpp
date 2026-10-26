@@ -2525,13 +2525,19 @@ main_results AS (
 		query = "WITH main_results AS (\n";
 	}
 
+	// A delete file holds deletes up to its partial_max, or up to its begin_snapshot without one, except that a flush
+	// of inlined rows writes deletes of several snapshots without a partial_max next to data files that have one
+	auto delete_file_in_range = StringUtil::Format(
+	    "(begin_snapshot >= %d OR partial_max >= %d OR (partial_max IS NULL AND data_file_id IN (SELECT data_file_id "
+	    "FROM {METADATA_CATALOG}.ducklake_data_file WHERE table_id = %d AND partial_max IS NOT NULL)))",
+	    start_snapshot.snapshot_id, start_snapshot.snapshot_id, table_id.index);
+
 	// Main query: partial deletes from delete_file table and full file deletes
-	// A delete file holds deletes up to its partial_max, or up to its begin_snapshot without one
 	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND (begin_snapshot >= %d OR partial_max >= %d)
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND %s
 ) AS current_delete
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -2583,8 +2589,8 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
-	                            select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id,
-	                            table_id.index, start_snapshot.snapshot_id, table_id.index, select_list, table_id.index,
+	                            select_list, table_id.index, delete_file_in_range, table_id.index,
+	                            start_snapshot.snapshot_id, table_id.index, select_list, table_id.index,
 	                            start_snapshot.snapshot_id, table_id.index);
 
 	if (has_inlined_table) {
@@ -2606,12 +2612,12 @@ JOIN inlined_dels ON data.data_file_id = inlined_dels.file_id
 WHERE data.table_id = %d
   AND data.data_file_id NOT IN (
       SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_delete_file
-      WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+      WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND %s
   )
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID})
 )",
 		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
-		                            table_id.index, table_id.index, start_snapshot.snapshot_id);
+		                            table_id.index, table_id.index, delete_file_in_range, start_snapshot.snapshot_id);
 	}
 
 	// Close the main_results CTE and do the final SELECT with LEFT JOIN on inlined_dels
