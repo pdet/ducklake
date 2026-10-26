@@ -75,14 +75,17 @@ static void DuckLakeChangesExecute(ClientContext &context, TableFunctionInput &d
 static TableFunctionSet GetChangesFunctions(const char *name, table_function_bind_t bind) {
 	TableFunctionSet set(name);
 	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ, LogicalType::VARCHAR};
-	for (auto &type : at_types) {
-		set.AddFunction(TableFunction(FunctionSignature()
-		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
-		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
-		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
-		                                  .AddPositionalOnly("start_snapshot", type)
-		                                  .AddPositionalOnly("end_snapshot", type),
-		                              DuckLakeChangesExecute, bind));
+	// each bound is a snapshot id, a timestamp or a tag name on its own
+	for (auto &start_type : at_types) {
+		for (auto &end_type : at_types) {
+			set.AddFunction(TableFunction(FunctionSignature()
+			                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+			                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+			                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+			                                  .AddPositionalOnly("start_snapshot", start_type)
+			                                  .AddPositionalOnly("end_snapshot", end_type),
+			                              DuckLakeChangesExecute, bind));
+		}
 	}
 	return set;
 }
