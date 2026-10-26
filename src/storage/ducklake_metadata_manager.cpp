@@ -2526,11 +2526,12 @@ main_results AS (
 	}
 
 	// Main query: partial deletes from delete_file table and full file deletes
+	// A delete file holds deletes up to its partial_max, or up to its begin_snapshot without one
 	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID} AND (begin_snapshot >= %d OR partial_max >= %d)
 ) AS current_delete
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -2582,8 +2583,9 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
-	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                            select_list, table_id.index, start_snapshot.snapshot_id, table_id.index);
+	                            select_list, table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id,
+	                            table_id.index, start_snapshot.snapshot_id, table_id.index, select_list, table_id.index,
+	                            start_snapshot.snapshot_id, table_id.index);
 
 	if (has_inlined_table) {
 		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
