@@ -24,8 +24,6 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
     {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure"},
     {"target_file_size", "The target data file size for insertion and compaction operations"},
     {"version", "DuckLake format version"},
-    {"catalog_mutex",
-     "Counter updated by the commits that create snapshot tags and by expiries, which serializes them"},
     {"created_by", "Tool used to write the DuckLake"},
     {"data_path", "Path to data files"},
     {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},

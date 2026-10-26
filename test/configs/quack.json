@@ -20,19 +20,6 @@
   ],
   "skip_tests": [
     {
-      "reason": "Quack expires snapshots before the transaction commits, so a tag dropped in the transaction keeps protecting its snapshot",
-      "paths": [
-        "test/sql/tags/tags_expire_dropped.test"
-      ]
-    },
-    {
-      "reason": "Quack expires snapshots when the transaction commits, so an expiry in a transaction does not conflict with a concurrent tag",
-      "paths": [
-        "test/sql/tags/tags_expire_conflict.test",
-        "test/sql/tags/tags_expire_open_conflict.test"
-      ]
-    },
-    {
       "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
       "paths": [
         "test/sql/alter/alter_drops_empty_inlined_tables.test"
@@ -73,8 +60,7 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
-        "test/sql/tags/postgres_tags_guard.test",
-        "test/sql/tags/postgres_tags_mutex_connection_loss.test",
+        "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"

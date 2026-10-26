@@ -43,11 +43,9 @@ public:
 
 	bool MetadataExists() override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
-	bool IsRetryableCommitError(const string &message) const override;
 
 protected:
 	string MetadataExistsQuery() const override;
-	string TaggedSnapshotsGuardSql(const vector<idx_t> &snapshot_ids) override;
 };
 
 } // namespace duckdb

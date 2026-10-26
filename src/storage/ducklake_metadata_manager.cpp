@@ -638,7 +638,7 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + CatalogMutexRowSql() + R"(
+	auto migrate_query = GetSnapshotTagTableStatement() + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
@@ -5232,51 +5232,6 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::CatalogMutexRowSql() {
-	return "INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) SELECT 'catalog_mutex', '0' "
-	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'catalog_mutex');\n";
-}
-
-string DuckLakeMetadataManager::CatalogMutexSql() {
-	// the value changes, an update to the same value is no write on DuckDB, a missing row is added
-	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = CAST(CAST(value AS BIGINT) + 1 AS VARCHAR) "
-	       "WHERE key = 'catalog_mutex';\n" +
-	       CatalogMutexRowSql();
-}
-
-string DuckLakeMetadataManager::SnapshotIdValuesSql(const vector<idx_t> &snapshot_ids) {
-	auto values = StringUtil::Join(snapshot_ids, snapshot_ids.size(), ", ",
-	                               [](const idx_t &snapshot_id) { return "(" + to_string(snapshot_id) + ")"; });
-	return "(VALUES " + values + ") tagged(snapshot_id)";
-}
-
-string DuckLakeMetadataManager::TaggedSnapshotsGuardSql(const vector<idx_t> &) {
-	// the conflict check runs in the metadata transaction of the batch
-	return string();
-}
-
-string DuckLakeMetadataManager::TaggedSnapshotsGuardMessage() {
-	// no word that marks an error as retryable, an error message can repeat the batch
-	return "the snapshot of a new tag was expired by another transaction";
-}
-
-void DuckLakeMetadataManager::TakeCatalogMutex() {
-	auto result = Execute(CatalogMutexSql());
-	ThrowMutexError(*result, "Failed to take the catalog mutex in DuckLake: ");
-}
-
-void DuckLakeMetadataManager::ThrowMutexError(QueryResult &result, const string &prefix) {
-	if (!result.HasError()) {
-		return;
-	}
-	auto &error = result.GetErrorObject();
-	if (IsRetryableCommitError(error.RawMessage()) || DuckLakeTransaction::RetryOnError(error.RawMessage())) {
-		throw TransactionException(
-		    "Transaction conflict: a concurrent transaction tagged or expired snapshots, retry the transaction");
-	}
-	error.Throw(prefix);
-}
-
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
@@ -5639,14 +5594,24 @@ DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<id
 	return result;
 }
 
-vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	// the changes of expired snapshots are kept, so a transaction that started before them still conflicts
+	auto snapshot_ids = StringUtil::Join(snapshots, snapshots.size(), ", ",
+	                                     [](const DuckLakeSnapshotInfo &snapshot) { return to_string(snapshot.id); });
+	return StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s);\n",
+	                          snapshot_ids);
+}
+
+void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	auto result = Execute(DeleteSnapshotsSql(snapshots));
+	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
+	CleanupExpiredSnapshots(snapshots);
+}
+
+void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 	GetSnapshot();
 	unique_ptr<QueryResult> result;
-	// first delete the actual snapshots
-	auto snapshot_ids = StringUtil::Join(snapshots, snapshots.size(), ", ",
-	                                     [](const DuckLakeSnapshotInfo &snapshot) { return to_string(snapshot.id); });
-
 	vector<TableIndex> stats_table_ids;
 	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
 	result->ThrowIfError("Failed to list table stats for cache invalidation in DuckLake: ");
@@ -5654,38 +5619,6 @@ vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::DeleteSnapshots(const vect
 		stats_table_ids.push_back(TableIndex(row.GetValue<idx_t>(0)));
 	}
 
-	// the changes of expired snapshots are kept, so a transaction that started before them still conflicts
-	// a server that commits each statement takes the mutex in this batch and keeps a snapshot tagged meanwhile
-	bool keeps_tagged = transaction.GetCatalog().SupportsSnapshotTags() && CommitsEachStatement();
-	string delete_batch;
-	string tag_condition;
-	if (keeps_tagged) {
-		delete_batch = CatalogMutexSql();
-		tag_condition = " AND snapshot_id NOT IN (SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot_tag "
-		                "WHERE end_snapshot IS NULL AND snapshot_id IS NOT NULL)";
-	}
-	delete_batch += StringUtil::Format(
-	    "DELETE FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s;\n", snapshot_ids, tag_condition);
-	result = Execute(DuckLakeSnapshot(), delete_batch);
-	vector<DuckLakeSnapshotInfo> expired;
-	if (!keeps_tagged) {
-		result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
-		expired = snapshots;
-	} else {
-		ThrowMutexError(*result, "Failed to delete snapshots in DuckLake: ");
-		result = Query(StringUtil::Format(
-		    "SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s);", snapshot_ids));
-		result->ThrowIfError("Failed to list the expired snapshots in DuckLake: ");
-		set<idx_t> kept;
-		for (auto &row : *result) {
-			kept.insert(row.GetValue<idx_t>(0));
-		}
-		for (auto &snapshot : snapshots) {
-			if (kept.find(snapshot.id) == kept.end()) {
-				expired.push_back(snapshot);
-			}
-		}
-	}
 	// get a list of tables that are no longer required after these deletions
 	result = Query(R"(
 SELECT table_id
@@ -5916,13 +5849,12 @@ WHERE NOT EXISTS (
 		result->ThrowIfError("Failed to delete from ducklake_name_mapping in DuckLake: ");
 	}
 
-	for (auto &snapshot : expired) {
+	for (auto &snapshot : snapshots) {
 		for (auto &table_id : stats_table_ids) {
 			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
 		}
 	}
 	ClearCache();
-	return expired;
 }
 
 string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,

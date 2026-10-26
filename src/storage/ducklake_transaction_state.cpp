@@ -468,6 +468,9 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	for (auto &name : changes.dropped_snapshot_tags) {
 		changes_made.push_back("dropped_tag:" + SQLQuotedIdentifier::ToString(name));
 	}
+	for (auto &snapshot_id : changes.expired_snapshots) {
+		changes_made.push_back("expired_snapshot:" + to_string(snapshot_id));
+	}
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
@@ -2763,6 +2766,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
+	bool wrote_snapshot = true;
 	ducklake_entry_oids_t new_entry_oids;
 	for (idx_t i = 0;; i++) {
 		bool can_retry;
@@ -2784,20 +2788,23 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				commit_snapshot.schema_version++;
 			}
 			can_retry = true;
+			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
+			auto expired_snapshots = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			if (expired_snapshots.empty() && context.only_expires_snapshots) {
+				context.commit_connection();
+				wrote_snapshot = false;
+				break;
+			}
+			for (auto &snapshot : expired_snapshots) {
+				attempt_changes.expired_snapshots.insert(snapshot.id);
+			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			string batch_queries;
-			if (!attempt_changes.created_snapshot_tags.empty()) {
-				// a commit that pins a snapshot is ordered with expiry through the catalog mutex
-				batch_queries = DuckLakeMetadataManager::CatalogMutexSql();
-				vector<idx_t> tagged_snapshots;
-				for (auto &tag : new_snapshot_tags) {
-					tagged_snapshots.push_back(tag.second);
-				}
-				batch_queries += context.tagged_snapshots_guard(tagged_snapshots);
-			}
 			// write the new snapshot
-			batch_queries += DuckLakeMetadataManager::InsertSnapshotSql();
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+			if (!expired_snapshots.empty()) {
+				batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
+			}
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
@@ -2805,6 +2812,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				auto &commit_error = res->GetErrorObject();
 				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
 				commit_error.Throw("Failed to flush changes into DuckLake: ");
+			}
+			if (!expired_snapshots.empty()) {
+				context.cleanup_expired_snapshots(expired_snapshots);
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
@@ -2854,6 +2864,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// clear the inlined table caches - the rollback undid any table creation from the previous attempt
 			context.prepare_retry();
 		}
+	}
+	if (!wrote_snapshot) {
+		return;
 	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(new_entry_oids);

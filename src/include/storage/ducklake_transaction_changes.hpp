@@ -48,6 +48,8 @@ struct TransactionChangeInformation {
 	//! The snapshot tags created and dropped, by name
 	case_insensitive_set_t created_snapshot_tags;
 	case_insensitive_set_t dropped_snapshot_tags;
+	//! The snapshots the commit expires, read in each commit attempt
+	set<idx_t> expired_snapshots;
 
 	//! Whether the commit changes catalog-wide names, which every commit attempt validates
 	bool HasRefChanges() const {
@@ -77,6 +79,7 @@ struct SnapshotChangeInformation {
 	set<TableIndex> tables_flushed_inlined;
 	case_insensitive_set_t created_snapshot_tags;
 	case_insensitive_set_t dropped_snapshot_tags;
+	set<idx_t> expired_snapshots;
 	static SnapshotChangeInformation ParseChangesMade(const string &changes_made);
 };
 

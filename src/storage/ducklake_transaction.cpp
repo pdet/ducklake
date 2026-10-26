@@ -800,7 +800,7 @@ void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
 	}
-	if (!expiry_filters.empty()) {
+	if (!expiry_filters.empty() && !ExpiresSnapshotsOnCommit()) {
 		try {
 			lock_guard<mutex> guard(snapshot_tag_lock);
 			for (auto &filter : expiry_filters) {
@@ -935,9 +935,18 @@ map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMac
 }
 
 bool DuckLakeTransaction::ChangesMade() const {
+	return ChangesMadeBesidesExpiry() || ExpiresSnapshotsOnCommit();
+}
+
+bool DuckLakeTransaction::ChangesMadeBesidesExpiry() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty() || !state->new_snapshot_tags.empty() ||
 	       !state->dropped_snapshot_tags.empty();
+}
+
+bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
+	// a commit that expires is ordered with the commits that tag snapshots by its snapshot id
+	return !expiry_filters.empty() && ducklake_catalog.SupportsSnapshotTags();
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
@@ -1538,9 +1547,29 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
-	context.tagged_snapshots_guard = [&](const vector<idx_t> &snapshot_ids) {
-		return metadata_manager->TaggedSnapshotsGuardSql(snapshot_ids);
-	};
+	vector<DuckLakeSnapshotInfo> committed_expiry;
+	bool expired_by_statements = false;
+	if (ExpiresSnapshotsOnCommit()) {
+		context.get_expired_snapshots = [&](idx_t attempt, idx_t latest_snapshot_id) {
+			expired_by_statements = attempt == 0 && !metadata_manager->CommitsEachStatement();
+			return ExpiredSnapshotsForCommit(attempt, latest_snapshot_id);
+		};
+		context.cleanup_expired_snapshots = [&](const vector<DuckLakeSnapshotInfo> &expired) {
+			if (expired_by_statements) {
+				return;
+			}
+			for (auto &snapshot : expired) {
+				ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
+			}
+			if (metadata_manager->CommitsEachStatement()) {
+				// the batch has committed on the server, a failure must not repeat it
+				committed_expiry = expired;
+				return;
+			}
+			metadata_manager->CleanupExpiredSnapshots(expired);
+		};
+		context.only_expires_snapshots = !ChangesMadeBesidesExpiry();
+	}
 	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
@@ -1706,6 +1735,13 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
+	if (!committed_expiry.empty()) {
+		try {
+			metadata_manager->CleanupExpiredSnapshots(committed_expiry);
+		} catch (std::exception &ex) {
+			ReportPostCommitError(ErrorData(ex).Message());
+		}
+	}
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
@@ -1831,13 +1867,6 @@ set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
 	for (auto &tag : GetSnapshotTagsInternal()) {
 		result.insert(tag.snapshot_id);
 	}
-	auto &metadata_manager = GetMetadataManager();
-	if (metadata_manager.CommitsEachStatement()) {
-		// the expiry runs before the drop of a tag commits, so a dropped tag keeps protecting its snapshot
-		for (auto &tag : metadata_manager.GetSnapshotTags()) {
-			result.insert(tag.snapshot_id);
-		}
-	}
 	return result;
 }
 
@@ -1852,21 +1881,54 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshots(const string &
 		expiry_filters.push_back(filter);
 		return ExpirableSnapshotsInternal(filter);
 	}
+	if (ducklake_catalog.SupportsSnapshotTags()) {
+		// a retry of the commit expires again with what the commits before it changed
+		expiry_filters.push_back(filter);
+	}
 	return ExpireSnapshotsNow(filter);
+}
+
+vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	if (attempt == 0 && !GetMetadataManager().CommitsEachStatement()) {
+		// the statements expired in the metadata transaction of the first attempt
+		if (!expired_in_transaction.empty() && expiry_snapshot_id.GetIndex() != latest_snapshot_id) {
+			throw TransactionException(
+			    "Transaction conflict: a concurrent commit preceded the commit of the snapshot expiry");
+		}
+		return expired_in_transaction;
+	}
+	map<idx_t, DuckLakeSnapshotInfo> expired;
+	for (auto &filter : expiry_filters) {
+		for (auto &snapshot : ExpirableSnapshotsInternal(filter)) {
+			expired.emplace(snapshot.id, std::move(snapshot));
+		}
+	}
+	vector<DuckLakeSnapshotInfo> result;
+	for (auto &entry : expired) {
+		result.push_back(std::move(entry.second));
+	}
+	return result;
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const string &filter) {
 	auto &metadata_manager = GetMetadataManager();
-	if (ducklake_catalog.SupportsSnapshotTags() && !metadata_manager.CommitsEachStatement()) {
-		// the candidates are read under the mutex, after the commits that pinned any of them
-		metadata_manager.TakeCatalogMutex();
+	optional_idx latest_snapshot_id;
+	if (ExpiresSnapshotsOnCommit()) {
+		// read before the snapshots, so a commit they miss is newer than the snapshot the commit checks for
+		latest_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
 	}
-	auto candidates = ExpirableSnapshotsInternal(filter);
-	if (candidates.empty()) {
-		return candidates;
+	auto expired = ExpirableSnapshotsInternal(filter);
+	if (expired.empty()) {
+		return expired;
 	}
-	// a server that commits each statement takes the mutex in the batch that deletes
-	auto expired = metadata_manager.DeleteSnapshots(candidates);
+	metadata_manager.DeleteSnapshots(expired);
+	if (latest_snapshot_id.IsValid()) {
+		if (!expiry_snapshot_id.IsValid()) {
+			expiry_snapshot_id = latest_snapshot_id;
+		}
+		expired_in_transaction.insert(expired_in_transaction.end(), expired.begin(), expired.end());
+	}
 	set<idx_t> expired_ids;
 	for (auto &snapshot : expired) {
 		ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);

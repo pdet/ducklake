@@ -282,8 +282,10 @@ public:
 
 	//! The snapshots the criterion selects that no tag protects, as the transaction sees them
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshots(const string &filter);
-	//! Expires the snapshots the criterion selects, under the catalog mutex, and returns them
+	//! Expires the snapshots the criterion selects and returns them
 	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const string &filter);
+	//! Whether the commit writes a snapshot for the expiry of the transaction
+	bool ExpiresSnapshotsOnCommit() const;
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -390,6 +392,9 @@ private:
 	set<idx_t> TaggedSnapshotsInternal();
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
 	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
+	//! The snapshots the commit attempt expires, those the statements expired for the first attempt
+	vector<DuckLakeSnapshotInfo> ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
 	void AlterEntryInternal(DuckLakeViewEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -412,8 +417,11 @@ private:
 	mutex delete_attempted_lock;
 	//! The tag functions of one statement execute in parallel
 	mutex snapshot_tag_lock;
-	//! The expiry criteria of this transaction, applied when it commits
+	//! The expiry criteria of this transaction, applied by its commit
 	vector<string> expiry_filters;
+	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
+	vector<DuckLakeSnapshotInfo> expired_in_transaction;
+	optional_idx expiry_snapshot_id;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

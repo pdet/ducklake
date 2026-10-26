@@ -1,5 +1,5 @@
 # name: test/sql/tags/tags_expire_conflict.test
-# description: an expiry that started before a concurrent tag commit fails instead of expiring the tagged snapshot
+# description: an expiry that started before a concurrent tag commit retries its commit and keeps the tagged snapshot
 # group: [tags]
 
 require ducklake
@@ -34,26 +34,59 @@ SELECT COUNT(*) FROM dl.t
 statement ok con1
 CALL ducklake_create_tag('dl', 'keep', version => 2)
 
-statement error con2
-CALL ducklake_expire_snapshots('dl', versions => [2])
+# the transaction does not see the tag yet
+query I con2
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2])
 ----
-a concurrent transaction tagged or expired snapshots
+2
 
+# the commit takes the snapshot id of the tag commit, its retry sees the tag and expires nothing
 statement ok con2
-ROLLBACK
+COMMIT
 
 query I
-SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
-----
-1
-
-# the retry sees the tag
-query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2])
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
 ----
 0
+1
+2
+3
+4
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+keep	2
+
+# a concurrent expiry of other snapshots still commits
+statement ok con2
+BEGIN
+
+query I con2
+SELECT COUNT(*) FROM dl.t
+----
+2
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'also', version => 3)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [1, 3])
+
+statement ok con2
+COMMIT
 
 query I
-SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
 ----
-1
+0
+2
+3
+4
+5
+6
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 6
+----
+{snapshots_expired=[1]}

@@ -40,12 +40,6 @@ SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [0], dry_run
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [0])
 
-# expiry adds no catalog mutex row to a 1.1 catalog
-query I
-SELECT COUNT(*) FROM dl.options() WHERE option_name = 'catalog_mutex'
-----
-0
-
 query I
 SELECT COUNT(*) FROM ducklake_snapshots('dl')
 ----

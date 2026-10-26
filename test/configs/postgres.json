@@ -120,12 +120,6 @@
       "paths": [
         "test/sql/issues/issue_1146_column_insert_batches.test"
       ]
-    },
-    {
-      "reason": "The tag commit waits for the row lock of the open expiry on Postgres, which blocks the single-threaded test runner",
-      "paths": [
-        "test/sql/tags/tags_expire_open_conflict.test"
-      ]
     }
   ]
 }

@@ -61,18 +61,6 @@ unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 
-string QuackMetadataManager::TaggedSnapshotsGuardSql(const vector<idx_t> &snapshot_ids) {
-	// the server runs the batch in one transaction, so the check holds under the mutex
-	return StringUtil::Format("SELECT error(%s) FROM %s WHERE snapshot_id NOT IN (SELECT snapshot_id FROM "
-	                          "{METADATA_CATALOG}.ducklake_snapshot);\n",
-	                          SQLString::ToString(TaggedSnapshotsGuardMessage()), SnapshotIdValuesSql(snapshot_ids));
-}
-
-bool QuackMetadataManager::IsRetryableCommitError(const string &message) const {
-	// exactly the error the server raised for the batch, a name in a client side conflict can hold the same text
-	return message == TaggedSnapshotsGuardMessage();
-}
-
 string QuackMetadataManager::MetadataExistsQuery() const {
 	return "SELECT COUNT(*) FROM information_schema.tables "
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
@@ -127,9 +115,11 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 
 //! Whether the commit has to take the client-side path
 static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
+	// the server-side commit cannot create inlined-data tables, delete flushed inlined data, rewrite delete files or
+	// expire snapshots
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
+	       !transaction.GetFlushedInlinedFileDeletions().empty() ||
+	       transaction.GetLocalChanges().HasDatedNewDeletes() || transaction.ExpiresSnapshotsOnCommit();
 }
 
 //! Whether the commit writes inlined file deletions, which create the deletion table of a table on first use
