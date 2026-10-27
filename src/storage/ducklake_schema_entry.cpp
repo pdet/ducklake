@@ -23,6 +23,8 @@
 #include "duckdb/parser/tableref/pivotref.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "functions/ducklake_compaction_functions.hpp"
 
 namespace duckdb {
 
@@ -528,6 +530,55 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
+//! Whether the expression calls the macro, unqualified calls count as they can resolve to it
+static bool CallsMacro(const ParsedExpression &expr, const Identifier &catalog_name, const Identifier &schema_name,
+                       const Identifier &macro_name) {
+	bool calls = false;
+	ParsedExpressionIterator::VisitExpression<FunctionExpression>(expr, [&](const FunctionExpression &function) {
+		auto &name = function.GetQualifiedName();
+		if (!(name.Name() == macro_name)) {
+			return;
+		}
+		if (name.Catalog().empty()) {
+			// the first part of a two-part name can also be the catalog, as in lake.f()
+			calls = calls || name.Schema().empty() || name.Schema() == schema_name || name.Schema() == catalog_name;
+		} else {
+			calls = calls || (name.Catalog() == catalog_name && name.Schema() == schema_name);
+		}
+	});
+	return calls;
+}
+
+//! Column defaults and sort keys are bound on every write, so they fail once a macro they call is dropped
+static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &schema_name,
+                                   const Identifier &macro_name) {
+	auto &catalog_name = catalog.GetName();
+	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+			auto &table = entry.Cast<DuckLakeTableEntry>();
+			for (auto &column : table.GetColumns().Logical()) {
+				if (column.HasDefaultValue() &&
+				    CallsMacro(column.DefaultValue(), catalog_name, schema_name, macro_name)) {
+					throw DependencyException(
+					    "Cannot drop macro \"%s\" because the default of column \"%s\" of table \"%s\" calls it",
+					    macro_name.GetIdentifierName(), column.Name().GetIdentifierName(),
+					    table.name.GetIdentifierName());
+				}
+			}
+			auto sort_data = table.GetSortData();
+			if (!sort_data) {
+				return;
+			}
+			for (auto &order : DuckLakeCompactor::ParseSortOrders(*sort_data)) {
+				if (CallsMacro(*order.expression, catalog_name, schema_name, macro_name)) {
+					throw DependencyException("Cannot drop macro \"%s\" because the sort key of table \"%s\" calls it",
+					                          macro_name.GetIdentifierName(), table.name.GetIdentifierName());
+				}
+			}
+		});
+	});
+}
+
 void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	if (info.cascade) {
 		throw NotImplementedException("Cascade Drop not supported in DuckLake");
@@ -545,6 +596,9 @@ void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	if (catalog_entry->type != info.type) {
 		throw CatalogException("Existing object %s is of type %s, trying to drop type %s", catalog_entry->name,
 		                       CatalogTypeToString(catalog_entry->type), CatalogTypeToString(info.type));
+	}
+	if (info.type == CatalogType::MACRO_ENTRY) {
+		ThrowIfTableCallsMacro(context, catalog, name, catalog_entry->name);
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	transaction.DropEntry(*catalog_entry);
