@@ -46,6 +46,19 @@ ALTER TABLE lake.s ADD COLUMN s.ts TIMESTAMPTZ_NS
 ----
 DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
 
+statement error
+CREATE TABLE lake.t AS SELECT '2026-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS AS ts
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement ok
+COPY (SELECT '2026-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS AS ts) TO '{DATA_PATH}/timestamptz_ns_v10.parquet'
+
+statement error
+CREATE TABLE lake.t AS SELECT * FROM read_parquet('{DATA_PATH}/timestamptz_ns_v10.parquet')
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
 statement ok
 CREATE TABLE lake.ok (ts TIMESTAMPTZ, tns TIMESTAMP_NS)
 
