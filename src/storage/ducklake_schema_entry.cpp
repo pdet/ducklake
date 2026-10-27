@@ -24,7 +24,6 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "functions/ducklake_compaction_functions.hpp"
 
 namespace duckdb {
 
@@ -100,7 +99,7 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 		DropInfo info;
 		info.type = catalog_type;
 		info.SetName(Identifier(entry_name));
-		DropEntry(transaction.GetContext(), info);
+		DropEntry(transaction.GetContext(), info, true);
 		break;
 	}
 	default:
@@ -530,49 +529,63 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
-//! Whether the expression calls the macro, unqualified calls count as they can resolve to it
-static bool CallsMacro(const ParsedExpression &expr, const Identifier &catalog_name, const Identifier &schema_name,
-                       const Identifier &macro_name) {
+//! The catalog, the schemas and the name of a macro
+static vector<Identifier> MacroPath(const DuckLakeSchemaEntry &schema, const Identifier &macro_name) {
+	vector<Identifier> path {macro_name};
+	for (auto current = &schema; current; current = current->ParentDuckLakeSchema().get()) {
+		path.insert(path.begin(), current->name);
+	}
+	path.insert(path.begin(), schema.ParentCatalog().GetName());
+	return path;
+}
+
+//! Whether a function name can resolve to the macro: the parts written are the end of its path, as an unqualified
+//! name or one relative to a schema in the search path can be, or catalog.name for the default schema
+static bool NameCanBeMacro(const vector<Identifier> &written, const vector<Identifier> &macro_path,
+                           const Identifier &default_schema) {
+	if (written.empty() || written.size() > macro_path.size()) {
+		return false;
+	}
+	if (std::equal(written.begin(), written.end(), macro_path.end() - written.size())) {
+		return true;
+	}
+	return written.size() == 2 && macro_path.size() == 3 && written[0] == macro_path[0] &&
+	       macro_path[1] == default_schema && written[1] == macro_path[2];
+}
+
+static bool CallsMacro(const ParsedExpression &expr, const vector<Identifier> &macro_path,
+                       const Identifier &default_schema) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
+	    NameCanBeMacro(expr.Cast<FunctionExpression>().GetQualifiedName().Path(), macro_path, default_schema)) {
+		return true;
+	}
 	bool calls = false;
-	ParsedExpressionIterator::VisitExpression<FunctionExpression>(expr, [&](const FunctionExpression &function) {
-		auto &name = function.GetQualifiedName();
-		if (!(name.Name() == macro_name)) {
-			return;
-		}
-		if (name.Catalog().empty()) {
-			// the first part of a two-part name can also be the catalog, as in lake.f()
-			calls = calls || name.Schema().empty() || name.Schema() == schema_name || name.Schema() == catalog_name;
-		} else {
-			calls = calls || (name.Catalog() == catalog_name && name.Schema() == schema_name);
-		}
-	});
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { calls = calls || CallsMacro(child, macro_path, default_schema); });
 	return calls;
 }
 
-//! Column defaults and sort keys are bound on every write, so they fail once a macro they call is dropped
-static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &schema_name,
-                                   const Identifier &macro_name) {
-	auto &catalog_name = catalog.GetName();
+//! Column defaults are bound on every write, so a table cannot be written once a macro its defaults call is dropped
+static void ThrowIfTableCallsMacro(ClientContext &context, DuckLakeSchemaEntry &macro_schema,
+                                   const Identifier &macro_name,
+                                   const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
+	auto &catalog = macro_schema.ParentCatalog();
+	auto macro_path = MacroPath(macro_schema, macro_name);
+	auto default_schema = Identifier(DEFAULT_SCHEMA);
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		if (dropped_schemas.find(schema) != dropped_schemas.end()) {
+			return;
+		}
 		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-			auto &table = entry.Cast<DuckLakeTableEntry>();
-			for (auto &column : table.GetColumns().Logical()) {
-				if (column.HasDefaultValue() &&
-				    CallsMacro(column.DefaultValue(), catalog_name, schema_name, macro_name)) {
+			if (entry.type != CatalogType::TABLE_ENTRY) {
+				return;
+			}
+			for (auto &column : entry.Cast<DuckLakeTableEntry>().GetColumns().Logical()) {
+				if (column.HasDefaultValue() && CallsMacro(column.DefaultValue(), macro_path, default_schema)) {
 					throw DependencyException(
 					    "Cannot drop macro \"%s\" because the default of column \"%s\" of table \"%s\" calls it",
 					    macro_name.GetIdentifierName(), column.Name().GetIdentifierName(),
-					    table.name.GetIdentifierName());
-				}
-			}
-			auto sort_data = table.GetSortData();
-			if (!sort_data) {
-				return;
-			}
-			for (auto &order : DuckLakeCompactor::ParseSortOrders(*sort_data)) {
-				if (CallsMacro(*order.expression, catalog_name, schema_name, macro_name)) {
-					throw DependencyException("Cannot drop macro \"%s\" because the sort key of table \"%s\" calls it",
-					                          macro_name.GetIdentifierName(), table.name.GetIdentifierName());
+					    entry.name.GetIdentifierName());
 				}
 			}
 		});
@@ -580,6 +593,10 @@ static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, con
 }
 
 void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
+	DropEntry(context, info, false);
+}
+
+void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool replacing) {
 	if (info.cascade) {
 		throw NotImplementedException("Cascade Drop not supported in DuckLake");
 	}
@@ -597,8 +614,9 @@ void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 		throw CatalogException("Existing object %s is of type %s, trying to drop type %s", catalog_entry->name,
 		                       CatalogTypeToString(catalog_entry->type), CatalogTypeToString(info.type));
 	}
-	if (info.type == CatalogType::MACRO_ENTRY) {
-		ThrowIfTableCallsMacro(context, catalog, name, catalog_entry->name);
+	// a replaced macro stays callable
+	if (info.type == CatalogType::MACRO_ENTRY && !replacing) {
+		ThrowIfTableCallsMacro(context, *this, catalog_entry->name);
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	transaction.DropEntry(*catalog_entry);
@@ -666,6 +684,14 @@ void DuckLakeSchemaEntry::TryDropSchema(CatalogTransaction transaction, bool cas
 		for (auto type : {CatalogType::TABLE_ENTRY, CatalogType::MACRO_ENTRY, CatalogType::TABLE_MACRO_ENTRY}) {
 			schema.Scan(transaction.GetContext(), type, [&](CatalogEntry &entry) { entries.emplace_back(entry); });
 		}
+	});
+	reference_set_t<SchemaCatalogEntry> dropped_schemas;
+	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) { dropped_schemas.insert(schema); });
+	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) {
+		schema.Scan(transaction.GetContext(), CatalogType::MACRO_ENTRY, [&](CatalogEntry &entry) {
+			ThrowIfTableCallsMacro(transaction.GetContext(), schema.Cast<DuckLakeSchemaEntry>(), entry.name,
+			                       dropped_schemas);
+		});
 	});
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	for (idx_t i = entries.size(); i > 0; i--) {
