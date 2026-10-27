@@ -157,7 +157,6 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	PushIDChangeList(change_keys, change_values, other_changes.tables_compacted, "compacted_table");
 	PushNameChangeList(change_keys, change_values, other_changes.created_snapshot_tags, "tags_created");
 	PushNameChangeList(change_keys, change_values, other_changes.dropped_snapshot_tags, "tags_dropped");
-	PushNameChangeList(change_keys, change_values, other_changes.replaced_snapshot_tags, "tags_replaced");
 	if (!other_changes.expired_snapshots.empty()) {
 		vector<Value> expired;
 		for (auto &snapshot_id : other_changes.expired_snapshots) {

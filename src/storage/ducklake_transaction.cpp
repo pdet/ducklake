@@ -873,7 +873,6 @@ void DuckLakeTransaction::Rollback() {
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();
-	state->replaced_snapshot_tags.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
@@ -1117,18 +1116,12 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 		AddTableChanges(table_id, entry.second, changes);
 	}
-	auto &replaced = state->replaced_snapshot_tags;
 	for (auto &tag : state->new_snapshot_tags) {
-		if (replaced.find(tag.first) == replaced.end()) {
-			changes.created_snapshot_tags.insert(tag.first);
-		}
+		changes.created_snapshot_tags.insert(tag.first);
 	}
 	for (auto &tag : state->dropped_snapshot_tags) {
-		if (replaced.find(tag.first) == replaced.end()) {
-			changes.dropped_snapshot_tags.insert(tag.first);
-		}
+		changes.dropped_snapshot_tags.insert(tag.first);
 	}
-	changes.replaced_snapshot_tags = replaced;
 	return changes;
 }
 
@@ -1875,25 +1868,13 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 		throw InvalidInputException("The snapshot tag \"%s\" names snapshot %d, not the expected snapshot %d", name,
 		                            current_snapshot_id, expected_snapshot_id.GetIndex());
 	}
-	if (snapshot_id == current_snapshot_id) {
-		return;
-	}
 	CheckNotExpiredInTransaction(snapshot_id);
 	if (committed) {
-		// the commit ends the row of the tag and begins one for its new snapshot
+		// a new row also for the same snapshot, so that the commit conflicts with every concurrent change of the tag
 		state->dropped_snapshot_tags[committed->name] = *committed;
 		state->new_snapshot_tags[committed->name] = snapshot_id;
-		state->replaced_snapshot_tags.insert(committed->name);
 	} else {
-		auto dropped = state->dropped_snapshot_tags.find(name);
-		if (state->replaced_snapshot_tags.count(name) && dropped->second.snapshot_id == snapshot_id) {
-			// a moved tag that moves back to its committed snapshot is not moved at all
-			state->new_snapshot_tags.erase(local_tag);
-			state->dropped_snapshot_tags.erase(dropped);
-			state->replaced_snapshot_tags.erase(name);
-		} else {
-			local_tag->second = snapshot_id;
-		}
+		local_tag->second = snapshot_id;
 	}
 	ExpireReleasedSnapshots();
 }
@@ -1901,7 +1882,6 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	if (state->new_snapshot_tags.erase(name)) {
-		state->replaced_snapshot_tags.erase(name);
 		ExpireReleasedSnapshots();
 		return;
 	}

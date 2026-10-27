@@ -41,7 +41,7 @@ query II
 SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id IN (4, 6) ORDER BY snapshot_id
 ----
 4	{tags_created=[release]}
-6	{tags_replaced=[release]}
+6	{tags_created=[release], tags_dropped=[release]}
 
 # the old row ends where the new one begins
 query IIII
@@ -95,20 +95,6 @@ query II
 SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
 ----
 release	5
-
-# a move to the snapshot the tag names already changes nothing
-statement ok
-CALL ducklake_replace_tag('dl', 'release', version => 5)
-
-query II
-SELECT COUNT(*), MAX(begin_snapshot) FROM meta.ducklake_snapshot_tag WHERE end_snapshot IS NULL
-----
-1	9
-
-query I
-SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl')
-----
-9
 
 statement error
 CALL ducklake_replace_tag('dl', 'missing', version => 5)
@@ -184,35 +170,7 @@ release	3
 query I
 SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
 ----
-{tags_created=[local], tags_replaced=[release]}
-
-# a tag that moves away and back in one transaction is not moved
-statement ok
-BEGIN
-
-statement ok
-CALL ducklake_replace_tag('dl', 'release', version => 4)
-
-statement ok
-CALL ducklake_replace_tag('dl', 'Release', version => 3, expected_snapshot => 4)
-
-query I
-SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3, 4], dry_run => true)
-----
-4
-
-statement ok
-COMMIT
-
-query II
-SELECT COUNT(*), MAX(snapshot_id) FROM ducklake_snapshots('dl')
-----
-9	11
-
-query III
-SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 11
-----
-3	11	NULL
+{tags_created=[local, release], tags_dropped=[release]}
 
 # in one transaction a move frees the old target for an expiry and protects the new one
 statement ok
@@ -232,7 +190,7 @@ COMMIT
 query I
 SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
 ----
-{tags_replaced=[release], snapshots_expired=[3]}
+{tags_created=[release], tags_dropped=[release], snapshots_expired=[3]}
 
 query I
 SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
@@ -325,7 +283,7 @@ COMMIT
 query I
 SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
 ----
-{tags_replaced=[release], snapshots_expired=[7]}
+{tags_created=[release], tags_dropped=[release], snapshots_expired=[7]}
 
 # and the snapshot of a tag it drops
 statement ok
@@ -351,6 +309,50 @@ query II
 SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
 ----
 release	4
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+2
+
+# a move to the snapshot the tag names already writes its row again, so that it conflicts with concurrent changes
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+query III
+SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 13 ORDER BY begin_snapshot
+----
+4	13	15
+4	15	NULL
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[release], tags_dropped=[release]}
+
+# and so does a move away and back in one transaction, which protects only the committed target
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 8)
+
+statement ok
+CALL ducklake_replace_tag('dl', 'Release', version => 4, expected_snapshot => 8)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4, 8], dry_run => true)
+----
+8
+
+statement ok
+COMMIT
+
+query III
+SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 15 ORDER BY begin_snapshot
+----
+4	15	16
+4	16	NULL
 
 query I
 SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
