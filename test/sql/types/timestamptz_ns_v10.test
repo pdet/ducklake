@@ -39,6 +39,14 @@ ALTER TABLE lake.d ALTER d TYPE TIMESTAMPTZ_NS
 DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
 
 statement ok
+CREATE TABLE lake.s (s STRUCT(i INTEGER))
+
+statement error
+ALTER TABLE lake.s ADD COLUMN s.ts TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement ok
 CREATE TABLE lake.ok (ts TIMESTAMPTZ, tns TIMESTAMP_NS)
 
 query I
