@@ -1,0 +1,121 @@
+# name: test/sql/macros/drop_macro_used_by_table.test
+# description: DROP MACRO is refused while a column default or a sort key of a table calls the macro
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/drop_macro_used_by_table')
+
+statement ok
+CREATE MACRO lake.two() AS 2
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, c INTEGER DEFAULT lake.two())
+
+statement error
+DROP MACRO lake.two
+----
+Cannot drop macro "two" because the default of column "c" of table "t" calls it
+
+statement ok
+INSERT INTO lake.t (id) VALUES (1)
+
+statement ok
+ALTER TABLE lake.t ALTER c DROP DEFAULT
+
+statement ok
+DROP MACRO lake.two
+
+statement ok
+INSERT INTO lake.t VALUES (2, 3)
+
+query II
+SELECT id, c FROM lake.t ORDER BY id
+----
+1	2
+2	3
+
+# a sort key
+statement ok
+CREATE MACRO lake.neg(x) AS -x
+
+statement ok
+CREATE TABLE lake.s (i INTEGER)
+
+statement ok
+ALTER TABLE lake.s SET SORTED BY (lake.neg(i))
+
+statement error
+DROP MACRO lake.neg
+----
+Cannot drop macro "neg" because the sort key of table "s" calls it
+
+statement ok
+ALTER TABLE lake.s RESET SORTED BY
+
+statement ok
+DROP MACRO lake.neg
+
+# a table created in the same transaction
+statement ok
+CREATE MACRO lake.four() AS 4
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE lake.v (c INTEGER DEFAULT lake.four())
+
+statement error
+DROP MACRO lake.four
+----
+Cannot drop macro "four" because the default of column "c" of table "v" calls it
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP MACRO lake.four
+
+# a macro of another schema, next to a macro of the same name in the default schema
+statement ok
+CREATE SCHEMA lake.s2
+
+statement ok
+CREATE MACRO lake.s2.three() AS 3
+
+statement ok
+CREATE MACRO lake.three() AS 30
+
+statement ok
+CREATE TABLE lake.u (c INTEGER DEFAULT lake.s2.three())
+
+statement error
+DROP MACRO lake.s2.three
+----
+Cannot drop macro "three" because the default of column "c" of table "u" calls it
+
+statement ok
+DROP MACRO lake.three
+
+statement ok
+INSERT INTO lake.u DEFAULT VALUES
+
+query I
+SELECT c FROM lake.u
+----
+3
+
+# a dropped table no longer holds the macro
+statement ok
+DROP TABLE lake.u
+
+statement ok
+DROP MACRO lake.s2.three
