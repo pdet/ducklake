@@ -733,7 +733,7 @@ private:
 		if (insert && insert->sort_requires_rebind) {
 			return true;
 		}
-		for (auto &child : op.children) {
+		for (auto &child : op.GetChildren()) {
 			if (SortRequiresRebind(child.get())) {
 				return true;
 			}
