@@ -111,9 +111,7 @@ DuckLakeTableEntry::DuckLakeTableEntry(Catalog &catalog, SchemaCatalogEntry &sch
       local_change(local_change) {
 	// alters check the columns they change, and loaded tables keep the stored types
 	if (local_change.type == LocalChangeType::CREATED) {
-		for (auto &col : columns.Logical()) {
-			CheckSupportedType(col.Type());
-		}
+		DuckLakeTypes::CheckSupportedTypes(columns, ParentCatalog().Cast<DuckLakeCatalog>().GetDuckLakeVersion());
 	}
 	for (auto &col : columns.Logical()) {
 		if (col.Generated()) {
