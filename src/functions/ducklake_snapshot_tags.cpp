@@ -16,6 +16,8 @@ struct DuckLakeSnapshotTagData : public TableFunctionData {
 	string name;
 	//! The tagged snapshot of ducklake_create_tag
 	idx_t snapshot_id = DConstants::INVALID_INDEX;
+	//! The expiry time of ducklake_create_tag and ducklake_set_tag_expiry, NULL when the tag does not expire
+	Value expires_at = Value(LogicalType::TIMESTAMP_TZ);
 };
 
 static DuckLakeCatalog &GetTagCatalog(ClientContext &context, TableFunctionBindInput &input,
@@ -67,13 +69,14 @@ static unique_ptr<FunctionData> CreateTagBind(ClientContext &context, TableFunct
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	result->snapshot_id = transaction.GetSnapshot(at_clause.get()).snapshot_id;
+	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "expires_at", result->expires_at);
 	return std::move(result);
 }
 
 static void CreateTagExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotTagData>();
 	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-	transaction.CreateSnapshotTag(data.name, data.snapshot_id);
+	transaction.CreateSnapshotTag(data.name, data.snapshot_id, data.expires_at);
 }
 
 static unique_ptr<FunctionData> DropTagBind(ClientContext &context, TableFunctionBindInput &input,
@@ -92,6 +95,27 @@ static void DropTagExecute(ClientContext &context, TableFunctionInput &data_p, D
 	transaction.DropSnapshotTag(data.name);
 }
 
+static unique_ptr<FunctionData> SetTagExpiryBind(ClientContext &context, TableFunctionBindInput &input,
+                                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto &catalog = GetTagCatalog(
+	    context, input, DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
+	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
+	TagReturnTypes(return_types, names);
+	if (!input.inputs[2].IsNull()) {
+		DuckLakeTableFunctionUtil::CheckTimestampOption("expires_at", input.inputs[2]);
+		result->expires_at = input.inputs[2];
+	}
+	// the commit conflicts with tag changes after the snapshot the change was validated against
+	DuckLakeTransaction::Get(context, catalog).GetSnapshot();
+	return std::move(result);
+}
+
+static void SetTagExpiryExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotTagData>();
+	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
+	transaction.SetSnapshotTagExpiry(data.name, data.expires_at);
+}
+
 static unique_ptr<FunctionData> TagsBind(ClientContext &context, TableFunctionBindInput &input,
                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
@@ -104,6 +128,8 @@ static unique_ptr<FunctionData> TagsBind(ClientContext &context, TableFunctionBi
 	return_types.emplace_back(LogicalType::TIMESTAMP_TZ);
 	names.emplace_back("created_snapshot_id");
 	return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("expires_at");
+	return_types.emplace_back(LogicalType::TIMESTAMP_TZ);
 	if (!catalog.SupportsSnapshotTags()) {
 		return std::move(result);
 	}
@@ -118,6 +144,7 @@ static unique_ptr<FunctionData> TagsBind(ClientContext &context, TableFunctionBi
 		} else {
 			row.emplace_back(LogicalType::BIGINT);
 		}
+		row.push_back(tag.expires_at);
 		result->rows.push_back(std::move(row));
 	}
 	return std::move(result);
@@ -130,7 +157,9 @@ DuckLakeCreateTagFunction::DuckLakeCreateTagFunction()
                         .AddPositionalOnly("tag_name", LogicalType::VARCHAR),
                     CreateTagExecute, CreateTagBind) {
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
-		options.Add("version", LogicalType::BIGINT).Add("timestamp", LogicalType::TIMESTAMP_TZ);
+		options.Add("version", LogicalType::BIGINT)
+		    .Add("timestamp", LogicalType::TIMESTAMP_TZ)
+		    .Add("expires_at", LogicalType::TIMESTAMP_TZ);
 	});
 }
 
@@ -140,6 +169,15 @@ DuckLakeDropTagFunction::DuckLakeDropTagFunction()
                         .AddPositionalOnly("catalog", LogicalType::VARCHAR)
                         .AddPositionalOnly("tag_name", LogicalType::VARCHAR),
                     DropTagExecute, DropTagBind) {
+}
+
+DuckLakeSetTagExpiryFunction::DuckLakeSetTagExpiryFunction()
+    : TableFunction("ducklake_set_tag_expiry",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("tag_name", LogicalType::VARCHAR)
+                        .AddPositionalOnly("expires_at", LogicalType::TIMESTAMP_TZ),
+                    SetTagExpiryExecute, SetTagExpiryBind) {
 }
 
 DuckLakeTagsFunction::DuckLakeTagsFunction() : DuckLakeBaseMetadataFunction("ducklake_tags", TagsBind) {

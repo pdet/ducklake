@@ -21,6 +21,7 @@
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
@@ -764,6 +765,7 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
+	start_time = timestamp_tz_t(MetaTransaction::Get(context).start_timestamp);
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -873,6 +875,8 @@ void DuckLakeTransaction::Rollback() {
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();
+	state->altered_snapshot_tags.clear();
+	state->expired_snapshot_tags.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
@@ -1116,12 +1120,18 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 		AddTableChanges(table_id, entry.second, changes);
 	}
+	auto &altered = state->altered_snapshot_tags;
 	for (auto &tag : state->new_snapshot_tags) {
-		changes.created_snapshot_tags.insert(tag.first);
+		if (altered.find(tag.first) == altered.end()) {
+			changes.created_snapshot_tags.insert(tag.first);
+		}
 	}
 	for (auto &tag : state->dropped_snapshot_tags) {
-		changes.dropped_snapshot_tags.insert(tag.first);
+		if (altered.find(tag.first) == altered.end()) {
+			changes.dropped_snapshot_tags.insert(tag.first);
+		}
 	}
+	changes.altered_snapshot_tags = altered;
 	return changes;
 }
 
@@ -1812,18 +1822,30 @@ optional_ptr<const DuckLakeSnapshotTagInfo>
 DuckLakeTransaction::FindCommittedSnapshotTag(const string &name, vector<DuckLakeSnapshotTagInfo> &tags) {
 	for (auto &tag : tags) {
 		if (StringUtil::CIEquals(tag.name, name) &&
-		    state->dropped_snapshot_tags.find(tag.name) == state->dropped_snapshot_tags.end()) {
+		    state->dropped_snapshot_tags.find(tag.name) == state->dropped_snapshot_tags.end() &&
+		    state->expired_snapshot_tags.find(tag.name) == state->expired_snapshot_tags.end()) {
 			return tag;
 		}
 	}
 	return nullptr;
 }
 
-void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_id) {
+bool DuckLakeTransaction::SnapshotTagExpired(const DuckLakeSnapshotTagInfo &tag) const {
+	return !tag.expires_at.IsNull() && tag.expires_at.GetValue<timestamp_tz_t>() <= start_time;
+}
+
+void DuckLakeTransaction::CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const {
+	if (!expires_at.IsNull() && expires_at.GetValue<timestamp_tz_t>() <= start_time) {
+		throw InvalidInputException("The expiry time of snapshot tag \"%s\" has passed", name);
+	}
+}
+
+void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	if (!FindSnapshotTag(name).empty()) {
 		throw InvalidInputException("A snapshot tag with the name \"%s\" already exists", name);
 	}
+	CheckSnapshotTagExpiry(name, expires_at);
 	for (auto &filter : expiry_filters) {
 		for (auto &expired : ExpirableSnapshotsInternal(filter)) {
 			if (expired.id == snapshot_id) {
@@ -1831,12 +1853,55 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 			}
 		}
 	}
-	state->new_snapshot_tags[name] = snapshot_id;
+	DuckLakeSnapshotTagInfo tag;
+	tag.name = name;
+	tag.snapshot_id = snapshot_id;
+	tag.expires_at = expires_at;
+	state->new_snapshot_tags[name] = std::move(tag);
+}
+
+void DuckLakeTransaction::SetSnapshotTagExpiry(const string &name, const Value &expires_at) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	auto local_tag = state->new_snapshot_tags.find(name);
+	optional_ptr<const DuckLakeSnapshotTagInfo> committed;
+	vector<DuckLakeSnapshotTagInfo> tags;
+	if (local_tag == state->new_snapshot_tags.end()) {
+		tags = GetMetadataManager().GetSnapshotTags();
+		committed = FindCommittedSnapshotTag(name, tags);
+		if (!committed) {
+			throw InvalidInputException("A snapshot tag with the name \"%s\" does not exist", name);
+		}
+	}
+	auto &current = committed ? *committed : local_tag->second;
+	if (Value::NotDistinctFrom(current.expires_at, expires_at)) {
+		return;
+	}
+	CheckSnapshotTagExpiry(current.name, expires_at);
+	if (committed) {
+		// the commit ends the row of the tag and begins one with the new expiry time
+		auto tag = *committed;
+		tag.created_snapshot_id = optional_idx();
+		tag.expires_at = expires_at;
+		state->dropped_snapshot_tags[committed->name] = *committed;
+		state->new_snapshot_tags[committed->name] = std::move(tag);
+		state->altered_snapshot_tags.insert(committed->name);
+		return;
+	}
+	auto dropped = state->dropped_snapshot_tags.find(name);
+	if (state->altered_snapshot_tags.count(name) && Value::NotDistinctFrom(dropped->second.expires_at, expires_at)) {
+		// an altered tag that gets its committed expiry time back is not altered at all
+		state->new_snapshot_tags.erase(local_tag);
+		state->dropped_snapshot_tags.erase(dropped);
+		state->altered_snapshot_tags.erase(name);
+		return;
+	}
+	local_tag->second.expires_at = expires_at;
 }
 
 void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	if (state->new_snapshot_tags.erase(name)) {
+		state->altered_snapshot_tags.erase(name);
 		return;
 	}
 	auto tags = GetMetadataManager().GetSnapshotTags();
@@ -1856,7 +1921,8 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 	auto &metadata_manager = GetMetadataManager();
 	vector<DuckLakeSnapshotTagInfo> result;
 	for (auto &tag : metadata_manager.GetSnapshotTags(with_snapshot_time)) {
-		if (state->dropped_snapshot_tags.find(tag.name) == state->dropped_snapshot_tags.end()) {
+		if (state->dropped_snapshot_tags.find(tag.name) == state->dropped_snapshot_tags.end() &&
+		    state->expired_snapshot_tags.find(tag.name) == state->expired_snapshot_tags.end()) {
 			result.push_back(std::move(tag));
 		}
 	}
@@ -1872,10 +1938,8 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 		}
 	}
 	for (auto &tag : state->new_snapshot_tags) {
-		DuckLakeSnapshotTagInfo info;
-		info.name = tag.first;
-		info.snapshot_id = tag.second;
-		auto time = snapshot_times.find(tag.second);
+		auto info = tag.second;
+		auto time = snapshot_times.find(info.snapshot_id);
 		info.snapshot_time = time == snapshot_times.end() ? Value(LogicalType::TIMESTAMP_TZ) : time->second;
 		result.push_back(std::move(info));
 	}
@@ -1901,7 +1965,19 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
 	set<idx_t> result;
 	for (auto &tag : GetSnapshotTagsInternal(false)) {
-		result.insert(tag.snapshot_id);
+		if (!SnapshotTagExpired(tag)) {
+			result.insert(tag.snapshot_id);
+		}
+	}
+	return result;
+}
+
+vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::ExpiredSnapshotTagsInternal() {
+	vector<DuckLakeSnapshotTagInfo> result;
+	for (auto &tag : GetSnapshotTagsInternal(false)) {
+		if (SnapshotTagExpired(tag)) {
+			result.push_back(std::move(tag));
+		}
 	}
 	return result;
 }
@@ -1924,28 +2000,36 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshots(const string &
 	return ExpireSnapshotsNow(filter);
 }
 
-vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id) {
+DuckLakeExpiry DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
+	DuckLakeExpiry result;
 	if (attempt == 0 && !GetMetadataManager().CommitsEachStatement()) {
 		// the statements expired in the metadata transaction of the first attempt
-		if (!expired_in_transaction.empty() && expiry_snapshot_id.GetIndex() != latest_snapshot_id) {
+		bool expired = !expired_in_transaction.empty() || !state->expired_snapshot_tags.empty();
+		if (expired && expiry_snapshot_id.GetIndex() != latest_snapshot_id) {
 			throw TransactionException(
 			    "Transaction conflict: a concurrent commit preceded the commit of the snapshot expiry");
 		}
-		return expired_in_transaction;
+		result.snapshots = expired_in_transaction;
+		for (auto &tag : state->expired_snapshot_tags) {
+			result.tags.push_back(tag.second);
+		}
+		return result;
 	}
 	// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 	GetMetadataManager().GetSnapshot();
+	// a retry selects the expired tags again from the latest tags
+	state->expired_snapshot_tags.clear();
 	map<idx_t, DuckLakeSnapshotInfo> expired;
 	for (auto &filter : expiry_filters) {
 		for (auto &snapshot : ExpirableSnapshotsInternal(filter)) {
 			expired.emplace(snapshot.id, std::move(snapshot));
 		}
 	}
-	vector<DuckLakeSnapshotInfo> result;
 	for (auto &entry : expired) {
-		result.push_back(std::move(entry.second));
+		result.snapshots.push_back(std::move(entry.second));
 	}
+	result.tags = ExpiredSnapshotTagsInternal();
 	return result;
 }
 
@@ -1957,19 +2041,28 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 		latest_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
 	}
 	auto expired = ExpirableSnapshotsInternal(filter);
-	if (expired.empty()) {
+	vector<DuckLakeSnapshotTagInfo> expired_tags;
+	if (latest_snapshot_id.IsValid()) {
+		expired_tags = ExpiredSnapshotTagsInternal();
+	}
+	if (expired.empty() && expired_tags.empty()) {
 		return expired;
 	}
 	if (!latest_snapshot_id.IsValid()) {
 		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 		metadata_manager.GetSnapshot();
 	}
-	metadata_manager.DeleteSnapshots(expired);
+	if (!expired.empty()) {
+		metadata_manager.DeleteSnapshots(expired);
+	}
 	if (latest_snapshot_id.IsValid()) {
 		if (!expiry_snapshot_id.IsValid()) {
 			expiry_snapshot_id = latest_snapshot_id;
 		}
 		expired_in_transaction.insert(expired_in_transaction.end(), expired.begin(), expired.end());
+		for (auto &tag : expired_tags) {
+			state->expired_snapshot_tags[tag.name] = tag;
+		}
 	}
 	set<idx_t> expired_ids;
 	for (auto &snapshot : expired) {
@@ -2080,10 +2173,11 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		lock_guard<mutex> tag_guard(snapshot_tag_lock);
 		auto local_tag = state->new_snapshot_tags.find(name);
 		if (local_tag != state->new_snapshot_tags.end()) {
-			BoundAtClause local_clause("version", Value::BIGINT(NumericCast<int64_t>(local_tag->second)));
+			BoundAtClause local_clause("version", Value::BIGINT(NumericCast<int64_t>(local_tag->second.snapshot_id)));
 			return GetSnapshot(&local_clause, bound);
 		}
-		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end()) {
+		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end() ||
+		    state->expired_snapshot_tags.find(name) != state->expired_snapshot_tags.end()) {
 			throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
 		}
 	}

@@ -304,8 +304,10 @@ public:
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
-	void CreateSnapshotTag(const string &name, idx_t snapshot_id);
+	void CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at);
 	void DropSnapshotTag(const string &name);
+	//! Gives a live tag another expiry time, NULL when it does not expire
+	void SetSnapshotTagExpiry(const string &name, const Value &expires_at);
 	//! The live snapshot tags, with the changes of this transaction
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 
@@ -394,8 +396,14 @@ private:
 	set<idx_t> TaggedSnapshotsInternal();
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
 	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
-	//! The snapshots the commit attempt expires, those the statements expired for the first attempt
-	vector<DuckLakeSnapshotInfo> ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	//! Whether the expiry time of the tag has passed at the start of the transaction
+	bool SnapshotTagExpired(const DuckLakeSnapshotTagInfo &tag) const;
+	//! Fails when the expiry time has passed at the start of the transaction
+	void CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const;
+	//! The live tags whose expiry time has passed, which an expiry drops
+	vector<DuckLakeSnapshotTagInfo> ExpiredSnapshotTagsInternal();
+	//! What the commit attempt expires, what the statements expired for the first attempt
+	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
 	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -424,6 +432,8 @@ private:
 	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
 	optional_idx expiry_snapshot_id;
+	//! The start of the transaction, which judges the expiry times of tags as now() does
+	timestamp_tz_t start_time;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot
