@@ -43,6 +43,16 @@ CALL ducklake_create_tag('lake', 'renamed')
 statement ok
 DROP TABLE lake.u
 
+# two files that a tagged snapshot sees, merged before expiry
+statement ok
+INSERT INTO lake.t VALUES (21, 'p'), (22, 'q'), (23, 'r')
+
+statement ok
+INSERT INTO lake.t VALUES (24, 's'), (25, 't'), (26, 'u')
+
+statement ok
+CALL ducklake_create_tag('lake', 'merged')
+
 # a file that only untagged snapshots see
 statement ok
 INSERT INTO lake.t VALUES (30, 'x'), (31, 'y'), (32, 'z')
@@ -53,8 +63,10 @@ DELETE FROM lake.t WHERE id >= 30
 statement ok
 CALL ducklake_flush_inlined_data('lake')
 
-statement ok
-CALL ducklake_merge_adjacent_files('lake')
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake')
+----
+2	1
 
 statement ok
 CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
@@ -62,8 +74,10 @@ CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
 statement ok
 INSERT INTO lake.t VALUES (20, 'late')
 
-statement ok
-CALL ducklake_merge_adjacent_files('lake')
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake')
+----
+2	1
 
 query I
 SELECT count(*) > 0 FROM ducklake_expire_snapshots('lake', older_than => now())
@@ -73,7 +87,7 @@ true
 query I
 SELECT count(*) FROM ducklake_cleanup_old_files('lake', cleanup_all => true)
 ----
-1
+5
 
 statement ok
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true)
@@ -98,6 +112,11 @@ SELECT list(x) FROM lake.u AT (VERSION => 'renamed')
 ----
 [1]
 
+query II
+SELECT list(id ORDER BY id), list(w ORDER BY id) FROM lake.t AT (VERSION => 'merged')
+----
+[1, 2, 3, 10, 21, 22, 23, 24, 25, 26]	[a1, a2, a3, inl, p, q, r, s, t, u]
+
 query I
 SELECT list(change_type || ' ' || id ORDER BY change_type, id) FROM lake.table_changes('t', 'files', 'renamed')
 ----
@@ -106,4 +125,4 @@ SELECT list(change_type || ' ' || id ORDER BY change_type, id) FROM lake.table_c
 query I
 SELECT list(id ORDER BY id) FROM lake.t
 ----
-[1, 2, 3, 10, 20]
+[1, 2, 3, 10, 20, 21, 22, 23, 24, 25, 26]
