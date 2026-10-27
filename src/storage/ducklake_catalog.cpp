@@ -682,7 +682,8 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	return macro_info;
 }
 
-static void SplitTags(const vector<DuckLakeTag> &tags, Value &comment, InsertionOrderPreservingMap<string> &other_tags) {
+static void SplitTags(const vector<DuckLakeTag> &tags, Value &comment,
+                      InsertionOrderPreservingMap<string> &other_tags) {
 	for (auto &tag : tags) {
 		if (tag.key == "comment") {
 			comment = tag.value;
