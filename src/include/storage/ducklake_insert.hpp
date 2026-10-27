@@ -75,7 +75,7 @@ struct DuckLakeInsertPipeline {
 	reference<PhysicalOperator> root;
 	optional_ptr<DuckLakeInlineData> inline_data;
 	bool sorted = false;
-	//! Whether the sort keys depend on the session, like getvariable(), so a prepared statement must be rebound
+	//! Whether the sort keys depend on the session, like getvariable()
 	bool sort_requires_rebind = false;
 
 	PhysicalOperator &AttachInsert(PhysicalOperator &insert, PhysicalOperator &copy);
@@ -114,7 +114,7 @@ public:
 	string encryption_key;
 	//! Whether the rows to insert depend on the rows of the table, like the NOT MATCHED rows of a MERGE
 	bool reads_table = false;
-	//! Whether the sort keys depend on the session, so a prepared statement must be rebound for every execution
+	//! Whether the sort keys depend on the session, like getvariable()
 	bool sort_requires_rebind = false;
 
 public:
