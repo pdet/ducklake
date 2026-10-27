@@ -277,3 +277,82 @@ SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
 ----
 local	5
 release	7
+
+# a move back that binds before an expiry of its target runs in the same statement fails
+statement ok
+SET threads = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+statement error
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [7])
+UNION ALL
+SELECT NULL::BIGINT FROM ducklake_replace_tag('dl', 'release', version => 7, expected_snapshot => 4)
+----
+Cannot tag snapshot 7, it is expired by this transaction
+
+statement ok
+ROLLBACK
+
+statement ok
+RESET threads
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+local	5
+release	7
+
+# an expiry of the transaction expires the old target once the tag moves away from it
+statement ok
+BEGIN
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [7])
+----
+0
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_replaced=[release], snapshots_expired=[7]}
+
+# and the snapshot of a tag it drops
+statement ok
+BEGIN
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [5])
+----
+0
+
+statement ok
+CALL ducklake_drop_tag('dl', 'local')
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[local], snapshots_expired=[5]}
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+release	4
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+2

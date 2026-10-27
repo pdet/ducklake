@@ -1836,12 +1836,25 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 }
 
 void DuckLakeTransaction::CheckNotExpiredInTransaction(idx_t snapshot_id) {
+	auto expired = expired_in_transaction;
 	for (auto &filter : expiry_filters) {
-		for (auto &expired : ExpirableSnapshotsInternal(filter)) {
-			if (expired.id == snapshot_id) {
-				throw InvalidInputException("Cannot tag snapshot %d, it is expired by this transaction", snapshot_id);
-			}
+		auto selected = ExpirableSnapshotsInternal(filter);
+		expired.insert(expired.end(), selected.begin(), selected.end());
+	}
+	for (auto &snapshot : expired) {
+		if (snapshot.id == snapshot_id) {
+			throw InvalidInputException("Cannot tag snapshot %d, it is expired by this transaction", snapshot_id);
 		}
+	}
+}
+
+void DuckLakeTransaction::ExpireReleasedSnapshots() {
+	// a deferred expiry selects its snapshots when the transaction commits
+	if (GetMetadataManager().CommitsEachStatement()) {
+		return;
+	}
+	for (auto &filter : expiry_filters) {
+		ExpireSnapshotsNow(filter);
 	}
 }
 
@@ -1866,28 +1879,30 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 		return;
 	}
 	CheckNotExpiredInTransaction(snapshot_id);
-	if (!committed) {
+	if (committed) {
+		// the commit ends the row of the tag and begins one for its new snapshot
+		state->dropped_snapshot_tags[committed->name] = *committed;
+		state->new_snapshot_tags[committed->name] = snapshot_id;
+		state->replaced_snapshot_tags.insert(committed->name);
+	} else {
 		auto dropped = state->dropped_snapshot_tags.find(name);
-		// a moved tag that moves back to its committed snapshot is not moved at all
 		if (state->replaced_snapshot_tags.count(name) && dropped->second.snapshot_id == snapshot_id) {
+			// a moved tag that moves back to its committed snapshot is not moved at all
 			state->new_snapshot_tags.erase(local_tag);
 			state->dropped_snapshot_tags.erase(dropped);
 			state->replaced_snapshot_tags.erase(name);
-			return;
+		} else {
+			local_tag->second = snapshot_id;
 		}
-		local_tag->second = snapshot_id;
-		return;
 	}
-	// the commit ends the row of the tag and begins one for its new snapshot
-	state->dropped_snapshot_tags[committed->name] = *committed;
-	state->new_snapshot_tags[committed->name] = snapshot_id;
-	state->replaced_snapshot_tags.insert(committed->name);
+	ExpireReleasedSnapshots();
 }
 
 void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	if (state->new_snapshot_tags.erase(name)) {
 		state->replaced_snapshot_tags.erase(name);
+		ExpireReleasedSnapshots();
 		return;
 	}
 	auto tags = GetMetadataManager().GetSnapshotTags();
@@ -1896,6 +1911,7 @@ void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 		throw InvalidInputException("A snapshot tag with the name \"%s\" does not exist", name);
 	}
 	state->dropped_snapshot_tags[committed->name] = *committed;
+	ExpireReleasedSnapshots();
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTags() {
