@@ -312,6 +312,8 @@ public:
 	case_insensitive_map_t<idx_t> new_snapshot_tags;
 	//! The committed snapshot tags this transaction drops, by their stored name
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> dropped_snapshot_tags;
+	//! The committed snapshot tags this transaction moves, which it drops and creates again
+	case_insensitive_set_t replaced_snapshot_tags;
 };
 
 } // namespace duckdb

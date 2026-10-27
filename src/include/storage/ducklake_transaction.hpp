@@ -306,6 +306,8 @@ public:
 
 	void CreateSnapshotTag(const string &name, idx_t snapshot_id);
 	void DropSnapshotTag(const string &name);
+	//! Moves a live tag to the snapshot, when it names the expected snapshot if one is given
+	void ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id);
 	//! The live snapshot tags, with the changes of this transaction
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 
@@ -391,6 +393,8 @@ private:
 	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTagsInternal(bool with_snapshot_time = true);
+	//! Fails when the expiry of this transaction removes the snapshot a tag is to name
+	void CheckNotExpiredInTransaction(idx_t snapshot_id);
 	set<idx_t> TaggedSnapshotsInternal();
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
 	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
