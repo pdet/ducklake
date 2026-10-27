@@ -682,14 +682,18 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	return macro_info;
 }
 
-static void ApplyTags(const vector<DuckLakeTag> &tags, CreateInfo &info) {
+static void SplitTags(const vector<DuckLakeTag> &tags, Value &comment, InsertionOrderPreservingMap<string> &other_tags) {
 	for (auto &tag : tags) {
 		if (tag.key == "comment") {
-			info.comment = tag.value;
+			comment = tag.value;
 		} else {
-			info.tags[tag.key] = tag.value;
+			other_tags[tag.key] = tag.value;
 		}
 	}
+}
+
+static void ApplyTags(const vector<DuckLakeTag> &tags, CreateInfo &info) {
+	SplitTags(tags, info.comment, info.tags);
 }
 
 static set<SchemaIndex> FindUnreachableSchemas(const vector<DuckLakeSchemaInfo> &schemas) {
@@ -825,14 +829,10 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				not_null_columns.insert(col_info.name);
 			}
 			ColumnDefinition column(Identifier(std::move(col_info.name)), field_id->Type());
+			Value comment;
 			InsertionOrderPreservingMap<string> column_tags;
-			for (auto &tag : col_info.tags) {
-				if (tag.key == "comment") {
-					column.SetComment(tag.value);
-				} else {
-					column_tags[tag.key] = tag.value;
-				}
-			}
+			SplitTags(col_info.tags, comment, column_tags);
+			column.SetComment(comment);
 			column.SetTags(std::move(column_tags));
 			auto default_val = field_id->GetDefault();
 			if (default_val) {
