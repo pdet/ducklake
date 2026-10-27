@@ -1,5 +1,5 @@
 # name: test/sql/macros/drop_macro_used_by_table.test
-# description: DROP MACRO is refused while a column default or a sort key of a table calls the macro
+# description: DROP MACRO is refused while a column default of a table calls the macro
 # group: [macros]
 
 require ducklake
@@ -42,26 +42,23 @@ SELECT id, c FROM lake.t ORDER BY id
 1	2
 2	3
 
-# a sort key
+# a replaced macro stays callable, and the default uses its new definition
 statement ok
-CREATE MACRO lake.neg(x) AS -x
+CREATE MACRO lake.five() AS 5
 
 statement ok
-CREATE TABLE lake.s (i INTEGER)
+CREATE TABLE lake.w (id INTEGER, c INTEGER DEFAULT lake.five())
 
 statement ok
-ALTER TABLE lake.s SET SORTED BY (lake.neg(i))
+CREATE OR REPLACE MACRO lake.five() AS 50
 
-statement error
-DROP MACRO lake.neg
+statement ok
+INSERT INTO lake.w (id) VALUES (1)
+
+query II
+SELECT id, c FROM lake.w
 ----
-Cannot drop macro "neg" because the sort key of table "s" calls it
-
-statement ok
-ALTER TABLE lake.s RESET SORTED BY
-
-statement ok
-DROP MACRO lake.neg
+1	50
 
 # a table created in the same transaction
 statement ok
@@ -119,3 +116,69 @@ DROP TABLE lake.u
 
 statement ok
 DROP MACRO lake.s2.three
+
+# a call nested in another function
+statement ok
+CREATE MACRO lake.six() AS 6
+
+statement ok
+CREATE TABLE lake.x (c INTEGER DEFAULT abs(lake.six()) + 1)
+
+statement error
+DROP MACRO lake.six
+----
+Cannot drop macro "six" because the default of column "c" of table "x" calls it
+
+# nested schemas with a macro of the same name
+statement ok
+CREATE SCHEMA lake.a
+
+statement ok
+CREATE SCHEMA lake.a.b
+
+statement ok
+CREATE SCHEMA lake.c
+
+statement ok
+CREATE SCHEMA lake.c.b
+
+statement ok
+CREATE MACRO lake.a.b.f() AS 1
+
+statement ok
+CREATE MACRO lake.c.b.f() AS 2
+
+statement ok
+CREATE TABLE lake.y (c INTEGER DEFAULT lake.a.b.f())
+
+statement ok
+DROP MACRO lake.c.b.f
+
+statement error
+DROP MACRO lake.a.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "y" calls it
+
+# a schema dropped with its macros
+statement ok
+CREATE SCHEMA lake.s3
+
+statement ok
+CREATE MACRO lake.s3.g() AS 7
+
+statement ok
+CREATE TABLE lake.s3.inside (c INTEGER DEFAULT lake.s3.g())
+
+statement ok
+CREATE TABLE lake.z (c INTEGER DEFAULT lake.s3.g())
+
+statement error
+DROP SCHEMA lake.s3 CASCADE
+----
+Cannot drop macro "g" because the default of column "c" of table "z" calls it
+
+statement ok
+DROP TABLE lake.z
+
+statement ok
+DROP SCHEMA lake.s3 CASCADE
