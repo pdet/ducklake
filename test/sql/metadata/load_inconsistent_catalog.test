@@ -75,7 +75,7 @@ ATTACH 'ducklake:{TEST_DIR}/inconsistent_parent.db' AS dl
 statement error
 SELECT * FROM dl.t
 ----
-Could not find parent column for column a
+Could not find parent column for column "a"
 
 statement ok
 DETACH dl
