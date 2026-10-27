@@ -15,8 +15,10 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 SET TimeZone = 'UTC'
 
+# an inlined data table would keep the type that the UPDATE below changes
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/tz_ns_v10_existing', DUCKLAKE_VERSION '1.0')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+    (DATA_PATH '{DATA_PATH}/tz_ns_v10_existing', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE lake.plain (i INTEGER)
@@ -42,10 +44,13 @@ SELECT i FROM lake.plain
 ----
 7
 
-query T
-SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 't' AND column_name = 'ts'
+statement ok
+INSERT INTO lake.t VALUES (1, '2024-01-02 03:04:05.123456789+00')
+
+query ITT
+SELECT i, ts, typeof(ts) FROM lake.t
 ----
-TIMESTAMPTZ_NS
+1	2024-01-02 03:04:05.123456789+00	TIMESTAMPTZ_NS
 
 statement ok
 ALTER TABLE lake.t ADD COLUMN j INTEGER
@@ -70,6 +75,11 @@ query I
 SELECT i FROM lake.plain
 ----
 7
+
+query IT
+SELECT i, ts FROM lake.t
+----
+1	2024-01-02 03:04:05.123456789+00
 
 query T
 SELECT column_type FROM __ducklake_metadata_lake.ducklake_column WHERE column_name = 'ts' AND end_snapshot IS NULL
