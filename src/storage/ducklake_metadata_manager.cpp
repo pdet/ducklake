@@ -659,10 +659,11 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = '
 }
 
 void DuckLakeMetadataManager::MigrateV20Dev1() {
-	auto migrate_query = R"(
+	auto migrate_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at TIMESTAMPTZ;
-)";
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;
+)",
+	                                        TimestampTzColumnType());
 	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 

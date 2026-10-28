@@ -212,6 +212,10 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! The type of a metadata column that a migration adds for a timestamp with time zone
+	virtual string TimestampTzColumnType() const {
+		return "TIMESTAMPTZ";
+	}
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const {
 		return true;
