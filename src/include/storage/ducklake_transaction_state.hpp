@@ -312,8 +312,6 @@ public:
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> new_snapshot_tags;
 	//! The committed snapshot tags this transaction drops, by their stored name
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> dropped_snapshot_tags;
-	//! The committed snapshot tags this transaction gives another expiry time, which it drops and creates again
-	case_insensitive_set_t altered_snapshot_tags;
 	//! The committed snapshot tags past their expiry time that an expiry in the statements of this transaction drops
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> expired_snapshot_tags;
 };

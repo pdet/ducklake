@@ -28,7 +28,6 @@ enum class ChangeType {
 	DROPPED_TABLE_MACRO,
 	CREATED_SNAPSHOT_TAG,
 	DROPPED_SNAPSHOT_TAG,
-	ALTERED_SNAPSHOT_TAG,
 	EXPIRED_SNAPSHOT
 };
 
@@ -56,7 +55,6 @@ constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
     {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "inline_flush"},
     {static_cast<uint32_t>(ChangeType::CREATED_SNAPSHOT_TAG), "created_tag"},
     {static_cast<uint32_t>(ChangeType::DROPPED_SNAPSHOT_TAG), "dropped_tag"},
-    {static_cast<uint32_t>(ChangeType::ALTERED_SNAPSHOT_TAG), "altered_tag"},
     {static_cast<uint32_t>(ChangeType::EXPIRED_SNAPSHOT), "expired_snapshot"}};
 
 struct ParsedChange {
@@ -212,11 +210,6 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		case ChangeType::DROPPED_SNAPSHOT_TAG: {
 			idx_t pos = 0;
 			result.dropped_snapshot_tags.insert(DuckLakeUtil::ParseQuotedValue(entry.change_value, pos));
-			break;
-		}
-		case ChangeType::ALTERED_SNAPSHOT_TAG: {
-			idx_t pos = 0;
-			result.altered_snapshot_tags.insert(DuckLakeUtil::ParseQuotedValue(entry.change_value, pos));
 			break;
 		}
 		case ChangeType::EXPIRED_SNAPSHOT:

@@ -876,7 +876,6 @@ void DuckLakeTransaction::Rollback() {
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();
-	state->altered_snapshot_tags.clear();
 	state->expired_snapshot_tags.clear();
 	pending_name_map_cache_invalidations.clear();
 	SetRequiresNewInlinedTable(false);
@@ -1121,18 +1120,12 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 		}
 		AddTableChanges(table_id, entry.second, changes);
 	}
-	auto &altered = state->altered_snapshot_tags;
 	for (auto &tag : state->new_snapshot_tags) {
-		if (altered.find(tag.first) == altered.end()) {
-			changes.created_snapshot_tags.insert(tag.first);
-		}
+		changes.created_snapshot_tags.insert(tag.first);
 	}
 	for (auto &tag : state->dropped_snapshot_tags) {
-		if (altered.find(tag.first) == altered.end()) {
-			changes.dropped_snapshot_tags.insert(tag.first);
-		}
+		changes.dropped_snapshot_tags.insert(tag.first);
 	}
-	changes.altered_snapshot_tags = altered;
 	return changes;
 }
 
@@ -1603,7 +1596,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 				break;
 			}
 			// Table creation must finish before binding the inlined INSERT.
-			result = connection->Query(std::move(insert));
+			result = ExecuteStatement(std::move(insert));
 		}
 		inlined_inserts.clear();
 		return result;
@@ -1847,13 +1840,7 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 		throw InvalidInputException("A snapshot tag with the name \"%s\" already exists", name);
 	}
 	CheckSnapshotTagExpiry(name, expires_at);
-	for (auto &filter : expiry_filters) {
-		for (auto &expired : ExpirableSnapshotsInternal(filter)) {
-			if (expired.id == snapshot_id) {
-				throw InvalidInputException("Cannot tag snapshot %d, it is expired by this transaction", snapshot_id);
-			}
-		}
-	}
+	CheckNotExpiredInTransaction(snapshot_id);
 	DuckLakeSnapshotTagInfo tag;
 	tag.name = name;
 	tag.snapshot_id = snapshot_id;
@@ -1861,48 +1848,78 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 	state->new_snapshot_tags[name] = std::move(tag);
 }
 
-void DuckLakeTransaction::SetSnapshotTagExpiry(const string &name, const Value &expires_at) {
-	lock_guard<mutex> guard(snapshot_tag_lock);
-	auto local_tag = state->new_snapshot_tags.find(name);
-	optional_ptr<const DuckLakeSnapshotTagInfo> committed;
-	vector<DuckLakeSnapshotTagInfo> tags;
-	if (local_tag == state->new_snapshot_tags.end()) {
-		tags = GetMetadataManager().GetSnapshotTags();
-		committed = FindCommittedSnapshotTag(name, tags);
-		if (!committed) {
-			throw InvalidInputException("A snapshot tag with the name \"%s\" does not exist", name);
+void DuckLakeTransaction::CheckNotExpiredInTransaction(idx_t snapshot_id) {
+	auto expired = expired_in_transaction;
+	for (auto &filter : expiry_filters) {
+		auto selected = ExpirableSnapshotsInternal(filter);
+		expired.insert(expired.end(), selected.begin(), selected.end());
+	}
+	for (auto &snapshot : expired) {
+		if (snapshot.id == snapshot_id) {
+			throw InvalidInputException("Cannot tag snapshot %d, it is expired by this transaction", snapshot_id);
 		}
 	}
-	auto &current = committed ? *committed : local_tag->second;
-	if (Value::NotDistinctFrom(current.expires_at, expires_at)) {
+}
+
+void DuckLakeTransaction::ExpireReleasedSnapshots() {
+	// a deferred expiry selects its snapshots when the transaction commits
+	if (GetMetadataManager().CommitsEachStatement()) {
 		return;
 	}
-	CheckSnapshotTagExpiry(current.name, expires_at);
-	if (committed) {
-		// the commit ends the row of the tag and begins one with the new expiry time
-		auto tag = *committed;
-		tag.created_snapshot_id = optional_idx();
-		tag.expires_at = expires_at;
-		state->dropped_snapshot_tags[committed->name] = *committed;
-		state->new_snapshot_tags[committed->name] = std::move(tag);
-		state->altered_snapshot_tags.insert(committed->name);
-		return;
+	for (auto &filter : expiry_filters) {
+		ExpireSnapshotsNow(filter);
 	}
-	auto dropped = state->dropped_snapshot_tags.find(name);
-	if (state->altered_snapshot_tags.count(name) && Value::NotDistinctFrom(dropped->second.expires_at, expires_at)) {
-		// an altered tag that gets its committed expiry time back is not altered at all
-		state->new_snapshot_tags.erase(local_tag);
-		state->dropped_snapshot_tags.erase(dropped);
-		state->altered_snapshot_tags.erase(name);
-		return;
+}
+
+DuckLakeSnapshotTagInfo DuckLakeTransaction::LiveSnapshotTag(const string &name) {
+	auto local_tag = state->new_snapshot_tags.find(name);
+	if (local_tag != state->new_snapshot_tags.end()) {
+		return local_tag->second;
 	}
-	local_tag->second.expires_at = expires_at;
+	auto tags = GetMetadataManager().GetSnapshotTags();
+	auto committed = FindCommittedSnapshotTag(name, tags);
+	if (!committed) {
+		throw InvalidInputException("A snapshot tag with the name \"%s\" does not exist", name);
+	}
+	return *committed;
+}
+
+void DuckLakeTransaction::ChangeSnapshotTag(const DuckLakeSnapshotTagInfo &tag, DuckLakeSnapshotTagInfo changed) {
+	if (tag.created_snapshot_id.IsValid()) {
+		// a new row also when nothing changes, so that the commit conflicts with every concurrent change of the tag
+		state->dropped_snapshot_tags[tag.name] = tag;
+		changed.created_snapshot_id = optional_idx();
+	}
+	state->new_snapshot_tags[tag.name] = std::move(changed);
+}
+
+void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	auto tag = LiveSnapshotTag(name);
+	if (expected_snapshot_id.IsValid() && expected_snapshot_id.GetIndex() != tag.snapshot_id) {
+		throw InvalidInputException("The snapshot tag \"%s\" names snapshot %d, not the expected snapshot %d", name,
+		                            tag.snapshot_id, expected_snapshot_id.GetIndex());
+	}
+	CheckNotExpiredInTransaction(snapshot_id);
+	auto changed = tag;
+	changed.snapshot_id = snapshot_id;
+	ChangeSnapshotTag(tag, std::move(changed));
+	ExpireReleasedSnapshots();
+}
+
+void DuckLakeTransaction::SetSnapshotTagExpiry(const string &name, const Value &expires_at) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	auto tag = LiveSnapshotTag(name);
+	CheckSnapshotTagExpiry(tag.name, expires_at);
+	auto changed = tag;
+	changed.expires_at = expires_at;
+	ChangeSnapshotTag(tag, std::move(changed));
 }
 
 void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	if (state->new_snapshot_tags.erase(name)) {
-		state->altered_snapshot_tags.erase(name);
+		ExpireReleasedSnapshots();
 		return;
 	}
 	auto tags = GetMetadataManager().GetSnapshotTags();
@@ -1911,6 +1928,7 @@ void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 		throw InvalidInputException("A snapshot tag with the name \"%s\" does not exist", name);
 	}
 	state->dropped_snapshot_tags[committed->name] = *committed;
+	ExpireReleasedSnapshots();
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTags() {
@@ -2107,18 +2125,30 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
-	auto end = std::chrono::steady_clock::now();
-	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	ReportMetadataQuery(query, std::chrono::steady_clock::now() - start);
+	return std::move(result);
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::ExecuteStatement(unique_ptr<SQLStatement> statement) {
+	auto &connection = GetConnection();
+	auto query = statement->query;
+	auto start = std::chrono::steady_clock::now();
+	auto result = connection.Query(std::move(statement));
+	ReportMetadataQuery(query, std::chrono::steady_clock::now() - start);
+	return std::move(result);
+}
+
+void DuckLakeTransaction::ReportMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed) {
+	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
 	DUCKDB_LOG(db, DuckLakeMetadataLogType, ducklake_catalog.GetName().GetIdentifierName(), query, elapsed_ms);
 
 	auto &cb = ducklake_catalog.GetQueryCallback();
 	if (cb) {
 		// LCOV_EXCL_START
-		cb(query, end - start);
+		cb(query, elapsed);
 		// LCOV_EXCL_STOP
 	}
-	return std::move(result);
 }
 
 Identifier DuckLakeTransaction::GetDefaultSchemaName() {
@@ -2186,7 +2216,10 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	// this is used as a caching key for the snapshot, as a timestamp resolves to another snapshot per bound
 	child_list_t<Value> values;
 	values.push_back(make_pair(Identifier(at_clause->Unit()), version));
-	values.push_back(make_pair(Identifier("bound"), Value::UTINYINT(static_cast<uint8_t>(bound))));
+	if (at_clause->Unit() != "version") {
+		// a version is the same snapshot for both bounds
+		values.push_back(make_pair(Identifier("bound"), Value::UTINYINT(static_cast<uint8_t>(bound))));
+	}
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
 	lock_guard<mutex> guard(snapshot_lock);

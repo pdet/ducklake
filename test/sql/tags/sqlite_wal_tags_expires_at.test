@@ -51,7 +51,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-another transaction has altered it already
+another transaction has created a tag with this name already
 
 query I
 SELECT expires_at = TIMESTAMPTZ '2200-01-01 00:00:00+00' FROM ducklake_tags('dl')
@@ -77,7 +77,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-another transaction has dropped it
+another transaction has dropped a tag with this name
 
 statement ok
 CALL ducklake_create_tag('dl', 'release', version => 2, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
@@ -101,7 +101,7 @@ COMMIT
 statement error con2
 COMMIT
 ----
-another transaction has altered it
+another transaction has dropped it already
 
 query II
 SELECT tag_name, expires_at IS NULL FROM ducklake_tags('dl')
@@ -126,7 +126,7 @@ CALL ducklake_expire_snapshots('dl', versions => [3])
 statement error con1
 COMMIT
 ----
-another transaction has dropped it
+another transaction has dropped a tag with this name
 
 query II
 SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1

@@ -22,6 +22,8 @@
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
@@ -205,6 +207,8 @@ public:
 	DuckLakeSnapshotCommit &GetCommitInfo();
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
+	//! Execute a statement on the metadata connection, logged with its query text like ExecuteRaw.
+	unique_ptr<QueryResult> ExecuteStatement(unique_ptr<SQLStatement> statement);
 	Connection &GetConnection();
 	//! Releases the metadata transaction until the next metadata access
 	void ReleaseMetadataTransaction();
@@ -306,6 +310,8 @@ public:
 
 	void CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at);
 	void DropSnapshotTag(const string &name);
+	//! Moves a live tag to the snapshot, when it names the expected snapshot if one is given
+	void ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id);
 	//! Gives a live tag another expiry time, NULL when it does not expire
 	void SetSnapshotTagExpiry(const string &name, const Value &expires_at);
 	//! The live snapshot tags, with the changes of this transaction
@@ -374,6 +380,7 @@ public:
 private:
 	void FlushChanges();
 	void BeginMetadataTransaction();
+	void ReportMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed);
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
@@ -393,6 +400,14 @@ private:
 	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTagsInternal(bool with_snapshot_time = true);
+	//! Fails when the expiry of this transaction removes the snapshot a tag is to name
+	void CheckNotExpiredInTransaction(idx_t snapshot_id);
+	//! Expires what a tag change releases, when an expiry of this transaction ran in its statements
+	void ExpireReleasedSnapshots();
+	//! The live tag of the name with the changes of this transaction, which fails when there is none
+	DuckLakeSnapshotTagInfo LiveSnapshotTag(const string &name);
+	//! Makes the changed tag the one the transaction commits for the live tag
+	void ChangeSnapshotTag(const DuckLakeSnapshotTagInfo &tag, DuckLakeSnapshotTagInfo changed);
 	set<idx_t> TaggedSnapshotsInternal();
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
 	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);

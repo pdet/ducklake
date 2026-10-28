@@ -362,19 +362,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		NameConflictCheck(name, other_changes.created_snapshot_tags, "create tag",
 		                  "created a tag with this name already");
 		NameConflictCheck(name, other_changes.dropped_snapshot_tags, "create tag", "dropped a tag with this name");
-		NameConflictCheck(name, other_changes.altered_snapshot_tags, "create tag", "altered a tag with this name");
 	}
 	for (auto &name : changes.dropped_snapshot_tags) {
 		NameConflictCheck(name, other_changes.dropped_snapshot_tags, "drop tag", "dropped it already");
 		// only a backend that reads the latest metadata validates a drop against a tag of the window
 		NameConflictCheck(name, other_changes.created_snapshot_tags, "drop tag", "created a tag with this name");
-		NameConflictCheck(name, other_changes.altered_snapshot_tags, "drop tag", "altered it");
-	}
-	// an altered tag conflicts with every other change of its name
-	for (auto &name : changes.altered_snapshot_tags) {
-		NameConflictCheck(name, other_changes.dropped_snapshot_tags, "alter tag", "dropped it");
-		NameConflictCheck(name, other_changes.created_snapshot_tags, "alter tag", "created a tag with this name");
-		NameConflictCheck(name, other_changes.altered_snapshot_tags, "alter tag", "altered it already");
 	}
 }
 
@@ -475,9 +467,6 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	}
 	for (auto &name : changes.dropped_snapshot_tags) {
 		changes_made.push_back("dropped_tag:" + SQLQuotedIdentifier::ToString(name));
-	}
-	for (auto &name : changes.altered_snapshot_tags) {
-		changes_made.push_back("altered_tag:" + SQLQuotedIdentifier::ToString(name));
 	}
 	for (auto &snapshot_id : changes.expired_snapshots) {
 		changes_made.push_back("expired_snapshot:" + to_string(snapshot_id));

@@ -27,6 +27,11 @@ CALL ducklake_drop_tag('dl', 'v1')
 DuckLake 1.1 does not support snapshot tags
 
 statement error
+CALL ducklake_replace_tag('dl', 'v1')
+----
+DuckLake 1.1 does not support snapshot tags
+
+statement error
 CALL ducklake_set_tag_expiry('dl', 'v1', NULL)
 ----
 DuckLake 1.1 does not support snapshot tags
