@@ -35,7 +35,7 @@ DuckLakeFieldId::DuckLakeFieldId(DuckLakeColumnData column_data_p, Identifier na
 		auto &child = children[child_idx];
 		auto entry = child_map.find(child->name);
 		if (entry != child_map.end()) {
-			throw InvalidInputException("Duplicate child name \"%s\" found in column \"%s\"", child->name, name);
+			throw InvalidInputException("Duplicate child name %s found in column %s", child->name, name);
 		}
 		child->parent = this;
 		child_map.insert(make_pair(child->name, child_idx));

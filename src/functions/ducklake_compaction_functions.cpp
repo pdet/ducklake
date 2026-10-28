@@ -262,7 +262,8 @@ static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &o
 		if (!latest_field) {
 			return false;
 		}
-		if (older_field->Name() != latest_field->Name()) {
+		// a rename that only changes the case is still a rename, which `Identifier` equality would not see
+		if (older_field->Name().GetIdentifierName() != latest_field->Name().GetIdentifierName()) {
 			return false;
 		}
 		if (older_field->Type() != latest_field->Type()) {

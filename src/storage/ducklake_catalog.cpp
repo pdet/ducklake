@@ -713,7 +713,7 @@ static set<SchemaIndex> FindUnreachableSchemas(const vector<DuckLakeSchemaInfo> 
 			}
 			if (!visited.insert(current->id).second) {
 				throw InvalidInputException(
-				    "Failed to load DuckLake - schema \"%s\" (id %d) has a cyclic parent schema chain", current->name,
+				    "Failed to load DuckLake - schema %s (id %d) has a cyclic parent schema chain", current->name,
 				    current->id.index);
 			}
 			chain.push_back(current);

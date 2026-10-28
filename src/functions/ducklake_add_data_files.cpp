@@ -1098,7 +1098,7 @@ static bool IsRowLineageFieldId(idx_t field_id) {
 
 static bool HasFieldIdNotGivenOut(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
 	for (auto &column : columns) {
-		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
+		if (!IsDuckLakeInternalColumn(column->parquet_name) && column->field_id.IsValid()) {
 			auto field_id = column->field_id.GetIndex();
 			if (field_id >= next_column_id && !IsRowLineageFieldId(field_id)) {
 				return true;
@@ -1115,7 +1115,7 @@ static bool HasFieldIdNotGivenOut(const vector<unique_ptr<ParquetColumn>> &colum
 //! internal columns that DuckLake writes
 static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
 	for (auto &column : columns) {
-		if (StringUtil::StartsWith(column->name, "_ducklake_internal_")) {
+		if (StringUtil::StartsWith(column->parquet_name, "_ducklake_internal_")) {
 			return false;
 		}
 	}
@@ -1129,7 +1129,7 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
 	for (auto &column : columns) {
 		auto &name = column->name.GetIdentifierName();
 		const auto full_name = prefix.empty() ? name : StringUtil::Format("%s.%s", prefix, name);
-		if (!IsDuckLakeInternalColumn(name) && column->field_id.IsValid()) {
+		if (!IsDuckLakeInternalColumn(column->parquet_name) && column->field_id.IsValid()) {
 			const auto source_field_id = column->field_id.GetIndex();
 			// columns map by name, the ids of another writer's file are not DuckLake's
 			if (live_field_ids.find(source_field_id) == live_field_ids.end() &&
