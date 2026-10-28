@@ -277,3 +277,20 @@ query II
 SELECT snapshot_id, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM ducklake_tags('dl') WHERE tag_name = 'later'
 ----
 15	true
+
+# a tag past its time cannot move, since the move keeps the time, until it gets a new one
+statement ok
+CALL ducklake_create_tag('dl', 'stale', version => 15, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement error
+CALL ducklake_replace_tag('dl', 'stale', version => 15)
+----
+The expiry time of snapshot tag "stale" has passed
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'stale', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_replace_tag('dl', 'stale', version => 15)

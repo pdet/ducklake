@@ -391,7 +391,8 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "");
 		migrate_query = StringUtil::Replace(migrate_query, "{WHERE_EMPTY}", "");
 	}
-	auto result = Execute(migrate_query);
+	// a server that commits each statement on its own would keep a failed migration half applied
+	auto result = CommitsEachStatement() ? ExecuteInTransaction(migrate_query) : Execute(migrate_query);
 	result->ThrowIfError("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
 }
 
@@ -659,8 +660,8 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = '
 
 void DuckLakeMetadataManager::MigrateV20Dev1() {
 	auto migrate_query = R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at TIMESTAMPTZ;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at TIMESTAMPTZ;
 )";
 	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }

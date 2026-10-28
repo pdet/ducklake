@@ -1896,6 +1896,8 @@ void DuckLakeTransaction::ChangeSnapshotTag(const DuckLakeSnapshotTagInfo &tag, 
 void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	auto tag = LiveSnapshotTag(name);
+	// the moved tag keeps its expiry time
+	CheckSnapshotTagExpiry(tag.name, tag.expires_at);
 	if (expected_snapshot_id.IsValid() && expected_snapshot_id.GetIndex() != tag.snapshot_id) {
 		throw InvalidInputException("The snapshot tag \"%s\" names snapshot %d, not the expected snapshot %d", name,
 		                            tag.snapshot_id, expected_snapshot_id.GetIndex());
