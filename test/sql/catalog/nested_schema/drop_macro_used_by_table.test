@@ -42,29 +42,25 @@ DROP MACRO lake.a.b.f
 ----
 Cannot drop macro "f" because the default of column "c" of table "y" calls it
 
-# a full path names one macro only, even where it is the end of a longer path
+# catalog.name in a table of a nested schema resolves through the name of its schema
 statement ok
-CREATE SCHEMA lake.a.lake
+CREATE SCHEMA lake.b
 
 statement ok
-CREATE SCHEMA lake.a.lake.c
+CREATE MACRO lake.b.k() AS 9
 
 statement ok
-CREATE SCHEMA lake.a.lake.c.b
+CREATE TABLE lake.a.b.t (c INTEGER DEFAULT lake.k())
 
 statement ok
-CREATE MACRO lake.a.lake.c.b.f() AS 3
+INSERT INTO lake.a.b.t DEFAULT VALUES
 
-statement ok
-CREATE MACRO lake.c.b.f() AS 4
-
-statement ok
-CREATE TABLE lake.w (c INTEGER DEFAULT lake.c.b.f())
-
-statement ok
-DROP MACRO lake.a.lake.c.b.f
+query I
+SELECT c FROM lake.a.b.t
+----
+9
 
 statement error
-DROP MACRO lake.c.b.f
+DROP MACRO lake.b.k
 ----
-Cannot drop macro "f" because the default of column "c" of table "w" calls it
+Cannot drop macro "k" because the default of column "c" of table "t" calls it
