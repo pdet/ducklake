@@ -1,0 +1,70 @@
+# name: test/sql/catalog/nested_schema/drop_macro_used_by_table.test
+# description: DROP MACRO of a nested schema is refused while a column default calls the macro by its full path
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/nested_drop_macro_used_by_table', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE SCHEMA lake.a
+
+statement ok
+CREATE SCHEMA lake.a.b
+
+statement ok
+CREATE SCHEMA lake.c
+
+statement ok
+CREATE SCHEMA lake.c.b
+
+statement ok
+CREATE MACRO lake.a.b.f() AS 1
+
+statement ok
+CREATE MACRO lake.c.b.f() AS 2
+
+statement ok
+CREATE TABLE lake.y (c INTEGER DEFAULT lake.a.b.f())
+
+statement ok
+DROP MACRO lake.c.b.f
+
+statement error
+DROP MACRO lake.a.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "y" calls it
+
+# a full path names one macro only, even where it is the end of a longer path
+statement ok
+CREATE SCHEMA lake.a.lake
+
+statement ok
+CREATE SCHEMA lake.a.lake.c
+
+statement ok
+CREATE SCHEMA lake.a.lake.c.b
+
+statement ok
+CREATE MACRO lake.a.lake.c.b.f() AS 3
+
+statement ok
+CREATE MACRO lake.c.b.f() AS 4
+
+statement ok
+CREATE TABLE lake.w (c INTEGER DEFAULT lake.c.b.f())
+
+statement ok
+DROP MACRO lake.a.lake.c.b.f
+
+statement error
+DROP MACRO lake.c.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "w" calls it

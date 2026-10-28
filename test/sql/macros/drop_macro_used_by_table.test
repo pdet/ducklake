@@ -129,35 +129,20 @@ DROP MACRO lake.six
 ----
 Cannot drop macro "six" because the default of column "c" of table "x" calls it
 
-# nested schemas with a macro of the same name
+# catalog.name in a table of another schema resolves in that schema first
 statement ok
-CREATE SCHEMA lake.a
+CREATE SCHEMA lake.s4
 
 statement ok
-CREATE SCHEMA lake.a.b
+CREATE MACRO lake.s4.h() AS 8
 
 statement ok
-CREATE SCHEMA lake.c
-
-statement ok
-CREATE SCHEMA lake.c.b
-
-statement ok
-CREATE MACRO lake.a.b.f() AS 1
-
-statement ok
-CREATE MACRO lake.c.b.f() AS 2
-
-statement ok
-CREATE TABLE lake.y (c INTEGER DEFAULT lake.a.b.f())
-
-statement ok
-DROP MACRO lake.c.b.f
+CREATE TABLE lake.s4.r (c INTEGER DEFAULT lake.h())
 
 statement error
-DROP MACRO lake.a.b.f
+DROP MACRO lake.s4.h
 ----
-Cannot drop macro "f" because the default of column "c" of table "y" calls it
+Cannot drop macro "h" because the default of column "c" of table "r" calls it
 
 # a schema dropped with its macros
 statement ok
