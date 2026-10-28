@@ -99,8 +99,11 @@ DROP MACRO lake.s2.three
 ----
 Cannot drop macro "three" because the default of column "c" of table "u" calls it
 
-statement ok
+# a macro of the same name in another schema is held too, as the name alone can resolve to it
+statement error
 DROP MACRO lake.three
+----
+Cannot drop macro "three" because the default of column "c" of table "u" calls it
 
 statement ok
 INSERT INTO lake.u DEFAULT VALUES
@@ -116,6 +119,9 @@ DROP TABLE lake.u
 
 statement ok
 DROP MACRO lake.s2.three
+
+statement ok
+DROP MACRO lake.three
 
 # a call nested in another function
 statement ok

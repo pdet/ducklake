@@ -34,8 +34,11 @@ CREATE MACRO lake.c.b.f() AS 2
 statement ok
 CREATE TABLE lake.y (c INTEGER DEFAULT lake.a.b.f())
 
-statement ok
+# a macro of the same name in another schema is held too
+statement error
 DROP MACRO lake.c.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "y" calls it
 
 statement error
 DROP MACRO lake.a.b.f
