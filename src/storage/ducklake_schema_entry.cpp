@@ -529,59 +529,70 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
-//! The catalog, the schemas and the name of a macro
-static vector<Identifier> MacroPath(const DuckLakeSchemaEntry &schema, const Identifier &macro_name) {
-	vector<Identifier> path {macro_name};
+//! The names of the schema and its parents, outermost first
+static vector<Identifier> SchemaPath(const DuckLakeSchemaEntry &schema) {
+	vector<Identifier> path;
 	for (auto current = &schema; current; current = current->ParentDuckLakeSchema().get()) {
 		path.insert(path.begin(), current->name);
 	}
-	path.insert(path.begin(), schema.ParentCatalog().GetName());
 	return path;
 }
 
-//! Whether a function name can resolve to the macro: the parts written are the end of its path, as an unqualified
-//! name or one relative to a schema in the search path can be, or catalog.name for the default schema
-static bool NameCanBeMacro(const vector<Identifier> &written, const vector<Identifier> &macro_path,
-                           const Identifier &default_schema) {
-	if (written.empty() || written.size() > macro_path.size()) {
-		return false;
-	}
-	if (std::equal(written.begin(), written.end(), macro_path.end() - written.size())) {
-		return true;
-	}
-	return written.size() == 2 && macro_path.size() == 3 && written[0] == macro_path[0] &&
-	       macro_path[1] == default_schema && written[1] == macro_path[2];
-}
+struct MacroReference {
+	Identifier catalog;
+	vector<Identifier> schema_path;
+	Identifier name;
 
-static bool CallsMacro(const ParsedExpression &expr, const vector<Identifier> &macro_path,
-                       const Identifier &default_schema) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
-	    NameCanBeMacro(expr.Cast<FunctionExpression>().GetQualifiedName().Path(), macro_path, default_schema)) {
-		return true;
+	//! Whether a function name written in a default of a table in the given schema can resolve to the macro
+	bool CanBeCalledAs(const vector<Identifier> &written, const vector<Identifier> &table_schema_path) const {
+		if (written.empty() || !(written.back() == name)) {
+			return false;
+		}
+		vector<Identifier> full_path {catalog};
+		full_path.insert(full_path.end(), schema_path.begin(), schema_path.end());
+		full_path.push_back(name);
+		if (written.size() >= 3 && written[0] == catalog) {
+			// a name with the catalog and a schema is complete
+			return written == full_path;
+		}
+		if (written.size() == 2 && written[0] == catalog) {
+			// catalog.name resolves in the schema of the table, then in the default schema
+			return schema_path == table_schema_path || schema_path == vector<Identifier> {Identifier(DEFAULT_SCHEMA)};
+		}
+		// an unqualified name or one relative to a schema in the search path
+		return written.size() <= full_path.size() &&
+		       std::equal(written.begin(), written.end(), full_path.end() - written.size());
 	}
-	bool calls = false;
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](const ParsedExpression &child) { calls = calls || CallsMacro(child, macro_path, default_schema); });
-	return calls;
-}
+
+	bool IsCalledBy(const ParsedExpression &expr, const vector<Identifier> &table_schema_path) const {
+		if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
+		    CanBeCalledAs(expr.Cast<FunctionExpression>().GetQualifiedName().Path(), table_schema_path)) {
+			return true;
+		}
+		bool called = false;
+		ParsedExpressionIterator::EnumerateChildren(
+		    expr, [&](const ParsedExpression &child) { called = called || IsCalledBy(child, table_schema_path); });
+		return called;
+	}
+};
 
 //! Column defaults are bound on every write, so a table cannot be written once a macro its defaults call is dropped
 static void ThrowIfTableCallsMacro(ClientContext &context, DuckLakeSchemaEntry &macro_schema,
                                    const Identifier &macro_name,
                                    const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
 	auto &catalog = macro_schema.ParentCatalog();
-	auto macro_path = MacroPath(macro_schema, macro_name);
-	auto default_schema = Identifier(DEFAULT_SCHEMA);
+	MacroReference macro {catalog.GetName(), SchemaPath(macro_schema), macro_name};
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
 		if (dropped_schemas.find(schema) != dropped_schemas.end()) {
 			return;
 		}
+		auto table_schema_path = SchemaPath(schema.Cast<DuckLakeSchemaEntry>());
 		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
 			if (entry.type != CatalogType::TABLE_ENTRY) {
 				return;
 			}
 			for (auto &column : entry.Cast<DuckLakeTableEntry>().GetColumns().Logical()) {
-				if (column.HasDefaultValue() && CallsMacro(column.DefaultValue(), macro_path, default_schema)) {
+				if (column.HasDefaultValue() && macro.IsCalledBy(column.DefaultValue(), table_schema_path)) {
 					throw DependencyException(
 					    "Cannot drop macro \"%s\" because the default of column \"%s\" of table \"%s\" calls it",
 					    macro_name.GetIdentifierName(), column.Name().GetIdentifierName(),
