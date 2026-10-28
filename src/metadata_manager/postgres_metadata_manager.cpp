@@ -427,11 +427,11 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 				auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
 				convert = stored_type != storage_type && stored_type == native_type;
 			}
-			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", names[i],
+			auto column_name = SQLQuotedIdentifier::ToString(names[i]);
+			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());
-			auto column_ref = SQLQuotedIdentifier::ToString(names[i]);
-			select_list.push_back(convert ? DuckLakeUtil::InlinedStorageExpression(*this, column_ref, type)
-			                              : column_ref);
+			select_list.push_back(convert ? DuckLakeUtil::InlinedStorageExpression(*this, column_name, type)
+			                              : column_name);
 			rewrite = rewrite || convert;
 		}
 		if (!rewrite) {

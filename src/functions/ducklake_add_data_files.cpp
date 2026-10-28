@@ -1068,9 +1068,8 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 		if (!allow_missing) {
 			throw InvalidInputException("Column \"%s%s\" exists in table %s but was not found in file \"%s\"\n* Set "
 			                            "allow_missing => true to allow missing fields and columns",
-			                            prefix.empty() ? prefix : prefix + ".",
-			                            entry.second.get().Name().GetIdentifierName(), table.name,
-			                            file_metadata.filepath);
+			                            prefix.empty() ? prefix : prefix + ".", field_id.Name().GetIdentifierName(),
+			                            table.name, file_metadata.filepath);
 		}
 		DuckLakeMissingField::Collect(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
 		                              file_metadata.missing_columns);
@@ -1127,8 +1126,8 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
                                                     const unordered_set<idx_t> &live_field_ids, bool foreign_field_ids,
                                                     const string &prefix) {
 	for (auto &column : columns) {
-		auto &name = column->name.GetIdentifierName();
-		const auto full_name = prefix.empty() ? name : StringUtil::Format("%s.%s", prefix, name);
+		const auto full_name =
+		    prefix.empty() ? column->parquet_name : StringUtil::Format("%s.%s", prefix, column->parquet_name);
 		if (!IsDuckLakeInternalColumn(column->parquet_name) && column->field_id.IsValid()) {
 			const auto source_field_id = column->field_id.GetIndex();
 			// columns map by name, the ids of another writer's file are not DuckLake's

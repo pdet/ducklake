@@ -581,7 +581,7 @@ void DuckLakeTableEntry::ValidateSortExpressionColumns(const ColumnList &columns
 	if (!missing_columns.empty()) {
 		throw BinderException("Columns in the SET SORTED BY statement were not found in the DuckLake table. "
 		                      "Unmatched columns were: %s",
-		                      StringUtil::Join(IdentifiersToStrings(missing_columns), ", "));
+		                      StringUtil::Join(missing_columns, ", "));
 	}
 }
 
@@ -1338,8 +1338,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	if (parent_id.GetChildByName(info.new_name)) {
 		throw CatalogException("Failed to rename field %s to %s - field with this name already exists in column \"%s\"",
-		                       info.column_path.back(), info.new_name,
-		                       StringUtil::Join(IdentifiersToStrings(parent_path), "."));
+		                       info.column_path.back(), info.new_name, StringUtil::Join(parent_path, "."));
 	}
 
 	// generate the removed column info
