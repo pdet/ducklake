@@ -75,6 +75,12 @@ string DuckLakeTableFunctionUtil::GetTableName(const Value &input) {
 	return input.GetValue<string>();
 }
 
+void DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(const Value &input) {
+	if (input.IsNull()) {
+		throw BinderException("Snapshot identifier cannot be NULL");
+	}
+}
+
 BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
 	if (input.type().id() == LogicalTypeId::TIMESTAMP_TZ && !input.IsNull()) {
 		return BoundAtClause("timestamp", input);
@@ -84,9 +90,7 @@ BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
 }
 
 BoundAtClause DuckLakeTableFunctionUtil::VersionAtClauseFromValue(const Value &input) {
-	if (input.IsNull()) {
-		throw BinderException("Snapshot identifier cannot be NULL");
-	}
+	VerifySnapshotIdentifier(input);
 	switch (input.type().id()) {
 	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::VARCHAR:
