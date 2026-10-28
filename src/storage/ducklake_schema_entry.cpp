@@ -549,11 +549,14 @@ struct MacroReference {
 		if (written.empty() || !(written.back() == name)) {
 			return false;
 		}
-		// the schemas written, without the catalog, are the end of the schema path of the macro
-		auto first_schema = written.begin() + (written.size() > 1 && written[0] == catalog ? 1 : 0);
-		auto written_schemas = static_cast<idx_t>(written.end() - 1 - first_schema);
+		if (written.size() < 3 || !(written[0] == catalog)) {
+			// a shorter name resolves through the search path, and x.f() can also be the call f(x)
+			return true;
+		}
+		// the schemas written are the end of the schema path of the macro
+		auto written_schemas = written.size() - 2;
 		return written_schemas <= schema_path.size() &&
-		       std::equal(first_schema, written.end() - 1, schema_path.end() - written_schemas);
+		       std::equal(written.begin() + 1, written.end() - 1, schema_path.end() - written_schemas);
 	}
 
 	bool IsCalledBy(const ParsedExpression &expr) const {
