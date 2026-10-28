@@ -294,3 +294,23 @@ CALL ducklake_set_tag_expiry('dl', 'stale', TIMESTAMPTZ '2100-01-01 00:00:00+00'
 
 statement ok
 CALL ducklake_replace_tag('dl', 'stale', version => 15)
+
+# the name of a tag that an expiry of the transaction drops stays taken until the commit
+statement ok
+CALL ducklake_create_tag('dl', 'gone', version => 15, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [999999])
+
+statement error
+CALL ducklake_create_tag('dl', 'gone', version => 15)
+----
+A snapshot tag with the name "gone" already exists
+
+statement ok
+ROLLBACK

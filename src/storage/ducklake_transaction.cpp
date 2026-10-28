@@ -1836,7 +1836,8 @@ void DuckLakeTransaction::CheckSnapshotTagExpiry(const string &name, const Value
 
 void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
-	if (!FindSnapshotTag(name).empty()) {
+	// the name of a tag that an expiry of this transaction drops stays taken until the commit, as on Quack
+	if (!FindSnapshotTag(name).empty() || state->expired_snapshot_tags.count(name)) {
 		throw InvalidInputException("A snapshot tag with the name \"%s\" already exists", name);
 	}
 	CheckSnapshotTagExpiry(name, expires_at);
