@@ -2570,9 +2570,7 @@ main_results AS (
 		query = "WITH main_results AS (\n";
 	}
 
-	// A delete file holds deletes up to its partial_max, or up to its begin_snapshot without one, except that a flush
-	// of inlined rows writes deletes of several snapshots without a partial_max next to data files that have one.
-	// Inlined deletes of the range are matched against all delete files of their data file.
+	// the delete files that can hold deletes of the range, including flushes and files with inlined deletes
 	auto delete_file_in_range = StringUtil::Format(
 	    "current_delete.begin_snapshot >= %d OR current_delete.partial_max >= %d OR (current_delete.partial_max IS "
 	    "NULL AND data.partial_max IS NOT NULL)%s",
