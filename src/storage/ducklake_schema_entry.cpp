@@ -525,8 +525,7 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
-//! Whether the expression calls a function of the name, whatever its qualifiers: a name in a default resolves through
-//! the schema of the table and the search path of the writing session, and x.f() can also be the call f(x)
+//! Matches the name alone, as a default resolves through the table schema and the search path, and x.f() can be f(x)
 static bool CallsFunctionNamed(const ParsedExpression &expr, const Identifier &name) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
 	    expr.Cast<FunctionExpression>().GetQualifiedName().Name() == name) {
