@@ -529,54 +529,22 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
-//! The names of the schema and its parents, outermost first
-static vector<Identifier> SchemaPath(const DuckLakeSchemaEntry &schema) {
-	vector<Identifier> path;
-	for (auto current = &schema; current; current = current->ParentDuckLakeSchema().get()) {
-		path.insert(path.begin(), current->name);
+//! Whether the expression calls a function of the name, whatever its qualifiers: a name in a default resolves through
+//! the schema of the table and the search path of the writing session, and x.f() can also be the call f(x)
+static bool CallsFunctionNamed(const ParsedExpression &expr, const Identifier &name) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
+	    expr.Cast<FunctionExpression>().GetQualifiedName().Name() == name) {
+		return true;
 	}
-	return path;
+	bool calls = false;
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { calls = calls || CallsFunctionNamed(child, name); });
+	return calls;
 }
 
-//! A function name in a default resolves through the schema of the table, the default schema and the search path of
-//! the writing session, so a name counts as calling the macro whenever it could resolve to it
-struct MacroReference {
-	Identifier catalog;
-	vector<Identifier> schema_path;
-	Identifier name;
-
-	bool CanBeCalledAs(const vector<Identifier> &written) const {
-		if (written.empty() || !(written.back() == name)) {
-			return false;
-		}
-		if (written.size() < 3 || !(written[0] == catalog)) {
-			// a shorter name resolves through the search path, and x.f() can also be the call f(x)
-			return true;
-		}
-		// the schemas written are the end of the schema path of the macro
-		auto written_schemas = written.size() - 2;
-		return written_schemas <= schema_path.size() &&
-		       std::equal(written.begin() + 1, written.end() - 1, schema_path.end() - written_schemas);
-	}
-
-	bool IsCalledBy(const ParsedExpression &expr) const {
-		if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
-		    CanBeCalledAs(expr.Cast<FunctionExpression>().GetQualifiedName().Path())) {
-			return true;
-		}
-		bool called = false;
-		ParsedExpressionIterator::EnumerateChildren(
-		    expr, [&](const ParsedExpression &child) { called = called || IsCalledBy(child); });
-		return called;
-	}
-};
-
 //! Column defaults are bound on every write, so a table cannot be written once a macro its defaults call is dropped
-static void ThrowIfTableCallsMacro(ClientContext &context, DuckLakeSchemaEntry &macro_schema,
-                                   const Identifier &macro_name,
+static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &macro_name,
                                    const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
-	auto &catalog = macro_schema.ParentCatalog();
-	MacroReference macro {catalog.GetName(), SchemaPath(macro_schema), macro_name};
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
 		if (dropped_schemas.find(schema) != dropped_schemas.end()) {
 			return;
@@ -586,7 +554,7 @@ static void ThrowIfTableCallsMacro(ClientContext &context, DuckLakeSchemaEntry &
 				return;
 			}
 			for (auto &column : entry.Cast<DuckLakeTableEntry>().GetColumns().Logical()) {
-				if (column.HasDefaultValue() && macro.IsCalledBy(column.DefaultValue())) {
+				if (column.HasDefaultValue() && CallsFunctionNamed(column.DefaultValue(), macro_name)) {
 					throw DependencyException(
 					    "Cannot drop macro \"%s\" because the default of column \"%s\" of table \"%s\" calls it",
 					    macro_name.GetIdentifierName(), column.Name().GetIdentifierName(),
@@ -621,7 +589,7 @@ void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool
 	}
 	// a replaced macro stays callable
 	if (info.type == CatalogType::MACRO_ENTRY && !replacing) {
-		ThrowIfTableCallsMacro(context, *this, catalog_entry->name);
+		ThrowIfTableCallsMacro(context, catalog, catalog_entry->name);
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	transaction.DropEntry(*catalog_entry);
@@ -694,8 +662,7 @@ void DuckLakeSchemaEntry::TryDropSchema(CatalogTransaction transaction, bool cas
 	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) { dropped_schemas.insert(schema); });
 	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) {
 		schema.Scan(transaction.GetContext(), CatalogType::MACRO_ENTRY, [&](CatalogEntry &entry) {
-			ThrowIfTableCallsMacro(transaction.GetContext(), schema.Cast<DuckLakeSchemaEntry>(), entry.name,
-			                       dropped_schemas);
+			ThrowIfTableCallsMacro(transaction.GetContext(), schema.ParentCatalog(), entry.name, dropped_schemas);
 		});
 	});
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
