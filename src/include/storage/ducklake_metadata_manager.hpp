@@ -617,6 +617,7 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
+	virtual void MigrateV20Dev1();
 	static string GetSnapshotTagTableStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();

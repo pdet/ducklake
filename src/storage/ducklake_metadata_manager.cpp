@@ -648,10 +648,21 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + R"(
+	// the tag table of 2.0-dev1, which the migration to 2.0-dev2 extends
+	auto migrate_query = R"(
+CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT,
+                                                     end_snapshot BIGINT);
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+void DuckLakeMetadataManager::MigrateV20Dev1() {
+	auto migrate_query = R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at TIMESTAMPTZ;
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
+)";
+	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
