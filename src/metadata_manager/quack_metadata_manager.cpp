@@ -2,6 +2,7 @@
 #include "common/ducklake_row_helpers.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/settings.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -34,6 +35,8 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
+	// the attach error becomes part of the error of the DuckLake attach, which a global SET errors_as_json would nest
+	Settings::Set<ErrorsAsJSONSetting>(*fresh_conn.context, SetScope::SESSION, Value::BOOLEAN(false));
 	auto result = fresh_conn.Query(query);
 
 	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {
@@ -110,14 +113,16 @@ static bool IsDataOnlyCommit(const TransactionChangeInformation &c) {
 	       c.created_scalar_macros.empty() && c.created_table_macros.empty() && c.altered_tables.empty() &&
 	       c.altered_tables_with_schema_version_changes.empty() && c.altered_views.empty() &&
 	       c.dropped_tables.empty() && c.dropped_views.empty() && c.dropped_scalar_macros.empty() &&
-	       c.dropped_table_macros.empty();
+	       c.dropped_table_macros.empty() && !c.HasRefChanges();
 }
 
 //! Whether the commit has to take the client-side path
 static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
-	// the server-side commit cannot create inlined-data tables, delete flushed inlined data or rewrite delete files
+	// the server-side commit cannot create inlined-data tables, delete flushed inlined data, rewrite delete files or
+	// expire snapshots
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
-	       !transaction.GetFlushedInlinedFileDeletions().empty() || transaction.GetLocalChanges().HasDatedNewDeletes();
+	       !transaction.GetFlushedInlinedFileDeletions().empty() ||
+	       transaction.GetLocalChanges().HasDatedNewDeletes() || transaction.ExpiresSnapshotsOnCommit();
 }
 
 //! Whether the commit writes inlined file deletions, which create the deletion table of a table on first use

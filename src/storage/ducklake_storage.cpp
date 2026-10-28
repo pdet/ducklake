@@ -4,6 +4,7 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 
 #include "storage/ducklake_storage.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_secret.hpp"
@@ -11,6 +12,10 @@
 namespace duckdb {
 
 static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option, const Value &value) {
+	// options of a secret skip the NULL check of ATTACH
+	if (value.IsNull()) {
+		throw BinderException("NULL is not supported as a valid option for ATTACH option \"%s\"", option);
+	}
 	auto lcase = StringUtil::Lower(option);
 	if (lcase == "data_path") {
 		options.data_path = value.ToString();
@@ -41,7 +46,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
 		}
-		options.at_clause = make_uniq<BoundAtClause>("version", value.DefaultCastAs(LogicalType::BIGINT));
+		options.at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::VersionAtClauseFromValue(value));
 	} else if (lcase == "snapshot_time") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
