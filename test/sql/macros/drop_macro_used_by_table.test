@@ -129,6 +129,18 @@ DROP MACRO lake.six
 ----
 Cannot drop macro "six" because the default of column "c" of table "x" calls it
 
+# x.f() can be the call f(x)
+statement ok
+CREATE MACRO lake.m7(x) AS 7
+
+statement ok
+CREATE TABLE lake.dc (c INTEGER DEFAULT x.m7())
+
+statement error
+DROP MACRO lake.m7
+----
+Cannot drop macro "m7" because the default of column "c" of table "dc" calls it
+
 # catalog.name in a table of another schema resolves in that schema first
 statement ok
 CREATE SCHEMA lake.s4
