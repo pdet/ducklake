@@ -21,10 +21,6 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
-	//! Text with its offset, as the tables that SQLite creates hold such a timestamp
-	string TimestampTzColumnType() const override {
-		return "VARCHAR";
-	}
 	bool DroppedTablesStayReadable() const override {
 		return false;
 	}

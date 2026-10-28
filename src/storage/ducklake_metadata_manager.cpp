@@ -391,8 +391,7 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "");
 		migrate_query = StringUtil::Replace(migrate_query, "{WHERE_EMPTY}", "");
 	}
-	// a server that commits each statement on its own would keep a failed migration half applied
-	auto result = CommitsEachStatement() ? ExecuteInTransaction(migrate_query) : Execute(migrate_query);
+	auto result = Execute(migrate_query);
 	result->ThrowIfError("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
 }
 
@@ -649,22 +648,10 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	// the tag table of 2.0-dev1, which the migration to 2.0-dev2 extends
-	auto migrate_query = R"(
-CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT,
-                                                     end_snapshot BIGINT);
+	auto migrate_query = GetSnapshotTagTableStatement() + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
-}
-
-void DuckLakeMetadataManager::MigrateV20Dev1() {
-	auto migrate_query = StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;
-)",
-	                                        TimestampTzColumnType());
-	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {

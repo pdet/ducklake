@@ -212,10 +212,6 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
-	//! The type of a metadata column that a migration adds for a timestamp with time zone
-	virtual string TimestampTzColumnType() const {
-		return "TIMESTAMPTZ";
-	}
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const {
 		return true;
@@ -621,7 +617,6 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
-	virtual void MigrateV20Dev1();
 	static string GetSnapshotTagTableStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
