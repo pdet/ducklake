@@ -247,15 +247,25 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string encryption_str = DuckLakeUtil::BoolLiteral(encryption == DuckLakeEncryption::ENCRYPTED);
 	string initial_schema_uuid = transaction.GenerateUUID();
 	initialize_query += StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id) VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
 	                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str,
 	                                       initial_schema_uuid);
+	initialize_query += GetInitialDataStatements();
 	auto result = Execute(initialize_query);
 	result->ThrowIfError("Failed to initialize DuckLake: ");
+}
+
+string DuckLakeMetadataManager::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time "
+	       "TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetInitialDataStatements() {
+	return string();
 }
 
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
@@ -292,9 +302,7 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	vector<string> statements;
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT "
 	                     "NULL, scope VARCHAR, scope_id BIGINT);");
-	statements.push_back(
-	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
-	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
+	statements.push_back(GetSnapshotTableStatement());
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
 	                     "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);");
 	statements.push_back(GetSchemaTableStatement());
@@ -651,6 +659,36 @@ void DuckLakeMetadataManager::MigrateV11() {
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+string DuckLakeMetadataManager::GetBranchTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_id BIGINT, branch_name VARCHAR, "
+	       "fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetEndOverrideTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_end_override(branch_id BIGINT, catalog_table VARCHAR, "
+	       "object_id BIGINT, end_snapshot BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetSnapshotRemapTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_remap(merge_snapshot_id BIGINT, "
+	       "old_snapshot_id BIGINT, new_snapshot_id BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetMainBranchRowStatement() {
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_branch VALUES (0, 'main', NULL, NULL, 0, NULL);";
+}
+
+void DuckLakeMetadataManager::MigrateV20Dev1() {
+	auto migrate_query = GetBranchTableStatement() + "\n" + GetEndOverrideTableStatement() + "\n" +
+	                     GetSnapshotRemapTableStatement() + R"(
+ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;
+)" + GetMainBranchRowStatement() +
+	                     R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
+)";
+	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -4863,7 +4901,7 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 }
 
 string DuckLakeMetadataManager::InsertSnapshotSql() {
-	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -5917,6 +5955,9 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 	}
 	if (transaction.GetCatalog().SupportsSnapshotTags()) {
 		tables_to_delete_from.push_back("ducklake_snapshot_tag");
+	}
+	if (transaction.GetCatalog().SupportsBranching()) {
+		tables_to_delete_from.push_back("ducklake_branch");
 	}
 	bool deleted_schemas = false;
 	for (auto &delete_tbl : tables_to_delete_from) {

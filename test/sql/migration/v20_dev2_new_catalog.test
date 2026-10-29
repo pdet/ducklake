@@ -1,0 +1,87 @@
+# name: test/sql/migration/v20_dev2_new_catalog.test
+# description: a new catalog is created at 2.0-dev2 with the branch tables and the main branch row
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_branch') ORDER BY column_index
+----
+branch_id	BIGINT
+branch_name	VARCHAR
+fork_branch_id	BIGINT
+fork_snapshot_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_end_override') ORDER BY column_index
+----
+branch_id	BIGINT
+catalog_table	VARCHAR
+object_id	BIGINT
+end_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
+----
+merge_snapshot_id	BIGINT
+old_snapshot_id	BIGINT
+new_snapshot_id	BIGINT
+
+# the initial snapshot belongs to main
+query IIIIII
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL	0	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot
+----
+0	0
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+# commits keep landing on main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+statement ok
+DETACH dl
+
+# the catalog is attached again without a migration
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query I
+SELECT * FROM dl.t
+----
+42
