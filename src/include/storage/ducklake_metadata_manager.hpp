@@ -529,7 +529,7 @@ public:
 	                                         const set<TableIndex> &ids);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
-	                                           const vector<DuckLakePath> &resolved_paths, bool write_visibility);
+	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,

@@ -2403,7 +2403,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
 		batch_queries += DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(
-		    overwritten_delete_files, relative_paths(overwritten_delete_files), context.supports_branching);
+		    overwritten_delete_files, relative_paths(overwritten_delete_files));
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(
 		    file_list, table_relative_paths(file_list, &DuckLakeDeleteFileInfo::path), context.supports_v1_1_metadata,
 		    context.supports_branching);

@@ -207,6 +207,8 @@ struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
 	DataFileIndex data_file_id;
+	//! The delete file this one replaces, so branch mappings move to the replacement
+	DataFileIndex overwritten_delete_file_id;
 	string path;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
