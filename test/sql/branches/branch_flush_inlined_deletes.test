@@ -39,10 +39,10 @@ statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
 
 statement ok
-INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, begin_snapshot, NULL FROM meta.ducklake_delete_file WHERE end_snapshot IS NULL
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, begin_snapshot, NULL FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
 
 # the flush replaces the delete file with one that also holds the inlined delete
 statement ok
@@ -100,7 +100,7 @@ statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 200, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork')
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 2, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND begin_snapshot <= getvariable('fork')
+INSERT INTO meta.ducklake_file_visibility SELECT 2, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL AND begin_snapshot <= getvariable('fork')
 
 statement ok
 DETACH m

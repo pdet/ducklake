@@ -100,7 +100,7 @@ statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, 100 FROM meta.ducklake_data_file WHERE begin_snapshot = 2
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, 100 FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND begin_snapshot = 2
 
 statement ok
 DETACH m

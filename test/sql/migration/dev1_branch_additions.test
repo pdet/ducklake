@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branc
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
-# simulate a catalog created by a dev build without the branch tables
+# simulate a catalog created by a dev build without the branch tables and with inline ranges
 statement ok
 DROP TABLE meta.ducklake_branch
 
@@ -25,6 +25,27 @@ DROP TABLE meta.ducklake_snapshot_remap
 
 statement ok
 ALTER TABLE meta.ducklake_snapshot DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_data_file SET begin_snapshot = v.begin_snapshot, end_snapshot = v.end_snapshot FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.data_file_id = ducklake_data_file.data_file_id
+
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
 
 statement ok
 DETACH dl
@@ -119,12 +140,6 @@ statement ok
 DROP TABLE meta.ducklake_snapshot_remap
 
 statement ok
-DROP TABLE meta.ducklake_file_visibility
-
-statement ok
-DROP TABLE meta.ducklake_delete_file_visibility
-
-statement ok
 DELETE FROM meta.ducklake_branch
 
 statement ok
@@ -156,12 +171,6 @@ statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
 
 statement ok
-DROP TABLE meta.ducklake_file_visibility
-
-statement ok
-DROP TABLE meta.ducklake_delete_file_visibility
-
-statement ok
 DETACH dl
 
 statement ok
@@ -169,7 +178,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branc
 
 # the branch holds a row for every file visible at its fork
 query I
-SELECT COUNT(*) = (SELECT COUNT(*) FROM meta.ducklake_data_file WHERE begin_snapshot <= 1 AND (end_snapshot IS NULL OR end_snapshot > 1)) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+SELECT COUNT(*) = (SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND begin_snapshot <= 1 AND (end_snapshot IS NULL OR end_snapshot > 1)) FROM meta.ducklake_file_visibility WHERE branch_id = 1
 ----
 true
 
