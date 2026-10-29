@@ -623,7 +623,6 @@ public:
 	virtual void MigrateV20Dev1();
 	static string GetSnapshotTagTableStatement();
 	static string GetBranchTableStatement();
-	static string GetEndOverrideTableStatement();
 	static string GetSnapshotRemapTableStatement();
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1

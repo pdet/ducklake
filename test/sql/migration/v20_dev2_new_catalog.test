@@ -29,14 +29,6 @@ begin_snapshot	BIGINT
 end_snapshot	BIGINT
 
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_end_override') ORDER BY column_index
-----
-branch_id	BIGINT
-catalog_table	VARCHAR
-object_id	BIGINT
-end_snapshot	BIGINT
-
-query II
 SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
 ----
 merge_snapshot_id	BIGINT

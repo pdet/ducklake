@@ -666,11 +666,6 @@ string DuckLakeMetadataManager::GetBranchTableStatement() {
 	       "fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
 }
 
-string DuckLakeMetadataManager::GetEndOverrideTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_end_override(branch_id BIGINT, catalog_table VARCHAR, "
-	       "object_id BIGINT, end_snapshot BIGINT);";
-}
-
 string DuckLakeMetadataManager::GetSnapshotRemapTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_remap(merge_snapshot_id BIGINT, "
 	       "old_snapshot_id BIGINT, new_snapshot_id BIGINT);";
@@ -681,8 +676,7 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV20Dev1() {
-	auto migrate_query = GetBranchTableStatement() + "\n" + GetEndOverrideTableStatement() + "\n" +
-	                     GetSnapshotRemapTableStatement() + R"(
+	auto migrate_query = GetBranchTableStatement() + "\n" + GetSnapshotRemapTableStatement() + R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;
 UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;
 )" + GetMainBranchRowStatement() +
@@ -4902,10 +4896,9 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 }
 
 string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
-	if (write_branch_id) {
-		return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}, 0);)";
-	}
-	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+	return StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}%s);)",
+	    write_branch_id ? ", branch_id" : "", write_branch_id ? ", 0" : "");
 }
 
 static string SQLStringOrNull(const string &str) {

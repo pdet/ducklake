@@ -57,11 +57,6 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 1	0
 
 query I
-SELECT COUNT(*) FROM meta.ducklake_end_override
-----
-0
-
-query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
 ----
 0

@@ -56,9 +56,6 @@ statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_branch')
 
 statement ok
-CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_end_override')
-
-statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_remap')
 
 statement ok

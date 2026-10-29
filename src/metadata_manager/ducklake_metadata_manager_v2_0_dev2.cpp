@@ -10,7 +10,6 @@ template <typename Base>
 string DuckLakeMetadataManagerV2_0Dev2<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
-	result += DuckLakeMetadataManager::GetEndOverrideTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetSnapshotRemapTableStatement() + "\n";
 	return result;
 }
