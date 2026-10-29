@@ -5190,7 +5190,8 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 				swap_values.push_back(
 				    StringUtil::Format("(%d, %d)", delete_file_index, file.overwritten_delete_file_id.index));
 				overwritten_ids.push_back(file.overwritten_delete_file_id);
-			} else if (file.begin_snapshot.IsValid()) {
+			}
+			if (file.begin_snapshot.IsValid()) {
 				retro_visibility_values.push_back(StringUtil::Format("(%d, %d, %d, %s)", table_id, delete_file_index,
 				                                                     data_file_index, begin_snapshot_str));
 			}
@@ -5207,8 +5208,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		delete_file_values.push_back(delete_file_value + ")");
 	}
 	auto result = InsertValuesSql("ducklake_delete_file", delete_file_values) +
-	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values) +
-	              RetroactiveDeleteVisibilitySql(retro_visibility_values);
+	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values);
 	if (!swap_values.empty()) {
 		result += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
@@ -5221,6 +5221,8 @@ WHERE delete_file_id IN (%s);
 )",
 		                             StringUtil::Join(swap_values, ", "), GenerateIDList(overwritten_ids));
 	}
+	// after the swap, so a replacement reaches only branches the swap left without a mapping
+	result += RetroactiveDeleteVisibilitySql(retro_visibility_values);
 	return result;
 }
 
