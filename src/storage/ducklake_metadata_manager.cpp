@@ -705,17 +705,21 @@ SELECT b.branch_id, f.table_id, f.data_file_id, f.begin_snapshot, NULL
 FROM {METADATA_CATALOG}.ducklake_branch b
 JOIN {METADATA_CATALOG}.ducklake_data_file f
 ON f.begin_snapshot <= b.fork_snapshot_id AND (f.end_snapshot IS NULL OR f.end_snapshot > b.fork_snapshot_id)
-WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL AND NOT EXISTS (
+WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot s WHERE s.branch_id = b.branch_id)
+AND NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_visibility v
-    WHERE v.branch_id = b.branch_id AND v.data_file_id = f.data_file_id);
+    WHERE v.branch_id = b.branch_id);
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
 SELECT b.branch_id, f.table_id, f.delete_file_id, f.begin_snapshot, NULL
 FROM {METADATA_CATALOG}.ducklake_branch b
 JOIN {METADATA_CATALOG}.ducklake_delete_file f
 ON f.begin_snapshot <= b.fork_snapshot_id AND (f.end_snapshot IS NULL OR f.end_snapshot > b.fork_snapshot_id)
-WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL AND NOT EXISTS (
+WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot s WHERE s.branch_id = b.branch_id)
+AND NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility v
-    WHERE v.branch_id = b.branch_id AND v.delete_file_id = f.delete_file_id);
+    WHERE v.branch_id = b.branch_id);
 )";
 	return result;
 }
@@ -843,9 +847,37 @@ LIMIT 1);)");
 	return false;
 }
 
+bool DuckLakeMetadataManager::HasBranchInheritedVisibility() {
+	// a branch with commits of its own but no rows still needs the files visible at its fork
+	auto probe = Query(R"(
+SELECT COUNT(*) FROM (
+SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch b
+WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot s WHERE s.branch_id = b.branch_id)
+AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_visibility v WHERE v.branch_id = b.branch_id)
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_data_file f
+    WHERE f.begin_snapshot <= b.fork_snapshot_id AND (f.end_snapshot IS NULL OR f.end_snapshot > b.fork_snapshot_id))
+UNION ALL
+SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch b
+WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot s WHERE s.branch_id = b.branch_id)
+AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility v WHERE v.branch_id = b.branch_id)
+AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file f
+    WHERE f.begin_snapshot <= b.fork_snapshot_id AND (f.end_snapshot IS NULL OR f.end_snapshot > b.fork_snapshot_id))
+LIMIT 1);)");
+	if (probe->HasError()) {
+		return false;
+	}
+	for (auto &row : *probe) {
+		return row.GetValue<int64_t>(0) == 0;
+	}
+	return false;
+}
+
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
 	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasFileVisibilityTable() &&
-	       HasDeleteFileVisibilityTable() && HasMainBranchRow() && HasBranchZeroVisibility();
+	       HasDeleteFileVisibilityTable() && HasMainBranchRow() && HasBranchZeroVisibility() &&
+	       HasBranchInheritedVisibility();
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
@@ -2707,6 +2739,7 @@ LEFT JOIN (
 	SELECT *
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id=%d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+		AND (end_snapshot IS NULL OR end_snapshot <> begin_snapshot)
 ) del ON del.data_file_id = data.data_file_id AND del.begin_snapshot = data.begin_snapshot AND data.partial_max IS NULL
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
@@ -2823,6 +2856,7 @@ SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 		partial_max
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+		AND (end_snapshot IS NULL OR end_snapshot <> begin_snapshot)
 ) AS current_delete
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -2835,6 +2869,7 @@ LEFT JOIN LATERAL (
 		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < %d
+		AND (end_snapshot IS NULL OR end_snapshot <> begin_snapshot)
 	ORDER BY data_file_id ASC, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id)
@@ -2864,6 +2899,7 @@ LEFT JOIN LATERAL (
 		format
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
+		AND (end_snapshot IS NULL OR end_snapshot <> begin_snapshot)
 	ORDER BY data_file_id ASC, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id), (

@@ -363,6 +363,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		} else {
 			try {
 				transaction.GetMetadataManager().AddV2_0Dev1Additions();
+				// commit now so a concurrent heal surfaces inside the attach retry scope
+				transaction.ReleaseMetadataTransaction();
 			} catch (std::exception &ex) {
 				// a concurrent attach may have added them first
 				if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {

@@ -642,6 +642,7 @@ public:
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
 	bool HasBranchZeroVisibility();
+	bool HasBranchInheritedVisibility();
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration

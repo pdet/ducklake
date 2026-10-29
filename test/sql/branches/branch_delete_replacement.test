@@ -60,6 +60,17 @@ SELECT COUNT(*) FROM meta.ducklake_files_scheduled_for_deletion
 ----
 0
 
+# the change feed reports each deletion once and skips the kept file
+query I
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 101, 101)
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 3, 101)
+----
+2
+
 # expiry and cleanup while the branch lives keep the replaced file
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1], dry_run => false)
@@ -76,6 +87,39 @@ statement ok
 DETACH dl
 
 # the branch still applies its own delete file and not the replacement
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+3
+
+statement ok
+DETACH dl
+
+# a later repair leaves the branch's delete file choice alone
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+1
+
+statement ok
+DETACH dl
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', BRANCH 'dev')
 

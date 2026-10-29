@@ -819,7 +819,9 @@ void DuckLakeTransaction::Commit() {
 			FlushChanges();
 		} else if (connection) {
 			try {
-				connection->Commit();
+				if (connection->HasActiveTransaction()) {
+					connection->Commit();
+				}
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
 				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
