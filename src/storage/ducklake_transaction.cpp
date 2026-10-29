@@ -1931,10 +1931,12 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
-	auto tagged_snapshots = TaggedSnapshotsInternal();
+	auto protected_snapshots = TaggedSnapshotsInternal();
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots();
+	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	vector<DuckLakeSnapshotInfo> result;
 	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
-		if (tagged_snapshots.find(snapshot.id) == tagged_snapshots.end()) {
+		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
 			result.push_back(std::move(snapshot));
 		}
 	}

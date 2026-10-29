@@ -555,7 +555,7 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness);
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
@@ -623,6 +623,11 @@ public:
 	virtual void MigrateV11();
 	//! The live branch with the given name, invalid when none exists
 	DuckLakeBranchInfo FindBranch(const string &name);
+	//! The latest snapshot of the attached branch, with the global allocator state
+	string BranchAwareLatestSnapshotQuery() const;
+	//! The snapshots that live branches depend on, their fork points and their own snapshots
+	set<idx_t> GetBranchProtectedSnapshots();
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column);
 	//! The visibility check of a file table, range based on main and visibility row based on a branch
 	string BranchVisibilityFilter(DuckLakeSnapshot snapshot, const string &alias, const string &visibility_table,
 	                              const string &file_id_column,

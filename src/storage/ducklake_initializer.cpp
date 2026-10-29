@@ -357,14 +357,17 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
-	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !catalog.GetAttached().IsReadOnly() &&
-	    !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
-		try {
-			transaction.GetMetadataManager().AddV2_0Dev1Additions();
-		} catch (std::exception &ex) {
-			// a concurrent attach may have added them first
-			if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
-				throw;
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+		if (catalog.GetAttached().IsReadOnly()) {
+			catalog.SetBranchMetadataMissing();
+		} else {
+			try {
+				transaction.GetMetadataManager().AddV2_0Dev1Additions();
+			} catch (std::exception &ex) {
+				// a concurrent attach may have added them first
+				if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+					throw;
+				}
 			}
 		}
 	}
