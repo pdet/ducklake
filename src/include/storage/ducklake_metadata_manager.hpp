@@ -627,7 +627,9 @@ public:
 	string BranchAwareLatestSnapshotQuery() const;
 	//! The snapshots that live branches depend on, their fork points and their own snapshots
 	set<idx_t> GetBranchProtectedSnapshots();
-	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column);
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f");
+	static string MainHeadSnapshotQuery(bool branch_aware);
+	string BranchLineageFilter() const;
 	//! The visibility check of a file table, range based on main and visibility row based on a branch
 	string BranchVisibilityFilter(DuckLakeSnapshot snapshot, const string &alias, const string &visibility_table,
 	                              const string &file_id_column,

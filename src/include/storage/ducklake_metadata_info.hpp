@@ -442,6 +442,8 @@ struct DuckLakeFileListEntry {
 	unordered_map<idx_t, DuckLakeFileColumnStats> column_min_max;
 	//! The rows of committed inlined data, when they are read before the file list
 	shared_ptr<DuckLakeCommittedInlinedRows> inlined_rows;
+	//! Whether a branch visibility row selected the delete file, so it is not clipped at the fork
+	bool delete_from_branch = false;
 };
 
 struct DuckLakeDeleteScanEntry {
