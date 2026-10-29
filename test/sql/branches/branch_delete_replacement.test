@@ -1,0 +1,110 @@
+# name: test/sql/branches/branch_delete_replacement.test
+# description: replacing a delete file on main keeps the file a live branch still reads
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, begin_snapshot, NULL FROM meta.ducklake_delete_file WHERE end_snapshot IS NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the second delete replaces the delete file of the first
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query I
+SELECT i FROM dl.t
+----
+3
+
+# the replaced file stays because the branch reads it, with a range main never sees
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE end_snapshot = begin_snapshot
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+0
+
+# expiry and cleanup while the branch lives keep the replaced file
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1], dry_run => false)
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE end_snapshot = begin_snapshot
+----
+1
+
+statement ok
+DETACH dl
+
+# the branch still applies its own delete file and not the replacement
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+3
+
+statement ok
+DETACH dl
+
+# an ended branch releases the replaced file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+UPDATE meta.ducklake_branch SET end_snapshot = 102 WHERE branch_id = 1
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [3, 100], dry_run => false)
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE end_snapshot = begin_snapshot
+----
+0
+
+statement ok
+DETACH dl

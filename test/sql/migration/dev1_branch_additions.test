@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -65,7 +65,7 @@ DETACH dl
 
 # a writable attach adds the missing tables and backfills the snapshots
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 query IIIIII
 SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
@@ -107,7 +107,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 query II
 SELECT branch_id, branch_name FROM meta.ducklake_branch
@@ -131,7 +131,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 query II
 SELECT branch_id, branch_name FROM meta.ducklake_branch
@@ -147,6 +147,49 @@ query I
 SELECT COUNT(*) FROM dl.t
 ----
 2
+
+# an existing branch of an older dev catalog gets its inherited visibility materialized
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the branch holds a row for every file visible at its fork
+query I
+SELECT COUNT(*) = (SELECT COUNT(*) FROM meta.ducklake_data_file WHERE begin_snapshot <= 1 AND (end_snapshot IS NULL OR end_snapshot > 1)) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+true
+
+# a second mapping for the same file on the same branch is rejected
+statement error
+INSERT INTO meta.ducklake_file_visibility SELECT * FROM meta.ducklake_file_visibility LIMIT 1
+----
+constraint
+
+statement ok
+DETACH dl
+
+# the branch reads the rows of its fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT * FROM dl.t
+----
+42
 
 statement ok
 DETACH dl
