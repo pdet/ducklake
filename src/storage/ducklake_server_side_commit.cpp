@@ -549,9 +549,12 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 	                        "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
-	DuckLakeMetadataManager::FillMissingTableSizes(global_stats, [&](string query) {
-		return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
-	});
+	DuckLakeMetadataManager::FillMissingTableSizes(
+	    global_stats,
+	    [&](string query) {
+		    return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
+	    },
+	    supports_branching);
 	for (auto &read_table : read_tables) {
 		existing_table_stats[read_table] = nullptr;
 	}
@@ -726,9 +729,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		if (InlinedFileDeletionTableExists(table_id)) {
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
-		auto sql = SubstitutePlaceholders(
-		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table, false, true),
-		    transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
+		                                      table_id, inlined_deletion_table, supports_branching, false, true),
+		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);

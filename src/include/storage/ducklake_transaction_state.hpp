@@ -199,7 +199,8 @@ public:
 	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
-	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                      bool branch_aware);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;

@@ -344,7 +344,8 @@ public:
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
-	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                  bool branch_aware);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -394,7 +395,8 @@ public:
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-	                                        bool require_exact = false, bool exclude_new_files = false);
+	                                        bool branch_aware, bool require_exact = false,
+	                                        bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
 	                                       const DuckLakeInlinedColNames &col_names);
 	//! The rows that are stored, deleted ones included, and the rows that are live
@@ -514,10 +516,11 @@ public:
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
-	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                              bool branch_aware);
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-	                                          const map<FieldIndex, idx_t> &null_default_columns);
+	                                          const map<FieldIndex, idx_t> &null_default_columns, bool branch_aware);
 	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
 	//! whether they are top level columns
 	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
@@ -554,10 +557,11 @@ public:
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files
-	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	static string RefreshTableSizesSql(const set<TableIndex> &table_ids, bool branch_aware);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query,
+	                              bool branch_aware);
 	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
@@ -587,7 +591,7 @@ public:
 	static string ReadInlinedDataAggregatesSql(const Identifier &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
 	//! The column stats of the data files committed before the snapshot's next file id
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness, bool branch_aware);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const Identifier &inlined_table_name);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
@@ -641,6 +645,10 @@ public:
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
+	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
+	static string DeleteFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
+	string DataFiles() const;
+	string DeleteFiles() const;
 	bool HasBranchZeroVisibility();
 	bool HasBranchInheritedVisibility();
 	bool HasV2_0Dev1Additions();
