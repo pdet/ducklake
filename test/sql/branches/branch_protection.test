@@ -69,7 +69,7 @@ statement ok
 CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
 
 query I
-SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility)
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
 ----
 1
 

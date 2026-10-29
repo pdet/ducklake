@@ -416,7 +416,8 @@ public:
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	static string DropSchemas(const set<SchemaIndex> &ids);
-	static string DropTables(const set<TableIndex> &ids, bool renamed);
+	static string DropTables(const set<TableIndex> &ids, bool renamed, bool write_visibility);
+	static string VisibilityFlushDrop(const string &visibility_table, const string &id_name, const string &id_list);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
 	static string DropMacros(const set<MacroIndex> &ids);
 
@@ -462,7 +463,8 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                                        bool write_visibility);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -508,7 +510,7 @@ public:
 	DuckLakeInlinedColNames InlinedColNames() const;
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
-	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
+	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
@@ -527,22 +529,23 @@ public:
 	                                         const set<TableIndex> &ids);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
-	                                           const vector<DuckLakePath> &resolved_paths);
+	                                           const vector<DuckLakePath> &resolved_paths, bool write_visibility);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
+	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
+	                                  bool write_visibility);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	//! Caller supplies one resolved path per compaction, in the same order.
 	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-	                                 const vector<DuckLakePath> &resolved_paths);
-	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
+	                                 const vector<DuckLakePath> &resolved_paths, bool write_visibility);
+	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions, bool write_visibility);
 	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
 	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
-	                               const vector<DuckLakePath> &resolved_paths);
+	                               const vector<DuckLakePath> &resolved_paths, bool write_visibility);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
 	static string InsertSnapshotSql(bool write_branch_id);
@@ -630,16 +633,15 @@ public:
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f");
 	static string MainHeadSnapshotQuery(bool branch_aware);
 	string BranchLineageFilter() const;
-	//! The visibility check of a file table, range based on main and visibility row based on a branch
-	string BranchVisibilityFilter(DuckLakeSnapshot snapshot, const string &alias, const string &visibility_table,
-	                              const string &file_id_column,
-	                              const string &metadata_table_prefix = "{METADATA_CATALOG}") const;
+	//! The branch whose visibility rows a read at the given snapshot resolves through
+	idx_t ReadBranchId(DuckLakeSnapshot snapshot) const;
 	bool HasBranchTable();
 	bool HasSnapshotRemapTable();
 	bool HasSnapshotBranchColumn();
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
+	bool HasBranchZeroVisibility();
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration

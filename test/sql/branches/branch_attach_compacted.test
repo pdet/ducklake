@@ -67,7 +67,7 @@ CALL ducklake_merge_adjacent_files('m')
 
 # the referenced file keeps its identity
 query I
-SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility)
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
 ----
 1
 
