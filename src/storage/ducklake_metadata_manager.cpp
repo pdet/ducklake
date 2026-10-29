@@ -684,7 +684,7 @@ string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(bool add_branch, bool add_r
 }
 
 string DuckLakeMetadataManager::GetBranchTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_id BIGINT, branch_name VARCHAR, "
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, "
 	       "fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
 }
 
