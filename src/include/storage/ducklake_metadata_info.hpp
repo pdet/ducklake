@@ -432,6 +432,8 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	//! We skip the rows whose _ducklake_internal_snapshot_id is one of these rewrite snapshots
 	vector<idx_t> snapshot_filter_excluded;
+	//! Upper bound for the dated deletes of an inherited delete file on a branch
+	optional_idx delete_snapshot_filter_max;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	//! The data file id

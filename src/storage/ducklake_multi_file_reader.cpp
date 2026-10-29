@@ -360,9 +360,10 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				// We only set snapshot filter if this file is not a current running transaction
 				// OW, we are guaranteed to be on the latest valid snapshot
 				auto filter_snapshot = read_info.snapshot.snapshot_id;
-				if (txn) {
+				auto &delete_bound = file_entry.delete_snapshot_filter_max;
+				if (delete_bound.IsValid() && delete_bound.GetIndex() < filter_snapshot) {
 					// deletes main dated after the fork never apply on a branch
-					filter_snapshot = txn->GetCatalog().ClipToBranchFork(filter_snapshot);
+					filter_snapshot = delete_bound.GetIndex();
 				}
 				delete_filter->SetSnapshotFilter(filter_snapshot);
 			}

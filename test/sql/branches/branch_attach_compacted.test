@@ -65,11 +65,11 @@ INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begi
 statement ok
 CALL ducklake_merge_adjacent_files('m')
 
-# the referenced file keeps its identity
+# the referenced file keeps its identity and the branch inherits the merged file that starts before its fork
 query I
 SELECT COUNT(*) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
 ----
-1
+2
 
 statement ok
 DETACH m
