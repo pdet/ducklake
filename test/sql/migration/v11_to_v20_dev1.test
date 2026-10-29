@@ -63,6 +63,16 @@ SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
 0
 
 query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility
+----
+0
+
+query I
 SELECT * FROM dl.t
 ----
 42

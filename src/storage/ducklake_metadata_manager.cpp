@@ -661,26 +661,43 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(true, true, true) + R"(
+	V2_0Dev1Additions all;
+	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(all) + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
 }
 
-string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(bool add_branch, bool add_remap, bool add_branch_column) {
+string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add) {
 	string result;
-	if (add_branch) {
+	if (add.branch_table) {
 		result += GetBranchTableStatement() + "\n";
 	}
-	if (add_remap) {
+	if (add.remap_table) {
 		result += GetSnapshotRemapTableStatement() + "\n";
 	}
-	if (add_branch_column) {
+	if (add.branch_column) {
 		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;\n";
+	}
+	if (add.file_visibility_table) {
+		result += GetFileVisibilityTableStatement() + "\n";
+	}
+	if (add.delete_file_visibility_table) {
+		result += GetDeleteFileVisibilityTableStatement() + "\n";
 	}
 	result += "UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;\n";
 	result += GetMainBranchRowStatement() + "\n";
 	return result;
+}
+
+string DuckLakeMetadataManager::GetFileVisibilityTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_file_visibility(branch_id BIGINT, table_id BIGINT, "
+	       "data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file_visibility(branch_id BIGINT, table_id BIGINT, "
+	       "delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
 }
 
 string DuckLakeMetadataManager::GetBranchTableStatement() {
@@ -721,13 +738,27 @@ bool DuckLakeMetadataManager::HasMainBranchRow() {
 	return false;
 }
 
+bool DuckLakeMetadataManager::HasFileVisibilityTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_file_visibility LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_delete_file_visibility LIMIT 0")->HasError();
+}
+
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
-	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasMainBranchRow();
+	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasFileVisibilityTable() &&
+	       HasDeleteFileVisibilityTable() && HasMainBranchRow();
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
-	auto migrate_query = V2_0Dev1AdditionsSql(!HasBranchTable(), !HasSnapshotRemapTable(), !HasSnapshotBranchColumn());
-	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev1");
+	V2_0Dev1Additions missing;
+	missing.branch_table = !HasBranchTable();
+	missing.remap_table = !HasSnapshotRemapTable();
+	missing.branch_column = !HasSnapshotBranchColumn();
+	missing.file_visibility_table = !HasFileVisibilityTable();
+	missing.delete_file_visibility_table = !HasDeleteFileVisibilityTable();
+	ExecuteMigration(V2_0Dev1AdditionsSql(missing), false, "2.0-dev1", "2.0-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {

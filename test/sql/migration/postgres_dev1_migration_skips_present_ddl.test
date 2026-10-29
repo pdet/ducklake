@@ -59,6 +59,12 @@ statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_remap')
 
 statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_delete_file_visibility')
+
+statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
 
 statement ok

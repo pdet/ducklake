@@ -43,6 +43,24 @@ merge_snapshot_id	BIGINT
 old_snapshot_id	BIGINT
 new_snapshot_id	BIGINT
 
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+data_file_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+delete_file_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
 # the initial snapshot belongs to main
 query IIIIII
 SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch

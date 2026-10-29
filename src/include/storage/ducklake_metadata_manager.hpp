@@ -624,11 +624,23 @@ public:
 	bool HasBranchTable();
 	bool HasSnapshotRemapTable();
 	bool HasSnapshotBranchColumn();
+	bool HasFileVisibilityTable();
+	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
-	static string V2_0Dev1AdditionsSql(bool add_branch, bool add_remap, bool add_branch_column);
+	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
+	struct V2_0Dev1Additions {
+		bool branch_table = true;
+		bool remap_table = true;
+		bool branch_column = true;
+		bool file_visibility_table = true;
+		bool delete_file_visibility_table = true;
+	};
+	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
 	static string GetSnapshotTagTableStatement();
+	static string GetFileVisibilityTableStatement();
+	static string GetDeleteFileVisibilityTableStatement();
 	static string GetBranchTableStatement();
 	static string GetSnapshotRemapTableStatement();
 	static string GetMainBranchRowStatement();

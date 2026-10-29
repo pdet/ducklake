@@ -119,6 +119,12 @@ statement ok
 DROP TABLE meta.ducklake_snapshot_remap
 
 statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
 DELETE FROM meta.ducklake_branch
 
 statement ok

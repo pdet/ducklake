@@ -12,6 +12,8 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetSnapshotRemapTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
 	return result;
 }
 
