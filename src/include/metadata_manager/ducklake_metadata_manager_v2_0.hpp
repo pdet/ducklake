@@ -20,6 +20,8 @@ public:
 	}
 
 	string GetCreateTableStatements() override;
+	string GetSnapshotTableStatement() override;
+	string GetInitialDataStatements() override;
 	string GetVersionString() override;
 };
 

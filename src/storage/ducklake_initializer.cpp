@@ -18,7 +18,6 @@
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
-#include "metadata_manager/ducklake_metadata_manager_v2_0_dev2.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
@@ -301,10 +300,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
-			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && catalog_version < target_version) {
-				metadata_manager.MigrateV20Dev1();
-				catalog_version = DuckLakeVersion::V2_0_DEV2;
-			}
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
@@ -347,6 +342,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && options.access_mode != AccessMode::READ_ONLY &&
+	    !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+		// older dev builds created 2.0-dev1 catalogs without the branch tables
+		transaction.GetMetadataManager().AddV2_0Dev1Additions();
 	}
 }
 
@@ -397,8 +397,6 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
 	} else if (version == DuckLakeVersion::V2_0_DEV1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
-	} else if (version == DuckLakeVersion::V2_0_DEV2) {
-		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0Dev2>(transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");
 	}

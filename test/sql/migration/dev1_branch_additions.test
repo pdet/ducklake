@@ -1,0 +1,86 @@
+# name: test/sql/migration/dev1_branch_additions.test
+# description: a 2.0-dev1 catalog from an older dev build gets the branch tables on a writable attach
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# simulate a catalog created by a dev build without the branch tables
+statement ok
+DROP TABLE meta.ducklake_branch
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# a read-only attach leaves the catalog as it is
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement error
+SELECT * FROM meta.ducklake_branch
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# a writable attach adds the missing tables and backfills the snapshots
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+
+query IIIIII
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL	0	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
+----
+0
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+# commits keep landing on main
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement ok
+DETACH dl

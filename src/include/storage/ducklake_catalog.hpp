@@ -327,7 +327,7 @@ public:
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
 	bool SupportsBranching() const {
-		return ducklake_version >= DuckLakeVersion::V2_0_DEV2;
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
 
 	void OnDetach(ClientContext &context) override;

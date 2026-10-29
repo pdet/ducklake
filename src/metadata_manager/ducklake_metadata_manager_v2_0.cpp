@@ -10,7 +10,20 @@ template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetSnapshotRemapTableStatement() + "\n";
 	return result;
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" + DuckLakeMetadataManager::GetSnapshotTableColumns() +
+	       ", branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetInitialDataStatements() {
+	return DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
 }
 
 template <typename Base>

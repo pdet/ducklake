@@ -1,5 +1,5 @@
-# name: test/sql/migration/v20_dev2_new_catalog.test
-# description: a new catalog is created at 2.0-dev2 with the branch tables and the main branch row
+# name: test/sql/migration/v20_dev1_new_catalog.test
+# description: a new catalog is created at 2.0-dev1 with the branch tables and the main branch row
 # group: [migration]
 
 require ducklake
@@ -11,12 +11,12 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_new_catalog_files', METADATA_CATALOG 'meta')
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 query II
 SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_branch') ORDER BY column_index
@@ -66,12 +66,12 @@ DETACH dl
 
 # the catalog is attached again without a migration
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_new_catalog_files', METADATA_CATALOG 'meta')
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 query I
 SELECT * FROM dl.t

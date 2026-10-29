@@ -621,7 +621,9 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
-	virtual void MigrateV20Dev1();
+	//! Whether the catalog has the branch tables of 2.0-dev1, older dev builds created it without them
+	bool HasV2_0Dev1Additions();
+	virtual void AddV2_0Dev1Additions();
 	static string GetSnapshotTagTableStatement();
 	static string GetBranchTableStatement();
 	static string GetSnapshotRemapTableStatement();

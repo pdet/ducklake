@@ -98,7 +98,7 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	auto catalog_version = ReadCatalogVersion();
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
-	supports_branching = catalog_version >= DuckLakeVersion::V2_0_DEV2;
+	supports_branching = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
