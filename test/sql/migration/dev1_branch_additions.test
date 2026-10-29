@@ -29,7 +29,7 @@ ALTER TABLE meta.ducklake_snapshot DROP COLUMN branch_id
 statement ok
 DETACH dl
 
-# a read-only attach leaves the catalog as it is
+# a read only attach leaves the catalog as it is
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', READ_ONLY)
 

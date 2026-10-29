@@ -295,7 +295,7 @@ public:
 	virtual string GetCreateTableStatements();
 	static string GetSnapshotTableColumns();
 	virtual string GetSnapshotTableStatement();
-	//! Rows written right after the metadata tables are created, appended by versioned managers
+	//! Rows inserted after the metadata tables are created
 	virtual string GetInitialDataStatements();
 	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
