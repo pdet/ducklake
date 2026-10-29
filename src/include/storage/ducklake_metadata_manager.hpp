@@ -621,9 +621,12 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
-	//! Whether the catalog has the branch tables of 2.0-dev1, older dev builds created it without them
+	bool HasBranchTable();
+	bool HasSnapshotRemapTable();
+	bool HasSnapshotBranchColumn();
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
+	static string V2_0Dev1AdditionsSql(bool add_branch, bool add_remap, bool add_branch_column);
 	static string GetSnapshotTagTableStatement();
 	static string GetBranchTableStatement();
 	static string GetSnapshotRemapTableStatement();

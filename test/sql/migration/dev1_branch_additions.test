@@ -46,6 +46,23 @@ does not exist
 statement ok
 DETACH dl
 
+# a snapshot pinned attach is read only and leaves the catalog as it is
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', SNAPSHOT_VERSION 1)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement error
+SELECT * FROM meta.ducklake_branch
+----
+does not exist
+
+statement ok
+DETACH dl
+
 # a writable attach adds the missing tables and backfills the snapshots
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')

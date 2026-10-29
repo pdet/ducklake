@@ -661,15 +661,26 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + GetBranchTableStatement() + "\n" +
-	                     GetSnapshotRemapTableStatement() + R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;
-UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;
-)" + GetMainBranchRowStatement() +
-	                     R"(
+	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(true, true, true) + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(bool add_branch, bool add_remap, bool add_branch_column) {
+	string result;
+	if (add_branch) {
+		result += GetBranchTableStatement() + "\n";
+	}
+	if (add_remap) {
+		result += GetSnapshotRemapTableStatement() + "\n";
+	}
+	if (add_branch_column) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;\n";
+	}
+	result += "UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;\n";
+	result += GetMainBranchRowStatement() + "\n";
+	return result;
 }
 
 string DuckLakeMetadataManager::GetBranchTableStatement() {
@@ -683,20 +694,28 @@ string DuckLakeMetadataManager::GetSnapshotRemapTableStatement() {
 }
 
 string DuckLakeMetadataManager::GetMainBranchRowStatement() {
-	return "INSERT INTO {METADATA_CATALOG}.ducklake_branch VALUES (0, 'main', NULL, NULL, 0, NULL);";
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_branch SELECT 0, 'main', NULL, NULL, 0, NULL "
+	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
+}
+
+bool DuckLakeMetadataManager::HasBranchTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasSnapshotRemapTable() {
+	return !Query("SELECT merge_snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot_remap LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasSnapshotBranchColumn() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_snapshot LIMIT 0")->HasError();
 }
 
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
-	auto probe = Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch LIMIT 0");
-	return !probe->HasError();
+	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn();
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
-	auto migrate_query = GetBranchTableStatement() + "\n" + GetSnapshotRemapTableStatement() + R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;
-UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;
-)" + GetMainBranchRowStatement() +
-	                     "\n";
+	auto migrate_query = V2_0Dev1AdditionsSql(!HasBranchTable(), !HasSnapshotRemapTable(), !HasSnapshotBranchColumn());
 	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev1");
 }
 
