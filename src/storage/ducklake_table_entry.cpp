@@ -519,7 +519,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLa
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
 		// the only inlined table can be superseded after an older or pinned snapshot
-		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
+		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() || transaction.GetCatalog().OnBranch() ||
 		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
 	}
 	identifier_set_t registered_tables;
