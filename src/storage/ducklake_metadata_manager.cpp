@@ -684,6 +684,7 @@ void DuckLakeMetadataManager::MigrateV20Dev1() {
 	auto migrate_query = GetBranchTableStatement() + "\n" + GetEndOverrideTableStatement() + "\n" +
 	                     GetSnapshotRemapTableStatement() + R"(
 ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;
+UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;
 )" + GetMainBranchRowStatement() +
 	                     R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';
@@ -4900,7 +4901,10 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 	       InsertValuesSql("ducklake_name_mapping", name_map_values);
 }
 
-string DuckLakeMetadataManager::InsertSnapshotSql() {
+string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
+	if (write_branch_id) {
+		return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}, 0);)";
+	}
 	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id) VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
 }
 

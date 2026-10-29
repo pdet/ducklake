@@ -544,7 +544,7 @@ public:
 	                               const vector<DuckLakePath> &resolved_paths);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
-	static string InsertSnapshotSql();
+	static string InsertSnapshotSql(bool write_branch_id);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);

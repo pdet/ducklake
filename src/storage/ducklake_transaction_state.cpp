@@ -2804,7 +2804,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql(context.supports_branching);
 			if (!expired_snapshots.empty()) {
 				batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
 			}
