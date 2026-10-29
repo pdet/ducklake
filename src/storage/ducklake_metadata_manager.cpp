@@ -259,9 +259,13 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_sn
 	result->ThrowIfError("Failed to initialize DuckLake: ");
 }
 
+string DuckLakeMetadataManager::GetSnapshotTableColumns() {
+	return "snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT, "
+	       "next_catalog_id BIGINT, next_file_id BIGINT";
+}
+
 string DuckLakeMetadataManager::GetSnapshotTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time "
-	       "TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" + GetSnapshotTableColumns() + ");";
 }
 
 string DuckLakeMetadataManager::GetInitialDataStatements() {

@@ -16,9 +16,8 @@ string DuckLakeMetadataManagerV2_0Dev2<Base>::GetCreateTableStatements() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0Dev2<Base>::GetSnapshotTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time "
-	       "TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, "
-	       "branch_id BIGINT DEFAULT 0);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" + DuckLakeMetadataManager::GetSnapshotTableColumns() +
+	       ", branch_id BIGINT DEFAULT 0);";
 }
 
 template <typename Base>

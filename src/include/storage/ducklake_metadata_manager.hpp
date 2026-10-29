@@ -293,6 +293,7 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	static string GetSnapshotTableColumns();
 	virtual string GetSnapshotTableStatement();
 	//! Rows written right after the metadata tables are created, appended by versioned managers
 	virtual string GetInitialDataStatements();
