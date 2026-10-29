@@ -115,6 +115,20 @@ void DuckLakeInitializer::Initialize() {
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		if (!catalog.SupportsBranching()) {
+			ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+		}
+		auto branch = current_metadata_manager.FindBranch(options.branch_name);
+		if (!branch.IsValid()) {
+			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
+		}
+		if (!branch.fork_branch_id.IsValid() || branch.fork_branch_id.GetIndex() != 0 ||
+		    !branch.fork_snapshot_id.IsValid()) {
+			throw NotImplementedException("Only branches that fork from main can be attached");
+		}
+		catalog.SetAttachedBranch(branch.branch_id, branch.fork_snapshot_id);
+	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();

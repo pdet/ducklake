@@ -715,6 +715,30 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
+DuckLakeBranchInfo DuckLakeMetadataManager::FindBranch(const string &name) {
+	auto result = Query(R"(
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id
+FROM {METADATA_CATALOG}.ducklake_branch
+WHERE end_snapshot IS NULL;)");
+	result->ThrowIfError("Failed to get branches from DuckLake: ");
+	for (auto &row : *result) {
+		if (!StringUtil::CIEquals(row.GetValue<string>(1), name)) {
+			continue;
+		}
+		DuckLakeBranchInfo branch;
+		branch.branch_id = row.GetValue<idx_t>(0);
+		branch.name = row.GetValue<string>(1);
+		if (!row.IsNull(2)) {
+			branch.fork_branch_id = row.GetValue<idx_t>(2);
+		}
+		if (!row.IsNull(3)) {
+			branch.fork_snapshot_id = row.GetValue<idx_t>(3);
+		}
+		return branch;
+	}
+	return DuckLakeBranchInfo();
+}
+
 bool DuckLakeMetadataManager::HasBranchTable() {
 	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch LIMIT 0")->HasError();
 }
@@ -2377,7 +2401,7 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
-string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
+string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
@@ -2461,20 +2485,23 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	}
 
 	// Add base query
-	query += StringUtil::Format(R"(
+	query += StringUtil::Format(
+	    R"(
 SELECT %s
 FROM %s.ducklake_data_file data
 %s
 LEFT JOIN (
     SELECT *
-    FROM %s.ducklake_delete_file
-    WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+    FROM %s.ducklake_delete_file del
+    WHERE table_id=%d AND %s
     ) del ON del.data_file_id = data.data_file_id
-WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
+WHERE data.table_id=%d AND %s
 		)",
-	                            select_list, metadata_table_prefix, stats_join_list, metadata_table_prefix,
-	                            table_id.index, table_id.index);
+	    select_list, metadata_table_prefix, stats_join_list, metadata_table_prefix, table_id.index,
+	    BranchVisibilityFilter(snapshot, "del", "ducklake_delete_file_visibility", "delete_file_id",
+	                           metadata_table_prefix),
+	    table_id.index,
+	    BranchVisibilityFilter(snapshot, "data", "ducklake_file_visibility", "data_file_id", metadata_table_prefix));
 
 	if (!filter_result.where_conditions.empty()) {
 		query += "\nAND " + filter_result.where_conditions;
@@ -3303,6 +3330,11 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &qu
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
+	auto &catalog = transaction.GetCatalog();
+	if (catalog.OnBranch()) {
+		// inherited metadata on a branch reads as the parent at the fork
+		snapshot.snapshot_id = MinValue(snapshot.snapshot_id, catalog.AttachedBranchFork().GetIndex());
+	}
 	SubstituteTransactionPlaceholders(snapshot, query);
 	return Query(query);
 }
@@ -5113,7 +5145,38 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
-	return LatestSnapshotQuery();
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.OnBranch()) {
+		return LatestSnapshotQuery();
+	}
+	// the head of a branch without commits of its own is its fork snapshot
+	return StringUtil::Format(R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d), %d));)",
+	                          catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex());
+}
+
+string DuckLakeMetadataManager::BranchVisibilityFilter(DuckLakeSnapshot snapshot, const string &alias,
+                                                       const string &visibility_table, const string &file_id_column,
+                                                       const string &metadata_table_prefix) const {
+	auto range_check = [](const string &prefix, const string &at) {
+		return StringUtil::Format("%s >= %sbegin_snapshot AND (%s < %send_snapshot OR %send_snapshot IS NULL)", at,
+		                          prefix, at, prefix, prefix);
+	};
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.OnBranch()) {
+		return range_check(alias + ".", "{SNAPSHOT_ID}");
+	}
+	// visibility rows of the branch are authoritative, inherited files read as the parent at the fork
+	auto branch_id = catalog.AttachedBranchId();
+	auto at_snapshot = to_string(snapshot.snapshot_id);
+	auto clipped = to_string(MinValue(snapshot.snapshot_id, catalog.AttachedBranchFork().GetIndex()));
+	auto visibility_rows =
+	    StringUtil::Format("SELECT 1 FROM %s.%s v WHERE v.branch_id = %d AND v.%s = %s.%s", metadata_table_prefix,
+	                       visibility_table, branch_id, file_id_column, alias, file_id_column);
+	return StringUtil::Format("(EXISTS (%s AND %s) OR (NOT EXISTS (%s) AND %s))", visibility_rows,
+	                          range_check("v.", at_snapshot), visibility_rows, range_check(alias + ".", clipped));
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {

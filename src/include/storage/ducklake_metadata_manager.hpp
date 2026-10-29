@@ -621,6 +621,12 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
+	//! The live branch with the given name, invalid when none exists
+	DuckLakeBranchInfo FindBranch(const string &name);
+	//! The visibility check of a file table, range based on main and visibility row based on a branch
+	string BranchVisibilityFilter(DuckLakeSnapshot snapshot, const string &alias, const string &visibility_table,
+	                              const string &file_id_column,
+	                              const string &metadata_table_prefix = "{METADATA_CATALOG}") const;
 	bool HasBranchTable();
 	bool HasSnapshotRemapTable();
 	bool HasSnapshotBranchColumn();

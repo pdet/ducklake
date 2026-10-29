@@ -318,6 +318,18 @@ struct DuckLakeSnapshotInfo {
 	Value commit_extra_info;
 };
 
+struct DuckLakeBranchInfo {
+	idx_t branch_id = DConstants::INVALID_INDEX;
+	string name;
+	//! The parent branch and the snapshot the branch forked at, unset on main
+	optional_idx fork_branch_id;
+	optional_idx fork_snapshot_id;
+
+	bool IsValid() const {
+		return branch_id != DConstants::INVALID_INDEX;
+	}
+};
+
 struct DuckLakeSnapshotTagInfo {
 	string name;
 	idx_t snapshot_id;
