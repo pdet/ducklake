@@ -649,7 +649,9 @@ public:
 	static string DeleteFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
 	string DataFiles() const;
 	string DeleteFiles() const;
-	bool HasFileRangeColumns();
+	bool HasMetadataColumn(const string &table, const string &column);
+	bool HasAnyFileRangeColumns();
+	bool HasAllFileRangeColumns();
 	bool HasBranchZeroVisibility();
 	bool HasBranchInheritedVisibility();
 	bool HasV2_0Dev1Additions();
@@ -661,8 +663,11 @@ public:
 		bool branch_column = true;
 		bool file_visibility_table = true;
 		bool delete_file_visibility_table = true;
-		//! Whether the inline range columns are still present, to be read into visibility and dropped
-		bool file_range_columns = true;
+		//! The inline range columns still present, read into visibility and then dropped
+		bool drop_data_begin = true;
+		bool drop_data_end = true;
+		bool drop_delete_begin = true;
+		bool drop_delete_end = true;
 	};
 	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
 	static string GetSnapshotTagTableStatement();

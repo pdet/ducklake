@@ -360,7 +360,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
 		if (catalog.GetAttached().IsReadOnly()) {
 			// once the inline range columns are gone the visibility rows are the only readable ranges
-			if (transaction.GetMetadataManager().HasFileRangeColumns()) {
+			if (transaction.GetMetadataManager().HasAllFileRangeColumns()) {
 				catalog.SetBranchMetadataMissing();
 			}
 		} else {

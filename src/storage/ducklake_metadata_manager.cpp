@@ -722,7 +722,7 @@ string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(const V2_0Dev1Additions &ad
 	}
 	result += "UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;\n";
 	result += GetMainBranchRowStatement() + "\n";
-	if (add.file_range_columns) {
+	if (add.drop_data_begin && add.drop_data_end) {
 		// the inline ranges become the main branch rows before the columns go away below
 		result += R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_file_visibility
@@ -731,6 +731,10 @@ FROM {METADATA_CATALOG}.ducklake_data_file f
 WHERE NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_visibility v
     WHERE v.branch_id = 0 AND v.data_file_id = f.data_file_id);
+)";
+	}
+	if (add.drop_delete_begin && add.drop_delete_end) {
+		result += R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
 SELECT 0, f.table_id, f.delete_file_id, f.begin_snapshot, f.end_snapshot
 FROM {METADATA_CATALOG}.ducklake_delete_file f
@@ -765,13 +769,17 @@ AND NOT EXISTS (
     WHERE v.branch_id = b.branch_id AND df.data_file_id = f.data_file_id);
 )",
 	                             data_files, delete_files);
-	if (add.file_range_columns) {
-		result += R"(
-ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN begin_snapshot;
-ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN end_snapshot;
-ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN begin_snapshot;
-ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN end_snapshot;
-)";
+	if (add.drop_data_begin) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN begin_snapshot;\n";
+	}
+	if (add.drop_data_end) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN end_snapshot;\n";
+	}
+	if (add.drop_delete_begin) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN begin_snapshot;\n";
+	}
+	if (add.drop_delete_end) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN end_snapshot;\n";
 	}
 	return result;
 }
@@ -876,8 +884,22 @@ bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
 	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_delete_file_visibility LIMIT 0")->HasError();
 }
 
-bool DuckLakeMetadataManager::HasFileRangeColumns() {
-	return !Query("SELECT begin_snapshot FROM {METADATA_CATALOG}.ducklake_data_file LIMIT 0")->HasError();
+bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
+	return !Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", column, table))->HasError();
+}
+
+bool DuckLakeMetadataManager::HasAnyFileRangeColumns() {
+	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") ||
+	       HasMetadataColumn("ducklake_data_file", "end_snapshot") ||
+	       HasMetadataColumn("ducklake_delete_file", "begin_snapshot") ||
+	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
+}
+
+bool DuckLakeMetadataManager::HasAllFileRangeColumns() {
+	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") &&
+	       HasMetadataColumn("ducklake_data_file", "end_snapshot") &&
+	       HasMetadataColumn("ducklake_delete_file", "begin_snapshot") &&
+	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
 }
 
 bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
@@ -937,7 +959,7 @@ LIMIT 1);)",
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
 	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasFileVisibilityTable() &&
 	       HasDeleteFileVisibilityTable() && HasMainBranchRow() && HasBranchZeroVisibility() &&
-	       HasBranchInheritedVisibility() && !HasFileRangeColumns();
+	       HasBranchInheritedVisibility() && !HasAnyFileRangeColumns();
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
@@ -947,7 +969,10 @@ void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
 	missing.branch_column = !HasSnapshotBranchColumn();
 	missing.file_visibility_table = !HasFileVisibilityTable();
 	missing.delete_file_visibility_table = !HasDeleteFileVisibilityTable();
-	missing.file_range_columns = HasFileRangeColumns();
+	missing.drop_data_begin = HasMetadataColumn("ducklake_data_file", "begin_snapshot");
+	missing.drop_data_end = HasMetadataColumn("ducklake_data_file", "end_snapshot");
+	missing.drop_delete_begin = HasMetadataColumn("ducklake_delete_file", "begin_snapshot");
+	missing.drop_delete_end = HasMetadataColumn("ducklake_delete_file", "end_snapshot");
 	ExecuteMigration(V2_0Dev1AdditionsSql(missing), false, "2.0-dev1", "2.0-dev1");
 }
 
@@ -2674,7 +2699,7 @@ FROM %s data
 %s
 LEFT JOIN (
     SELECT *
-    FROM %s
+    FROM %s del_src
     WHERE table_id=%d  AND %s >= begin_snapshot
           AND (%s < end_snapshot OR end_snapshot IS NULL)
     ) del ON del.data_file_id = data.data_file_id
