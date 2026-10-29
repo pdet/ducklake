@@ -43,10 +43,10 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (lcase == "data_inlining_row_limit") {
 		options.config_options["data_inlining_row_limit"] = value.DefaultCastAs(LogicalType::UBIGINT).ToString();
 	} else if (lcase == "branch") {
-		if (value.IsNull() || StringValue::Get(value).empty()) {
+		if (value.IsNull() || value.ToString().empty()) {
 			throw InvalidInputException("BRANCH cannot be NULL or empty");
 		}
-		options.branch_name = StringValue::Get(value);
+		options.branch_name = value.ToString();
 	} else if (lcase == "snapshot_version") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");

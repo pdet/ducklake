@@ -87,3 +87,29 @@ SELECT COUNT(*) FROM dl.t
 
 statement ok
 DETACH dl
+
+# an ended branch no longer protects its snapshots or files
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+UPDATE meta.ducklake_branch SET end_snapshot = 101 WHERE branch_id = 1
+
+query I
+SELECT COUNT(*) > 0 FROM ducklake_expire_snapshots('dl', versions => [2, 100], dry_run => true)
+----
+true
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2, 3, 100, 101], dry_run => false)
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
+----
+0
+
+statement ok
+DETACH dl

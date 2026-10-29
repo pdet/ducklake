@@ -781,7 +781,8 @@ set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots() {
 SELECT fork_snapshot_id FROM {METADATA_CATALOG}.ducklake_branch
 WHERE end_snapshot IS NULL AND fork_snapshot_id IS NOT NULL
 UNION
-SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id <> 0
+SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id IN (
+	SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id <> 0 AND end_snapshot IS NULL)
 UNION
 SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0;)");
 	query->ThrowIfError("Failed to get branch protected snapshots from DuckLake: ");
@@ -5295,35 +5296,43 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
+//! The snapshot row columns with the allocators taken from the global maxima
+static string GlobalAllocatorSnapshotColumns(const string &schema_version_column) {
+	return StringUtil::Format(R"(snapshot_id, %s,
+(SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
+(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'))",
+	                          schema_version_column);
+}
+
 string DuckLakeMetadataManager::MainHeadSnapshotQuery(bool branch_aware) {
 	if (!branch_aware) {
 		return LatestSnapshotQuery();
 	}
-	// commits allocate after the global maximum, with the schema of main's head and global allocators
-	return R"(SELECT snapshot_id, (
-SELECT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0)),
-(SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
+	// commits allocate after the global maximum, with the schema of main's head
+	return StringUtil::Format(R"(SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)",
+	                          GlobalAllocatorSnapshotColumns(R"((
+SELECT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0)))"));
 }
 
 string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery() const {
 	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return LatestSnapshotQuery();
+	}
 	if (!catalog.OnBranch()) {
-		return MainHeadSnapshotQuery(catalog.SupportsBranching());
+		return MainHeadSnapshotQuery(true);
 	}
 	// the head of a branch without commits of its own is its fork snapshot
-	return StringUtil::Format(R"(SELECT snapshot_id, schema_version,
-(SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
+	return StringUtil::Format(R"(SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE branch_id = %d), %d));)",
-	                          catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex());
+	                          GlobalAllocatorSnapshotColumns("schema_version"), catalog.AttachedBranchId(),
+	                          catalog.AttachedBranchFork().GetIndex());
 }
 
 string DuckLakeMetadataManager::BranchLineageFilter() const {
@@ -6040,14 +6049,15 @@ WHERE %s(%s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_
 	                          file_id_column, file_table, guard, filter);
 }
 
-//! Keeps files a branch visibility row still references, regardless of their range on main
+//! Keeps files a live branch visibility row still references, regardless of their range on main
 string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_table, const string &file_id_column,
                                                     const string &alias) {
 	if (!transaction.GetCatalog().SupportsBranching()) {
 		return string();
 	}
-	return StringUtil::Format("NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s v WHERE v.branch_id <> 0 AND "
-	                          "v.%s = %s.%s)",
+	return StringUtil::Format("NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s v "
+	                          "JOIN {METADATA_CATALOG}.ducklake_branch b ON b.branch_id = v.branch_id "
+	                          "AND b.branch_id <> 0 AND b.end_snapshot IS NULL WHERE v.%s = %s.%s)",
 	                          visibility_table, file_id_column, alias, file_id_column);
 }
 

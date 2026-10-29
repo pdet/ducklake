@@ -44,6 +44,12 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_att
 ----
 No branch with the name "feature" exists
 
+# a branch name that is not a string is cast and looked up
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', BRANCH 1)
+----
+No branch with the name "1" exists
+
 # a branch attach cannot be read write
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', BRANCH 'dev', READ_WRITE)
