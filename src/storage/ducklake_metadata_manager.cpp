@@ -710,8 +710,19 @@ bool DuckLakeMetadataManager::HasSnapshotBranchColumn() {
 	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_snapshot LIMIT 0")->HasError();
 }
 
+bool DuckLakeMetadataManager::HasMainBranchRow() {
+	auto probe = Query("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0");
+	if (probe->HasError()) {
+		return false;
+	}
+	for (auto &row : *probe) {
+		return row.GetValue<int64_t>(0) > 0;
+	}
+	return false;
+}
+
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
-	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn();
+	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasMainBranchRow();
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {

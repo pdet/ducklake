@@ -624,6 +624,7 @@ public:
 	bool HasBranchTable();
 	bool HasSnapshotRemapTable();
 	bool HasSnapshotBranchColumn();
+	bool HasMainBranchRow();
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
 	static string V2_0Dev1AdditionsSql(bool add_branch, bool add_remap, bool add_branch_column);

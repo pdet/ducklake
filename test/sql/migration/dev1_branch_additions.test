@@ -99,5 +99,33 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 1	0
 2	0
 
+# a partially healed catalog is completed on the next attach
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+DELETE FROM meta.ducklake_branch
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta')
+
+query II
+SELECT branch_id, branch_name FROM meta.ducklake_branch
+----
+0	main
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
+----
+0
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+2
+
 statement ok
 DETACH dl
