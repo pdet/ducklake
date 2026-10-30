@@ -811,6 +811,15 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
+idx_t DuckLakeMetadataManager::GetGlobalSnapshotWatermark() {
+	auto result = Query("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot");
+	result->ThrowIfError("Failed to read the snapshot watermark from DuckLake: ");
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	throw InvalidInputException("No snapshot found in DuckLake");
+}
+
 DuckLakeBranchInfo DuckLakeMetadataManager::FindBranch(const string &name) {
 	auto result = Query(R"(
 SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id
