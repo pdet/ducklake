@@ -1804,6 +1804,32 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 	state->commit_info = option;
 }
 
+optional_idx DuckLakeTransaction::TryResolveBranchFork(const string &name) {
+	if (!ducklake_catalog.SupportsBranching() || !FindSnapshotTag(name).empty()) {
+		return optional_idx();
+	}
+	if (StringUtil::CIEquals(name, "main")) {
+		return GetNewestVisibleSnapshotId();
+	}
+	auto local_branch = state->new_branches.find(name);
+	if (local_branch != state->new_branches.end()) {
+		return local_branch->second;
+	}
+	if (state->dropped_branches.find(name) != state->dropped_branches.end()) {
+		return optional_idx();
+	}
+	auto branch = GetMetadataManager().FindBranch(name);
+	if (!branch.IsValid()) {
+		return optional_idx();
+	}
+	if (GetMetadataManager().BranchHasSnapshots(branch.branch_id)) {
+		throw NotImplementedException("Reading the commits of branch \"%s\" requires attaching it with the BRANCH "
+		                              "option",
+		                              name);
+	}
+	return branch.fork_snapshot_id;
+}
+
 string DuckLakeTransaction::FindSnapshotTag(const string &name) {
 	if (state->new_snapshot_tags.find(name) != state->new_snapshot_tags.end()) {
 		return name;
@@ -2194,6 +2220,12 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		}
 		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end()) {
 			throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
+		}
+		// a branch name reads what main held at its fork while the branch has no commits of its own
+		auto branch_fork = TryResolveBranchFork(name);
+		if (branch_fork.IsValid()) {
+			BoundAtClause fork_clause("version", Value::BIGINT(NumericCast<int64_t>(branch_fork.GetIndex())));
+			return GetSnapshot(&fork_clause, bound);
 		}
 	}
 	// snapshots committed after the transaction started are not visible to it

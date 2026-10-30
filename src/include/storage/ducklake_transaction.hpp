@@ -313,6 +313,7 @@ public:
 	void CreateBranch(const string &name, idx_t fork_snapshot_id);
 	void DropBranch(const string &name);
 	vector<DuckLakeBranchInfo> GetBranches();
+	optional_idx TryResolveBranchFork(const string &name);
 	//! Moves a live tag to the snapshot, when it names the expected snapshot if one is given
 	void ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id);
 	//! The live snapshot tags, with the changes of this transaction

@@ -57,6 +57,17 @@ SELECT i FROM dev.t
 statement ok
 DETACH dev
 
+# a branch name in time travel reads what main held at the fork
+query I
+SELECT i FROM dl.t AT (VERSION => 'dev')
+----
+2
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'main')
+----
+2
+
 # names are refs, not snapshots
 statement error
 CALL ducklake_create_branch('dl', 'dev')

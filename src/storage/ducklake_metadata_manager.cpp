@@ -874,6 +874,17 @@ AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
 	return result;
 }
 
+bool DuckLakeMetadataManager::BranchHasSnapshots(idx_t branch_id) {
+	auto result = Query(StringUtil::Format(
+	    "SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d LIMIT 1", branch_id));
+	result->ThrowIfError("Failed to get the snapshots of a branch from DuckLake: ");
+	for (auto &row : *result) {
+		(void)row;
+		return true;
+	}
+	return false;
+}
+
 DuckLakeBranchInfo DuckLakeMetadataManager::FindBranch(const string &name) {
 	auto result = Query(R"(
 SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id
