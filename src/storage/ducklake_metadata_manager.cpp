@@ -874,6 +874,15 @@ AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
 	return result;
 }
 
+idx_t DuckLakeMetadataManager::GetNewestMainSnapshotId() {
+	auto result = Query("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0");
+	result->ThrowIfError("Failed to get the newest main snapshot from DuckLake: ");
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	throw InvalidInputException("No snapshot found in DuckLake");
+}
+
 bool DuckLakeMetadataManager::BranchHasSnapshots(idx_t branch_id) {
 	auto result = Query(StringUtil::Format(
 	    "SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d LIMIT 1", branch_id));
@@ -928,19 +937,29 @@ bool DuckLakeMetadataManager::HasMainBranchRow() {
 	return false;
 }
 
-set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots() {
+set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(const set<idx_t> &dropped_branch_ids) {
 	set<idx_t> result;
 	if (!transaction.GetCatalog().SupportsBranching()) {
 		return result;
 	}
-	auto query = Query(R"(
+	// a branch this transaction drops no longer protects anything
+	string dropped_filter;
+	if (!dropped_branch_ids.empty()) {
+		vector<string> ids;
+		for (auto &branch_id : dropped_branch_ids) {
+			ids.push_back(to_string(branch_id));
+		}
+		dropped_filter = StringUtil::Format(" AND branch_id NOT IN (%s)", StringUtil::Join(ids, ", "));
+	}
+	auto query = Query(StringUtil::Format(R"(
 SELECT fork_snapshot_id FROM {METADATA_CATALOG}.ducklake_branch
-WHERE end_snapshot IS NULL AND fork_snapshot_id IS NOT NULL
+WHERE end_snapshot IS NULL AND fork_snapshot_id IS NOT NULL%s
 UNION
 SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id IN (
-	SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id <> 0 AND end_snapshot IS NULL)
+	SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id <> 0 AND end_snapshot IS NULL%s)
 UNION
-SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0;)");
+SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0;)",
+	                                      dropped_filter, dropped_filter));
 	query->ThrowIfError("Failed to get branch protected snapshots from DuckLake: ");
 	for (auto &row : *query) {
 		if (!row.IsNull(0)) {

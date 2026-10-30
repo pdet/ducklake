@@ -52,14 +52,17 @@ static idx_t ForkSnapshotFromInput(ClientContext &context, TableFunctionBindInpu
 	if (has_version && has_timestamp) {
 		throw BinderException("ducklake_create_branch: specify either version or timestamp, not both");
 	}
-	unique_ptr<BoundAtClause> at_clause;
-	if (has_version) {
-		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(version));
-	} else if (has_timestamp) {
-		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(timestamp));
-	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	return transaction.GetSnapshot(at_clause.get()).snapshot_id;
+	if (has_version) {
+		BoundAtClause at_clause(DuckLakeTableFunctionUtil::AtClauseFromValue(version));
+		return transaction.GetSnapshot(&at_clause).snapshot_id;
+	}
+	if (has_timestamp) {
+		BoundAtClause at_clause(DuckLakeTableFunctionUtil::AtClauseFromValue(timestamp));
+		return transaction.GetSnapshot(&at_clause).snapshot_id;
+	}
+	// the default fork is the newest main snapshot, not the global allocation maximum
+	return transaction.GetNewestMainSnapshotId();
 }
 
 static unique_ptr<FunctionData> CreateBranchBind(ClientContext &context, TableFunctionBindInput &input,

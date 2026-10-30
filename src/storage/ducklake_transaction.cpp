@@ -1805,11 +1805,15 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 }
 
 optional_idx DuckLakeTransaction::TryResolveBranchFork(const string &name) {
-	if (!ducklake_catalog.SupportsBranching() || !FindSnapshotTag(name).empty()) {
+	if (!ducklake_catalog.SupportsBranching()) {
+		return optional_idx();
+	}
+	bool tag_dropped = state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end();
+	if (!tag_dropped && !FindSnapshotTag(name).empty()) {
 		return optional_idx();
 	}
 	if (StringUtil::CIEquals(name, "main")) {
-		return GetNewestVisibleSnapshotId();
+		return GetNewestMainSnapshotId();
 	}
 	auto local_branch = state->new_branches.find(name);
 	if (local_branch != state->new_branches.end()) {
@@ -1930,7 +1934,8 @@ void DuckLakeTransaction::CreateBranch(const string &name, idx_t fork_snapshot_i
 	if (StringUtil::CIEquals(name, "main")) {
 		throw InvalidInputException("A branch cannot be named \"main\"");
 	}
-	if (state->new_branches.count(name) || GetMetadataManager().FindBranch(name).IsValid()) {
+	bool dropped_locally = state->dropped_branches.find(name) != state->dropped_branches.end();
+	if (state->new_branches.count(name) || (!dropped_locally && GetMetadataManager().FindBranch(name).IsValid())) {
 		throw InvalidInputException("A branch with the name \"%s\" already exists", name);
 	}
 	CheckNotExpiredInTransaction(fork_snapshot_id);
@@ -1956,9 +1961,11 @@ vector<DuckLakeBranchInfo> DuckLakeTransaction::GetBranches() {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	vector<DuckLakeBranchInfo> result;
 	for (auto &branch : GetMetadataManager().GetBranches()) {
-		if (state->dropped_branches.find(branch.name) == state->dropped_branches.end()) {
-			result.push_back(std::move(branch));
+		auto dropped = state->dropped_branches.find(branch.name);
+		if (dropped != state->dropped_branches.end() && dropped->second.branch_id == branch.branch_id) {
+			continue;
 		}
+		result.push_back(std::move(branch));
 	}
 	for (auto &branch : state->new_branches) {
 		DuckLakeBranchInfo info;
@@ -2012,8 +2019,15 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
 	auto protected_snapshots = TaggedSnapshotsInternal();
-	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots();
+	set<idx_t> dropped_branch_ids;
+	for (auto &branch : state->dropped_branches) {
+		dropped_branch_ids.insert(branch.second.branch_id);
+	}
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(dropped_branch_ids);
 	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
+	for (auto &branch : state->new_branches) {
+		protected_snapshots.insert(branch.second);
+	}
 	vector<DuckLakeSnapshotInfo> result;
 	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
 		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
@@ -2201,6 +2215,13 @@ idx_t DuckLakeTransaction::GetNewestVisibleSnapshotId() {
 	return GetLatestSnapshot().snapshot_id;
 }
 
+idx_t DuckLakeTransaction::GetNewestMainSnapshotId() {
+	if (!ducklake_catalog.SupportsBranching()) {
+		return GetNewestVisibleSnapshotId();
+	}
+	return GetMetadataManager().GetNewestMainSnapshotId();
+}
+
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {
 	if (!at_clause) {
 		// no AT-clause - get the latest snapshot
@@ -2218,14 +2239,14 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 			BoundAtClause local_clause("version", Value::BIGINT(NumericCast<int64_t>(local_tag->second)));
 			return GetSnapshot(&local_clause, bound);
 		}
-		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end()) {
-			throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
-		}
 		// a branch name reads what main held at its fork while the branch has no commits of its own
 		auto branch_fork = TryResolveBranchFork(name);
 		if (branch_fork.IsValid()) {
 			BoundAtClause fork_clause("version", Value::BIGINT(NumericCast<int64_t>(branch_fork.GetIndex())));
 			return GetSnapshot(&fork_clause, bound);
+		}
+		if (state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end()) {
+			throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
 		}
 	}
 	// snapshots committed after the transaction started are not visible to it

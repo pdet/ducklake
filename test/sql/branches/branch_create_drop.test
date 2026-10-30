@@ -157,3 +157,99 @@ No branch with the name "dev" exists
 
 statement ok
 DETACH dl
+
+# a branch name can be dropped and created again in one transaction
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL ducklake_create_branch('dl', 'redo')
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_branch('dl', 'redo')
+
+statement ok
+CALL ducklake_create_branch('dl', 'redo')
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'redo' AND ended_snapshot_id IS NULL
+----
+1
+
+# a pending drop hides only the live incarnation, the ended history stays listed
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_branch('dl', 'redo')
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'redo'
+----
+1
+
+statement ok
+ROLLBACK
+
+# a fork created in this transaction is protected from its own expiry
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_branch('dl', 'guarded', version => 2)
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+0
+
+statement ok
+COMMIT
+
+# dropping the branches of a fork releases it for expiry in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_branch('dl', 'guarded')
+
+statement ok
+CALL ducklake_drop_branch('dl', 'past')
+
+query I
+SELECT COUNT(*) > 0 FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+true
+
+statement ok
+ROLLBACK
+
+# a tag dropped in this transaction loses precedence over a branch of the same name
+statement ok
+CALL ducklake_create_tag('dl', 'shared', version => 2)
+
+statement ok
+CALL ducklake_create_branch('dl', 'shared', version => 2)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'shared')
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'shared')
+----
+2
+
+statement ok
+ROLLBACK

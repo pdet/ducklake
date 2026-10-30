@@ -633,7 +633,7 @@ public:
 	//! The latest snapshot of the attached branch, with the global allocator state
 	string BranchAwareLatestSnapshotQuery() const;
 	//! The snapshots that live branches depend on, their fork points and their own snapshots
-	set<idx_t> GetBranchProtectedSnapshots();
+	set<idx_t> GetBranchProtectedSnapshots(const set<idx_t> &dropped_branch_ids);
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f");
 	static string MainHeadSnapshotQuery(bool branch_aware);
 	string BranchLineageFilter() const;
@@ -647,6 +647,7 @@ public:
 	bool HasMainBranchRow();
 	vector<DuckLakeBranchInfo> GetBranches();
 	bool BranchHasSnapshots(idx_t branch_id);
+	idx_t GetNewestMainSnapshotId();
 	static string WriteBranchChanges(const case_insensitive_map_t<idx_t> &created,
 	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped);
 	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);

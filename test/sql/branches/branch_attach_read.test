@@ -134,3 +134,28 @@ SELECT * FROM dl.t
 
 statement ok
 DETACH dl
+
+# refs on main resolve to a main snapshot even when a branch owns the global maximum
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) > 0 FROM m.t AT (VERSION => 'main')
+----
+true
+
+statement ok
+CALL ducklake_create_branch('m', 'from_head')
+
+query I
+SELECT fork_snapshot_id < 100 FROM ducklake_branches('m') WHERE branch_name = 'from_head'
+----
+true
+
+query I
+SELECT COUNT(*) > 0 FROM m.t AT (VERSION => 'from_head')
+----
+true
+
+statement ok
+DETACH m
