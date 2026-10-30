@@ -1842,7 +1842,8 @@ optional_idx DuckLakeTransaction::TryResolveBranchFork(const string &name) {
 	if (!ducklake_catalog.SupportsBranching()) {
 		return optional_idx();
 	}
-	bool tag_dropped = state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end();
+	bool tag_dropped = state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end() ||
+	                   state->expired_snapshot_tags.find(name) != state->expired_snapshot_tags.end();
 	if (!tag_dropped && !FindSnapshotTag(name).empty()) {
 		return optional_idx();
 	}
@@ -2018,6 +2019,7 @@ void DuckLakeTransaction::DropBranch(const string &name) {
 		throw InvalidInputException("The main branch cannot be dropped");
 	}
 	if (state->new_branches.erase(name)) {
+		ExpireReleasedSnapshots();
 		return;
 	}
 	auto committed = GetMetadataManager().FindBranch(name);
@@ -2025,6 +2027,7 @@ void DuckLakeTransaction::DropBranch(const string &name) {
 		throw InvalidInputException("A branch with the name \"%s\" does not exist", name);
 	}
 	state->dropped_branches[committed.name] = std::move(committed);
+	ExpireReleasedSnapshots();
 }
 
 vector<DuckLakeBranchInfo> DuckLakeTransaction::GetBranches() {
@@ -2317,7 +2320,7 @@ idx_t DuckLakeTransaction::GetNewestMainSnapshotId() {
 	if (!ducklake_catalog.SupportsBranching()) {
 		return GetNewestVisibleSnapshotId();
 	}
-	return GetMetadataManager().GetNewestMainSnapshotId();
+	return GetMetadataManager().GetNewestMainSnapshotId(GetNewestVisibleSnapshotId());
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {

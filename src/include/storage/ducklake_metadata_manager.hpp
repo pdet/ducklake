@@ -649,7 +649,7 @@ public:
 	bool HasMainBranchRow();
 	vector<DuckLakeBranchInfo> GetBranches();
 	bool BranchHasSnapshots(idx_t branch_id);
-	idx_t GetNewestMainSnapshotId();
+	idx_t GetNewestMainSnapshotId(idx_t max_snapshot_id);
 	static string WriteBranchChanges(const case_insensitive_map_t<idx_t> &created,
 	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped);
 	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);

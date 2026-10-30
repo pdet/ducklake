@@ -874,8 +874,10 @@ AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
 	return result;
 }
 
-idx_t DuckLakeMetadataManager::GetNewestMainSnapshotId() {
-	auto result = Query("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0");
+idx_t DuckLakeMetadataManager::GetNewestMainSnapshotId(idx_t max_snapshot_id) {
+	auto result = Query(StringUtil::Format(
+	    "SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id <= %d",
+	    max_snapshot_id));
 	result->ThrowIfError("Failed to get the newest main snapshot from DuckLake: ");
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
