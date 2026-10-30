@@ -115,10 +115,10 @@ void DuckLakeInitializer::Initialize() {
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();
+	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
+		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+	}
 	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
-		if (!catalog.SupportsBranching()) {
-			ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
-		}
 		auto branch = current_metadata_manager.FindBranch(options.branch_name);
 		if (!branch.IsValid()) {
 			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);

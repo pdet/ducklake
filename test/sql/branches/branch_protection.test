@@ -37,11 +37,11 @@ DETACH dl
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
-# the current snapshot of main follows the global sequence
+# the head of main stays in its own lineage
 query I
 SELECT id FROM dl.current_snapshot()
 ----
-100
+3
 
 statement ok
 INSERT INTO dl.t VALUES (3)
@@ -51,6 +51,22 @@ query I
 SELECT id FROM dl.current_snapshot()
 ----
 101
+
+# the head is readable and the listing stays in the lineage
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 101)
+----
+3
+
+query I
+SELECT COUNT(*) FROM dl.snapshots() WHERE snapshot_id = 100
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_table_insertions('dl', 'main', 't', NOW(), NOW())
+----
+0
 
 # the fork point and the branch snapshot cannot be expired
 query I

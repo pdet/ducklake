@@ -641,6 +641,7 @@ public:
 	string BranchLineageFilter() const;
 	//! The branch whose visibility rows a read at the given snapshot resolves through
 	idx_t ReadBranchId(DuckLakeSnapshot snapshot) const;
+	void ThrowIfPastBranchFork(DuckLakeSnapshot snapshot) const;
 	bool HasBranchTable();
 	bool HasSnapshotRemapTable();
 	bool HasSnapshotBranchColumn();
@@ -671,6 +672,7 @@ public:
 		bool drop_delete_begin = true;
 		bool drop_delete_end = true;
 	};
+	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
 	static string GetSnapshotTagTableStatement();
 	static string GetFileVisibilityTableStatement();
