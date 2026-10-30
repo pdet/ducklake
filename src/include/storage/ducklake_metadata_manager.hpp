@@ -648,7 +648,6 @@ public:
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
-	idx_t GetGlobalSnapshotWatermark();
 	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
 	static string DeleteFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
 	string DataFiles() const;
