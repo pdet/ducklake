@@ -23,6 +23,7 @@
         "test/sql/branches/branch_attach_inlined.test",
         "test/sql/branches/branch_attach_read.test",
         "test/sql/branches/branch_compacted_fork_rows.test",
+        "test/sql/branches/branch_conflict.test",
         "test/sql/branches/branch_create_drop.test",
         "test/sql/branches/branch_delete_replacement.test",
         "test/sql/branches/branch_flush_inlined.test",

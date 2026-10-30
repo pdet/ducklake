@@ -1,0 +1,128 @@
+# name: test/sql/branches/branch_conflict.test
+# description: concurrent transactions on the same branch conflict
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_conflict_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+SET immediate_transaction_mode=true
+
+# two transactions create different branches
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_create_branch('dl', 'a')
+
+statement ok con2
+CALL ducklake_create_branch('dl', 'b')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name <> 'main'
+----
+2
+
+# two transactions create the same branch name, the second one fails
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_create_branch('dl', 'same')
+
+statement ok con2
+CALL ducklake_create_branch('dl', 'SAME')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name ILIKE 'same'
+----
+1
+
+# two transactions drop the same branch, the second one fails
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_branch('dl', 'same')
+
+statement ok con2
+CALL ducklake_drop_branch('dl', 'same')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'same' AND ended_snapshot_id IS NULL
+----
+0
+
+# a branch of a snapshot that another transaction expired is not created
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_create_branch('dl', 'expired', version => 7)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [7])
+
+statement error con1
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'expired'
+----
+0
+
+statement ok
+SET immediate_transaction_mode=false
