@@ -950,7 +950,7 @@ bool DuckLakeTransaction::ChangesMade() const {
 bool DuckLakeTransaction::ChangesMadeBesidesExpiry() const {
 	return state->SchemaChangesMade() || state->local_changes.HasChanges() || !state->dropped_files.empty() ||
 	       !new_name_maps.name_maps.empty() || !state->new_snapshot_tags.empty() ||
-	       !state->dropped_snapshot_tags.empty();
+	       !state->dropped_snapshot_tags.empty() || !state->new_branches.empty() || !state->dropped_branches.empty();
 }
 
 bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
@@ -1119,6 +1119,12 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	}
 	for (auto &tag : state->dropped_snapshot_tags) {
 		changes.dropped_snapshot_tags.insert(tag.first);
+	}
+	for (auto &branch : state->new_branches) {
+		changes.created_branches.insert(branch.first);
+	}
+	for (auto &branch : state->dropped_branches) {
+		changes.dropped_branches.insert(branch.first);
 	}
 	return changes;
 }
@@ -1891,6 +1897,51 @@ void DuckLakeTransaction::DropSnapshotTag(const string &name) {
 	}
 	state->dropped_snapshot_tags[committed->name] = *committed;
 	ExpireReleasedSnapshots();
+}
+
+void DuckLakeTransaction::CreateBranch(const string &name, idx_t fork_snapshot_id) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	if (StringUtil::CIEquals(name, "main")) {
+		throw InvalidInputException("A branch cannot be named \"main\"");
+	}
+	if (state->new_branches.count(name) || GetMetadataManager().FindBranch(name).IsValid()) {
+		throw InvalidInputException("A branch with the name \"%s\" already exists", name);
+	}
+	CheckNotExpiredInTransaction(fork_snapshot_id);
+	state->new_branches[name] = fork_snapshot_id;
+}
+
+void DuckLakeTransaction::DropBranch(const string &name) {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	if (StringUtil::CIEquals(name, "main")) {
+		throw InvalidInputException("The main branch cannot be dropped");
+	}
+	if (state->new_branches.erase(name)) {
+		return;
+	}
+	auto committed = GetMetadataManager().FindBranch(name);
+	if (!committed.IsValid()) {
+		throw InvalidInputException("A branch with the name \"%s\" does not exist", name);
+	}
+	state->dropped_branches[committed.name] = std::move(committed);
+}
+
+vector<DuckLakeBranchInfo> DuckLakeTransaction::GetBranches() {
+	lock_guard<mutex> guard(snapshot_tag_lock);
+	vector<DuckLakeBranchInfo> result;
+	for (auto &branch : GetMetadataManager().GetBranches()) {
+		if (state->dropped_branches.find(branch.name) == state->dropped_branches.end()) {
+			result.push_back(std::move(branch));
+		}
+	}
+	for (auto &branch : state->new_branches) {
+		DuckLakeBranchInfo info;
+		info.name = branch.first;
+		info.fork_branch_id = 0;
+		info.fork_snapshot_id = branch.second;
+		result.push_back(std::move(info));
+	}
+	return result;
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTags() {

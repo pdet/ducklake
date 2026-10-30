@@ -811,6 +811,69 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
+vector<DuckLakeBranchInfo> DuckLakeMetadataManager::GetBranches() {
+	vector<DuckLakeBranchInfo> result;
+	if (!transaction.GetCatalog().SupportsBranching()) {
+		return result;
+	}
+	auto query = Query(R"(
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot
+FROM {METADATA_CATALOG}.ducklake_branch
+ORDER BY branch_id;)");
+	query->ThrowIfError("Failed to get branches from DuckLake: ");
+	for (auto &row : *query) {
+		DuckLakeBranchInfo branch;
+		branch.branch_id = row.GetValue<idx_t>(0);
+		branch.name = row.GetValue<string>(1);
+		branch.fork_branch_id = OptIdx(row, 2);
+		branch.fork_snapshot_id = OptIdx(row, 3);
+		branch.begin_snapshot = OptIdx(row, 4);
+		branch.end_snapshot = OptIdx(row, 5);
+		result.push_back(std::move(branch));
+	}
+	return result;
+}
+
+string DuckLakeMetadataManager::WriteBranchChanges(const case_insensitive_map_t<idx_t> &created,
+                                                   const case_insensitive_map_t<DuckLakeBranchInfo> &dropped) {
+	string result;
+	for (auto &entry : dropped) {
+		// an ended branch keeps its ref for history but releases its rows and protections
+		auto &branch = entry.second;
+		result += StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_file_visibility WHERE branch_id = %d;
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility WHERE branch_id = %d;
+UPDATE {METADATA_CATALOG}.ducklake_branch SET end_snapshot = {SNAPSHOT_ID}
+WHERE end_snapshot IS NULL AND branch_id = %d;
+)",
+		                             branch.branch_id, branch.branch_id, branch.branch_id);
+	}
+	for (auto &entry : created) {
+		// the collation of the catalog can fold names, so they compare byte for byte
+		auto name = SQLString(entry.first);
+		auto name_filter = StringUtil::Format("%s = %s AND b.end_snapshot IS NULL",
+		                                      DuckLakeUtil::WithBinaryCollation("b.branch_name"), name);
+		result += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_branch
+SELECT (SELECT COALESCE(MAX(branch_id), 0) + 1 FROM {METADATA_CATALOG}.ducklake_branch),
+       %s, 0, %d, {SNAPSHOT_ID}, NULL;
+INSERT INTO {METADATA_CATALOG}.ducklake_file_visibility
+SELECT b.branch_id, v.table_id, v.data_file_id, v.begin_snapshot, NULL
+FROM {METADATA_CATALOG}.ducklake_branch b, {METADATA_CATALOG}.ducklake_file_visibility v
+WHERE %s AND v.branch_id = 0
+AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
+INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
+SELECT b.branch_id, v.table_id, v.delete_file_id, v.begin_snapshot, NULL
+FROM {METADATA_CATALOG}.ducklake_branch b, {METADATA_CATALOG}.ducklake_delete_file_visibility v
+WHERE %s AND v.branch_id = 0
+AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
+)",
+		                             name, entry.second, name_filter, entry.second, entry.second, name_filter,
+		                             entry.second, entry.second);
+	}
+	return result;
+}
+
 DuckLakeBranchInfo DuckLakeMetadataManager::FindBranch(const string &name) {
 	auto result = Query(R"(
 SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id

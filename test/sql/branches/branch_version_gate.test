@@ -23,3 +23,25 @@ statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_version_gate_files', BRANCH 'dev')
 ----
 DuckLake 1.1 does not support branches
+
+# branch functions are gated the same way
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_version_gate_files', DUCKLAKE_VERSION '1.1')
+
+statement error
+CALL ducklake_create_branch('dl', 'dev')
+----
+DuckLake 1.1 does not support branches
+
+statement error
+CALL ducklake_drop_branch('dl', 'dev')
+----
+DuckLake 1.1 does not support branches
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl')
+----
+0
+
+statement ok
+DETACH dl

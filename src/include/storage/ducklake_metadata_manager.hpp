@@ -645,6 +645,9 @@ public:
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
+	vector<DuckLakeBranchInfo> GetBranches();
+	static string WriteBranchChanges(const case_insensitive_map_t<idx_t> &created,
+	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped);
 	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
 	static string DeleteFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
 	string DataFiles() const;

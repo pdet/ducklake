@@ -367,6 +367,15 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		// only a backend that reads the latest metadata validates a drop against a tag of the window
 		NameConflictCheck(name, other_changes.created_snapshot_tags, "drop tag", "created a tag with this name");
 	}
+	for (auto &name : changes.created_branches) {
+		NameConflictCheck(name, other_changes.created_branches, "create branch",
+		                  "created a branch with this name already");
+		NameConflictCheck(name, other_changes.dropped_branches, "create branch", "dropped a branch with this name");
+	}
+	for (auto &name : changes.dropped_branches) {
+		NameConflictCheck(name, other_changes.dropped_branches, "drop branch", "dropped it already");
+		NameConflictCheck(name, other_changes.created_branches, "drop branch", "created a branch with this name");
+	}
 }
 
 string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags) {
@@ -393,6 +402,26 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 			throw TransactionException("Transaction conflict - attempting to create tag %s for snapshot %d"
 			                           " - but another transaction has expired the snapshot",
 			                           tag.first, tag.second);
+		}
+	}
+}
+
+void DuckLakeTransactionState::CheckBranchForksExist(const DuckLakeCommitContext &context) const {
+	if (new_branches.empty()) {
+		return;
+	}
+	auto result = context.conflict_query_executor(
+	    StringUtil::Format("SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)",
+	                       TaggedSnapshotIdList(new_branches)));
+	set<idx_t> existing;
+	for (auto &row : *result) {
+		existing.insert(row.GetValue<idx_t>(0));
+	}
+	for (auto &branch : new_branches) {
+		if (existing.find(branch.second) == existing.end()) {
+			throw TransactionException("Transaction conflict - attempting to create branch %s at snapshot %d"
+			                           " - but another transaction has expired the snapshot",
+			                           branch.first, branch.second);
 		}
 	}
 }
@@ -466,6 +495,12 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	}
 	for (auto &name : changes.dropped_snapshot_tags) {
 		changes_made.push_back("dropped_tag:" + SQLQuotedIdentifier::ToString(name));
+	}
+	for (auto &name : changes.created_branches) {
+		changes_made.push_back("created_branch:" + SQLQuotedIdentifier::ToString(name));
+	}
+	for (auto &name : changes.dropped_branches) {
+		changes_made.push_back("dropped_branch:" + SQLQuotedIdentifier::ToString(name));
 	}
 	for (auto &snapshot_id : changes.expired_snapshots) {
 		changes_made.push_back("expired_snapshot:" + to_string(snapshot_id));
@@ -2249,6 +2284,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
 	}
 	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags);
+	batch_queries += DuckLakeMetadataManager::WriteBranchChanges(new_branches, dropped_branches);
 	auto relative_paths = [&](const auto &entries) {
 		vector<DuckLakePath> result;
 		result.reserve(entries.size());
@@ -2727,6 +2763,7 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot, context);
 	CheckTaggedSnapshotsExist(context);
+	CheckBranchForksExist(context);
 
 	tables_changed_by_others.clear();
 	for (auto tables : {&other_changes.altered_tables, &other_changes.inserted_tables,

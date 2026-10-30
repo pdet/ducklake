@@ -326,6 +326,9 @@ struct DuckLakeBranchInfo {
 	//! The parent branch and the snapshot the branch forked at, unset on main
 	optional_idx fork_branch_id;
 	optional_idx fork_snapshot_id;
+	//! The snapshots that created and ended the branch, the latter unset while it lives
+	optional_idx begin_snapshot;
+	optional_idx end_snapshot;
 
 	bool IsValid() const {
 		return branch_id != DConstants::INVALID_INDEX;

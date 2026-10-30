@@ -153,6 +153,21 @@ public:
 	DuckLakeTagsFunction();
 };
 
+class DuckLakeCreateBranchFunction : public TableFunction {
+public:
+	DuckLakeCreateBranchFunction();
+};
+
+class DuckLakeDropBranchFunction : public TableFunction {
+public:
+	DuckLakeDropBranchFunction();
+};
+
+class DuckLakeBranchesFunction : public DuckLakeBaseMetadataFunction {
+public:
+	DuckLakeBranchesFunction();
+};
+
 class DuckLakeOptionsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeOptionsFunction();

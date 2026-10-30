@@ -1,0 +1,148 @@
+# name: test/sql/branches/branch_create_drop.test
+# description: creating, listing and dropping branches
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev')
+
+# the branch copies the files and deletes visible at its fork
+query IIII
+SELECT branch_name, fork_snapshot_id, created_snapshot_id, ended_snapshot_id FROM ducklake_branches('dl') ORDER BY branch_id
+----
+main	NULL	0	NULL
+dev	3	4	NULL
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+1
+
+# later commits on main stay invisible to the branch
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t
+----
+2
+
+statement ok
+DETACH dev
+
+# names are refs, not snapshots
+statement error
+CALL ducklake_create_branch('dl', 'dev')
+----
+already exists
+
+statement error
+CALL ducklake_create_branch('dl', 'main')
+----
+cannot be named
+
+statement error
+CALL ducklake_create_branch('dl', '42')
+----
+cannot be named like a snapshot id
+
+statement error
+CALL ducklake_drop_branch('dl', 'main')
+----
+cannot be dropped
+
+statement error
+CALL ducklake_drop_branch('dl', 'nope')
+----
+does not exist
+
+# a historic fork selects what that snapshot saw
+statement ok
+CALL ducklake_create_branch('dl', 'past', version => 2)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS past (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', BRANCH 'past')
+
+query I
+SELECT i FROM past.t ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH past
+
+# the fork point of a live branch cannot be expired
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+0
+
+# a rolled back creation leaves nothing behind
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_branch('dl', 'gone')
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'gone'
+----
+1
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'gone'
+----
+0
+
+# dropping a branch ends its ref and removes its rows
+statement ok
+CALL ducklake_drop_branch('dl', 'dev')
+
+query I
+SELECT ended_snapshot_id IS NULL FROM ducklake_branches('dl') WHERE branch_name = 'dev'
+----
+false
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+0
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+----
+No branch with the name "dev" exists
+
+statement ok
+DETACH dl

@@ -102,6 +102,15 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeTagsFunction tags;
 	loader.RegisterFunction(tags);
 
+	DuckLakeCreateBranchFunction create_branch;
+	loader.RegisterFunction(create_branch);
+
+	DuckLakeDropBranchFunction drop_branch;
+	loader.RegisterFunction(drop_branch);
+
+	DuckLakeBranchesFunction branches;
+	loader.RegisterFunction(branches);
+
 	auto table_changes = DuckLakeTableInsertionsFunction::GetDuckLakeTableChanges();
 	loader.RegisterFunction(*table_changes);
 
