@@ -2185,8 +2185,7 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 	optional_idx latest_snapshot_id;
 	if (ExpiresSnapshotsOnCommit()) {
 		// read before the snapshots, so a commit they miss is newer than the snapshot the commit checks for
-		metadata_manager.GetSnapshot();
-		latest_snapshot_id = metadata_manager.GetGlobalSnapshotWatermark();
+		latest_snapshot_id = metadata_manager.GetSnapshot()->global_watermark;
 	}
 	auto expired = ExpirableSnapshotsInternal(filter);
 	vector<DuckLakeSnapshotTagInfo> expired_tags;

@@ -164,6 +164,7 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 		transaction_snapshot.snapshot_id = AsIdx(row, 3);
 		transaction_snapshot.next_catalog_id = row.GetValue<uint64_t>(6);
 		transaction_snapshot.next_file_id = row.GetValue<uint64_t>(7);
+		transaction_snapshot.global_watermark = transaction_snapshot.snapshot_id;
 	}
 	if (schema_version < 0) {
 		transaction_snapshot.schema_version =

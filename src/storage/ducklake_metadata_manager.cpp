@@ -811,15 +811,6 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
-idx_t DuckLakeMetadataManager::GetGlobalSnapshotWatermark() {
-	auto result = Query("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot");
-	result->ThrowIfError("Failed to read the snapshot watermark from DuckLake: ");
-	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0);
-	}
-	throw InvalidInputException("No snapshot found in DuckLake");
-}
-
 vector<DuckLakeBranchInfo> DuckLakeMetadataManager::GetBranches() {
 	vector<DuckLakeBranchInfo> result;
 	if (!transaction.GetCatalog().SupportsBranching()) {
@@ -5638,6 +5629,9 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
+		if (result.ColumnCount() > 5 && !row.IsNull(5)) {
+			snapshot->global_watermark = row.GetValue<idx_t>(5);
+		}
 	}
 	return snapshot;
 }
@@ -5649,12 +5643,13 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
-//! The snapshot row columns with the allocators taken from the global maxima
+//! The snapshot row columns with the allocators and the watermark taken from the global maxima
 static string GlobalAllocatorSnapshotColumns(const string &schema_version_column) {
 	return StringUtil::Format(R"(snapshot_id, %s,
 (SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
 (SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'))",
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'),
+(SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot))",
 	                          schema_version_column);
 }
 

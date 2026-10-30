@@ -2833,15 +2833,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
-				if (context.supports_branching) {
-					// snapshot ids allocate after the global maximum of all branches
-					auto watermark = context.conflict_query_executor(
-					    "SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot");
-					watermark->ThrowIfError("Failed to read the snapshot watermark from DuckLake: ");
-					for (auto &row : *watermark) {
-						commit_snapshot.snapshot_id =
-						    MaxValue<idx_t>(commit_snapshot.snapshot_id, row.GetValue<idx_t>(0));
-					}
+				if (context.supports_branching && commit_snapshot.global_watermark != DConstants::INVALID_INDEX) {
+					// allocate past the branches seen when the snapshot was read, so a commit that
+					// arrived later still collides on the snapshot id and retries through the conflict path
+					commit_snapshot.snapshot_id =
+					    MaxValue<idx_t>(commit_snapshot.snapshot_id, commit_snapshot.global_watermark);
 				}
 			}
 			commit_snapshot.snapshot_id++;
