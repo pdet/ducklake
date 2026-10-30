@@ -2827,13 +2827,22 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
 			can_retry = false;
-			if (i > 0 || attempt_changes.HasRefChanges() || context.supports_branching) {
-				// a retry, a commit of catalog-wide names, or a snapshot id taken after the global
-				// maximum of all branches checks for conflicts first
+			if (i > 0 || attempt_changes.HasRefChanges()) {
+				// a retry, or a commit of catalog-wide names, checks for conflicts first
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
+				if (context.supports_branching) {
+					// snapshot ids allocate after the global maximum of all branches
+					auto watermark = context.conflict_query_executor(
+					    "SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot");
+					watermark->ThrowIfError("Failed to read the snapshot watermark from DuckLake: ");
+					for (auto &row : *watermark) {
+						commit_snapshot.snapshot_id =
+						    MaxValue<idx_t>(commit_snapshot.snapshot_id, row.GetValue<idx_t>(0));
+					}
+				}
 			}
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
