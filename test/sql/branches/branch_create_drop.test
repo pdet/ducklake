@@ -253,3 +253,33 @@ SELECT COUNT(*) FROM dl.t AT (VERSION => 'shared')
 
 statement ok
 ROLLBACK
+
+# an expiry recorded while a pending branch protected the fork applies once the branch is dropped
+statement ok
+INSERT INTO dl.t VALUES (5)
+
+statement ok
+INSERT INTO dl.t VALUES (6)
+
+statement ok
+SET VARIABLE fork = (SELECT MAX(snapshot_id) - 1 FROM ducklake_snapshots('dl'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_branch('dl', 'transient', version => getvariable('fork'))
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [getvariable('fork')])
+
+statement ok
+CALL ducklake_drop_branch('dl', 'transient')
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = getvariable('fork')
+----
+0

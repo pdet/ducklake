@@ -1,0 +1,68 @@
+# name: test/sql/branches/postgres_branch_read_committed.test
+# description: main refs on Postgres under READ COMMITTED stay within the transaction's visible snapshot
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS branches_rc CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/branches_rc', METADATA_SCHEMA 'branches_rc', META_ISOLATION_LEVEL 'READ COMMITTED')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# a snapshot committed by another connection mid transaction stays invisible to main refs
+statement ok con1
+BEGIN
+
+query I con1
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'main')
+----
+1
+
+statement ok con2
+INSERT INTO dl.t VALUES (2)
+
+query I con1
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'main')
+----
+1
+
+# the default fork of a branch created mid transaction is the visible main head
+statement ok con1
+CALL ducklake_create_branch('dl', 'mid')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT fork_snapshot_id = 2 FROM ducklake_branches('dl') WHERE branch_name = 'mid'
+----
+true
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'mid')
+----
+1
+
+statement ok
+DETACH dl
