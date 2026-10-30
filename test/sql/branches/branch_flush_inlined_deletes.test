@@ -94,7 +94,7 @@ statement ok
 SET VARIABLE fork = (SELECT MAX(snapshot_id) FROM meta.ducklake_snapshot WHERE branch_id = 0)
 
 statement ok
-INSERT INTO meta.ducklake_branch SELECT 2, 'dev2', 0, getvariable('fork'), getvariable('fork'), NULL
+INSERT INTO meta.ducklake_branch SELECT 2, 'feature', 0, getvariable('fork'), getvariable('fork'), NULL
 
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 200, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork')
@@ -131,7 +131,7 @@ statement ok
 DETACH m
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', BRANCH 'dev2')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', BRANCH 'feature')
 
 query I
 SELECT i FROM dl.u ORDER BY i
