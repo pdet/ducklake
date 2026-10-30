@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -75,7 +75,7 @@ SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility
 ----
-0
+1
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility
