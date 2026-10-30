@@ -5746,12 +5746,18 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
 	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
 	auto lineage_condition = BranchLineageFilter();
+	// a pinned snapshot can seed a commit, so it carries the allocation watermark too
+	string watermark_columns;
+	if (transaction.GetCatalog().SupportsBranching()) {
+		watermark_columns = ", NULL, (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)";
+	}
 	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id%s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu%s%s;)",
-		                                  ResolveSnapshotVersion(val), visible_condition, lineage_condition));
+		                                  watermark_columns, ResolveSnapshotVersion(val), visible_condition,
+		                                  lineage_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
