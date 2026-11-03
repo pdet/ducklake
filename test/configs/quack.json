@@ -51,8 +51,13 @@
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
-        "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
+        "test/sql/settings/set_option_concurrent_insert.test",
+        "test/sql/settings/set_option_concurrent_insert_read_committed.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
+        "test/sql/settings/set_option_read_committed_reset_race.test",
+        "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
+        "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
@@ -63,7 +68,6 @@
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
-        "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
@@ -219,6 +223,13 @@
       "reason": "A quack catalog commits each statement, so its commits keep sending inlined rows as SQL text",
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"
+      ]
+    },
+    {
+      "reason": "Quack expires snapshots when the transaction commits, so a cleanup in that transaction finds none of their files and a concurrent commit keeps the expiry",
+      "paths": [
+        "test/sql/cleanup/expire_cleanup_in_transaction.test",
+        "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
       ]
     }
   ]

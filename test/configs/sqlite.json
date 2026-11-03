@@ -117,9 +117,14 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/data_inlining/postgres_column_limit.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
+        "test/sql/settings/set_option_concurrent_insert.test",
+        "test/sql/settings/set_option_concurrent_insert_read_committed.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
+        "test/sql/settings/set_option_read_committed_reset_race.test",
+        "test/sql/tags/postgres_tags_read_committed.test",
+        "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/data_inlining/postgres_system_column_names.test",
-        "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
@@ -131,7 +136,6 @@
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
-        "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
