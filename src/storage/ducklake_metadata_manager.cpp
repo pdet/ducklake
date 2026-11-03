@@ -939,27 +939,13 @@ WHERE end_snapshot IS NULL AND branch_id = %d;
 		                             branch.branch_id, branch.branch_id, branch.branch_id);
 	}
 	for (auto &entry : created) {
-		// the collation of the catalog can fold names, so they compare byte for byte
-		auto name = SQLString(entry.first);
-		auto name_filter = StringUtil::Format("%s = %s AND b.end_snapshot IS NULL",
-		                                      DuckLakeUtil::WithBinaryCollation("b.branch_name"), name);
+		// a new branch is one ref row, it inherits its files through the fork
 		result += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_branch
 SELECT (SELECT COALESCE(MAX(branch_id), 0) + 1 FROM {METADATA_CATALOG}.ducklake_branch),
        %s, 0, %d, {SNAPSHOT_ID}, NULL;
-INSERT INTO {METADATA_CATALOG}.ducklake_file_visibility
-SELECT b.branch_id, v.table_id, v.data_file_id, v.begin_snapshot, NULL
-FROM {METADATA_CATALOG}.ducklake_branch b, {METADATA_CATALOG}.ducklake_file_visibility v
-WHERE %s AND v.branch_id = 0
-AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
-INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
-SELECT b.branch_id, v.table_id, v.delete_file_id, v.begin_snapshot, NULL
-FROM {METADATA_CATALOG}.ducklake_branch b, {METADATA_CATALOG}.ducklake_delete_file_visibility v
-WHERE %s AND v.branch_id = 0
-AND v.begin_snapshot <= %d AND (v.end_snapshot IS NULL OR v.end_snapshot > %d);
 )",
-		                             name, entry.second, name_filter, entry.second, entry.second, name_filter,
-		                             entry.second, entry.second);
+		                             SQLString(entry.first), entry.second);
 	}
 	return result;
 }

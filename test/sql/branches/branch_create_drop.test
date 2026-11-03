@@ -25,7 +25,7 @@ DELETE FROM dl.t WHERE i = 1
 statement ok
 CALL ducklake_create_branch('dl', 'dev')
 
-# the branch copies the files and deletes visible at its fork
+# the branch is one ref row and inherits the files and deletes visible at its fork
 query IIII
 SELECT branch_name, fork_snapshot_id, created_snapshot_id, ended_snapshot_id FROM ducklake_branches('dl') ORDER BY branch_id
 ----
@@ -35,12 +35,12 @@ dev	3	4	NULL
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
 ----
-1
+0
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
 ----
-1
+0
 
 # later commits on main stay invisible to the branch
 statement ok
@@ -136,7 +136,7 @@ SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'gone'
 ----
 0
 
-# dropping a branch ends its ref and removes its rows
+# dropping a branch ends its ref and removes its events
 statement ok
 CALL ducklake_drop_branch('dl', 'dev')
 
