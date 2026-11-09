@@ -2536,6 +2536,8 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
+		// a moved head drops the parsed listings transactions share
+		ducklake_catalog.ObserveListingHead(snapshot->snapshot_id);
 	}
 	return *snapshot;
 }
