@@ -249,7 +249,9 @@ public:
 	virtual string CommitErrorHint(const string &message) const;
 	//! Whether a read on a second connection can block a concurrent commit of the metadata catalog
 	bool ConcurrentReadsBlockCommits() const;
-	//! Whether the catalog holds any branch besides main, read once per transaction
+	//! Whether reads in the metadata transaction block concurrent commits, probed once the metadata is attached
+	bool DetectConcurrentReadsBlockCommits();
+	//! Whether the catalog holds any branch besides main, memoized while metadata reads are repeatable
 	bool HasBranches();
 	//! Drops the cached file listings, called when the transaction writes metadata
 	void InvalidateFileListCache();
@@ -530,6 +532,9 @@ public:
 	                                               bool include_local_changes = true);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
+	//! Whether the listing of the snapshot's inlined deletion tables, run once per snapshot, names the table
+	bool ListedInlinedDeletionTableExists(const Identifier &table_name,
+	                                      const std::function<unique_ptr<QueryResult>()> &list);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -666,8 +671,8 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	//! The tables a delete rewrite can touch, which hold live delete files or inlined deletions
-	unordered_set<idx_t> GetTablesWithRewriteCandidates();
+	//! The tables in scope a delete rewrite can touch, which hold live delete files or inlined deletions
+	unordered_set<idx_t> GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot, const vector<TableIndex> &table_ids);
 	//! Returns the rows the option is expected to have after it is written
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);

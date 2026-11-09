@@ -126,17 +126,34 @@ string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	return rule->hint;
 }
 
-bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
-	// the registered SQLite profile predates the field, so the catalog type carries the default
-	bool blocks = GetMetadataProfile().concurrent_reads_block_commits ||
-	              StringUtil::CIEquals(transaction.GetCatalog().MetadataType(), "sqlite");
-	if (!blocks) {
+bool DuckLakeMetadataManager::DetectConcurrentReadsBlockCommits() {
+	auto &catalog = transaction.GetCatalog();
+	// the SQLite profile leaves the field unset, so the attached catalog type decides
+	bool is_sqlite = StringUtil::CIEquals(catalog.MetadataCatalogType(), "sqlite");
+	if (!GetMetadataProfile().concurrent_reads_block_commits && !is_sqlite) {
 		return false;
 	}
+	if (!is_sqlite || catalog.GetAttached().IsReadOnly()) {
+		// a read only attach never commits, and the pragma counts as a write that a read only catalog refuses
+		return true;
+	}
 	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
-	auto &parameters = transaction.GetCatalog().MetadataParameters();
-	auto parameter = parameters.find("journal_mode");
-	return parameter == parameters.end() || !StringUtil::CIEquals(parameter->second.ToString(), "wal");
+	// a connection of its own keeps a refused probe from aborting the metadata transaction
+	string query = "SELECT journal_mode FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'PRAGMA journal_mode')";
+	SubstituteCatalogPlaceholders(query);
+	Connection probe_connection(*transaction.GetConnection().context->db);
+	auto result = probe_connection.Query(query);
+	if (result->HasError()) {
+		return true;
+	}
+	for (auto &row : *result) {
+		return !StringUtil::CIEquals(row.GetValue<string>(0), "wal");
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
+	return transaction.GetCatalog().ConcurrentReadsBlockCommits();
 }
 
 bool DuckLakeMetadataManager::HasBranches() {
@@ -1154,7 +1171,9 @@ bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
 }
 
 bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
-	return !Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", column, table))->HasError();
+	// a reference to a missing column fails to bind, which makes some catalogs reload their schema
+	auto result = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", table));
+	return !result->HasError() && ResultHasColumn(*result, column);
 }
 
 bool DuckLakeMetadataManager::HasAnyFileRangeColumns() {
@@ -4870,6 +4889,20 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	                                             table_name) != nullptr;
 }
 
+bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name,
+                                                               const std::function<unique_ptr<QueryResult>()> &list) {
+	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
+		auto result = list();
+		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
+		unordered_set<string> listed;
+		for (auto &row : *result) {
+			listed.insert(row.GetValue<string>(0));
+		}
+		return listed;
+	});
+	return tables->count(table_name.GetIdentifierName()) > 0;
+}
+
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                                 bool include_local_changes) {
 	// The table name is always deterministic
@@ -6773,7 +6806,7 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 %s)",
 	                                filter);
 	SubstituteCatalogPlaceholders(query);
-	auto res = transaction.ExecuteRaw(query);
+	auto res = transaction.ExecuteRaw(query, false);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	transaction_manager.GetWrittenFiles(written_files);
 	for (auto &path : written_files) {
@@ -7410,17 +7443,25 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 	return result;
 }
 
-unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates() {
-	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() +
-	                    " WHERE end_snapshot IS NULL "
-	                    "UNION SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
-	                    "WHERE table_name LIKE 'ducklake^_inlined^_delete^_%' ESCAPE '^'");
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot,
+                                                                             const vector<TableIndex> &table_ids) {
+	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() + " WHERE end_snapshot IS NULL");
 	result->ThrowIfError("Failed to get the tables with rewrite candidates from DuckLake: ");
-	unordered_set<idx_t> table_ids;
+	unordered_set<idx_t> candidates;
 	for (auto &row : *result) {
-		table_ids.insert(row.GetValue<idx_t>(0));
+		candidates.insert(row.GetValue<idx_t>(0));
 	}
-	return table_ids;
+	// inlined deletions live in an unlisted table per data table, so probe the tables in scope
+	for (auto &table_id : table_ids) {
+		if (candidates.count(table_id.index)) {
+			continue;
+		}
+		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id) ||
+		    !GetInlinedDeletionTableName(table_id, snapshot, false).GetIdentifierName().empty()) {
+			candidates.insert(table_id.index);
+		}
+	}
+	return candidates;
 }
 
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
@@ -7501,10 +7542,10 @@ bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &opti
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
+	auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 )",
-	                                       SQLString(option.option.key), scope_filter));
+	                                         SQLString(option.option.key), scope_filter));
 	result->ThrowIfError("Failed to reset config option in DuckLake: ");
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
