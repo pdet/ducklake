@@ -63,6 +63,8 @@
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/metadata/postgres_cache_clear_scope.test",
+        "test/sql/metadata/postgres_read_committed_branch_memo.test",
+        "test/sql/metadata/postgres_read_committed_listing_cache.test",
         "test/sql/metadata/postgres_long_metadata_schema.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
