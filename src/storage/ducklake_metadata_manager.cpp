@@ -3143,7 +3143,8 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			return files;
 		}
 		// repeated reads of an unchanged head share the parsed listing across transactions
-		auto shared_listing = transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id);
+		auto shared_listing =
+		    transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id, global_snapshot_max);
 		if (shared_listing) {
 			file_list_cache.emplace(cache_key, shared_listing);
 			auto files = *shared_listing;
@@ -3198,7 +3199,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 	}
 	if (cacheable) {
 		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
-		transaction.GetCatalog().StoreCachedListing(cache_key, snapshot.snapshot_id, parsed);
+		transaction.GetCatalog().StoreCachedListing(cache_key, snapshot.snapshot_id, global_snapshot_max, parsed);
 		file_list_cache.emplace(std::move(cache_key), std::move(parsed));
 	}
 	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
@@ -6163,10 +6164,26 @@ idx_t DuckLakeMetadataManager::ReadBranchId(DuckLakeSnapshot snapshot) const {
 	return catalog.AttachedBranchId();
 }
 
-string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
+string DuckLakeMetadataManager::SnapshotMaximaSql() {
 	return "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
-	       "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
+	       "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END), MAX(next_catalog_id), MAX(next_file_id) "
 	       "FROM {METADATA_CATALOG}.ducklake_snapshot";
+}
+
+string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
+	return SnapshotMaximaSql();
+}
+
+DuckLakeSnapshotMaxima DuckLakeMetadataManager::ParseSnapshotMaxima(QueryResult &result) {
+	DuckLakeSnapshotMaxima maxima;
+	for (auto &row : result) {
+		maxima.global_max = OptIdx(row, 0);
+		maxima.lineage_head = OptIdx(row, 1);
+		maxima.branch_max = OptIdx(row, 2);
+		maxima.next_catalog_id = OptIdx(row, 3);
+		maxima.next_file_id = OptIdx(row, 4);
+	}
+	return maxima;
 }
 
 DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
@@ -6186,18 +6203,7 @@ DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	if (result->HasError()) {
 		return maxima;
 	}
-	for (auto &row : *result) {
-		if (!row.IsNull(0)) {
-			maxima.global_max = row.GetValue<idx_t>(0);
-		}
-		if (!row.IsNull(1)) {
-			maxima.lineage_head = row.GetValue<idx_t>(1);
-		}
-		if (!row.IsNull(2)) {
-			maxima.branch_max = row.GetValue<idx_t>(2);
-		}
-	}
-	return maxima;
+	return ParseSnapshotMaxima(*result);
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
