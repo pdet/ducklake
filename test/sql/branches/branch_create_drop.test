@@ -136,12 +136,21 @@ SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'gone'
 ----
 0
 
-# dropping a branch removes its row, its snapshots and its events
+# dropping a branch removes its row, its snapshots, its events and the ends it wrote for catalog rows
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_table_visibility SELECT 1, table_id, branch_id, begin_snapshot, 4 FROM meta.ducklake_table WHERE table_name = 't'
+
+# the end written on the branch does not touch main
+query I
+SELECT COUNT(*) FROM dl.t
+----
+2
 
 statement ok
 CALL ducklake_drop_branch('dl', 'dev')
@@ -163,6 +172,11 @@ SELECT COUNT(*) FROM meta.ducklake_snapshot_changes WHERE branch_id = 1
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_table_visibility WHERE branch_id = 1
 ----
 0
 
