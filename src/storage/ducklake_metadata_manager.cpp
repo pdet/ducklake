@@ -7614,21 +7614,23 @@ string DuckLakeMetadataManager::WriteBranchChanges(const case_insensitive_map_t<
                                                    const case_insensitive_map_t<DuckLakeBranchInfo> &dropped) {
 	string result;
 	for (auto &entry : dropped) {
-		// a dropped branch loses its row and every row keyed by its id, the ends it wrote for catalog rows included
-		auto branch_id = entry.second.branch_id;
-		result += StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_file_visibility WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_schema_visibility WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_table_visibility WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_view_visibility WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d;
-DELETE FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = %d;
+		// a dropped branch loses every row keyed by its id, catalog rows born on it included, and every row naming it
+		result += StringUtil::Replace(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_file_visibility WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_schema_visibility WHERE branch_id = {DROPPED} OR row_branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_table_visibility WHERE branch_id = {DROPPED} OR row_branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_view_visibility WHERE branch_id = {DROPPED} OR row_branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_schema WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_table WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_view WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_remap WHERE branch_id = {DROPPED} OR old_branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = {DROPPED};
+DELETE FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = {DROPPED};
 )",
-		                             branch_id, branch_id, branch_id, branch_id, branch_id, branch_id, branch_id,
-		                             branch_id, branch_id);
+		                              "{DROPPED}", to_string(entry.second.branch_id));
 	}
 	for (auto &entry : created) {
 		// the id is the next one above the maximum of the table, so concurrent creations collide on the primary key

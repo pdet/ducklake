@@ -325,3 +325,65 @@ query I
 SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = getvariable('fork')
 ----
 0
+
+# the catalog rows born on a dropped branch and the ends that name them go with it, a branch that reuses the id inherits nothing
+statement ok
+CALL ducklake_create_branch('dl', 'reborn')
+
+statement ok
+SET VARIABLE reborn = (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_name = 'reborn')
+
+statement ok
+SET VARIABLE fork = (SELECT parent_branch_snapshot FROM ducklake_branches('dl') WHERE branch_name = 'reborn')
+
+# reborn creates a table and a view at its first snapshot and drops the view at its second
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('fork') + step, NOW(), schema_version, next_catalog_id, next_file_id, getvariable('reborn') FROM meta.ducklake_snapshot, (VALUES (1), (2)) steps(step) WHERE snapshot_id = getvariable('fork') AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (getvariable('fork') + 1, NULL, NULL, NULL, NULL, getvariable('reborn')), (getvariable('fork') + 2, NULL, NULL, NULL, NULL, getvariable('reborn'))
+
+statement ok
+INSERT INTO meta.ducklake_table SELECT 1000, uuid(), getvariable('fork') + 1, schema_id, 'ghost', path, path_is_relative, getvariable('reborn') FROM meta.ducklake_table WHERE table_name = 't'
+
+statement ok
+INSERT INTO meta.ducklake_column SELECT * REPLACE (1000 AS table_id, getvariable('fork') + 1 AS begin_snapshot) FROM meta.ducklake_column WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+INSERT INTO meta.ducklake_view VALUES (1001, uuid(), getvariable('fork') + 1, 0, 'ghost_view', 'duckdb', 'SELECT 1 AS x', NULL, getvariable('reborn'))
+
+statement ok
+INSERT INTO meta.ducklake_view_visibility VALUES (getvariable('reborn'), 1001, getvariable('reborn'), getvariable('fork') + 1, getvariable('fork') + 2)
+
+statement ok
+CALL ducklake_drop_branch('dl', 'reborn')
+
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_table WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_view WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_view_visibility WHERE row_branch_id = getvariable('reborn'))
+----
+0	0	0
+
+# the next branch takes the id of the dropped one
+statement ok
+CALL ducklake_create_branch('dl', 'again')
+
+query I
+SELECT branch_id = getvariable('reborn') FROM ducklake_branches('dl') WHERE branch_name = 'again'
+----
+true
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS again (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', BRANCH 'again')
+
+statement error
+SELECT * FROM again.ghost
+----
+does not exist
+
+statement error
+SELECT * FROM again.ghost_view
+----
+does not exist
+
+statement ok
+DETACH again
