@@ -9,6 +9,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "The stats exactness columns do not exist in a DuckLake 1.0 catalog",
+      "paths": [
+        "test/sql/remove_files/remove_data_files_stats.test"
+      ]
+    },
+    {
       "reason": "Parquet is statically loaded in this config, test requires missing parquet",
       "paths": [
         "test/sql/general/missing_parquet.test"
@@ -35,10 +41,12 @@
         "test/sql/metadata/row_group_count.test",
         "test/sql/metadata/sqlite_large_commit.test",
         "test/sql/migration/dev1_branch_additions.test",
+        "test/sql/migration/dev1_catalog_rows_heal.test",
         "test/sql/migration/dev1_heal_refuses_old_branches.test",
         "test/sql/migration/dev1_heal_keeps_current_branches.test",
         "test/sql/migration/dev1_inline_ranges_read_only.test",
         "test/sql/migration/dev1_missing_changes_table.test",
+        "test/sql/migration/dev1_missing_row_visibility.test",
         "test/sql/migration/dev1_old_layout_read_only.test",
         "test/sql/migration/dev1_snapshot_tables_heal.test",
         "test/sql/migration/v10_row_group_count.test",
@@ -191,6 +199,7 @@
       "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
       "paths": [
         "test/sql/branches/branch_allocators.test",
+        "test/sql/branches/branch_catalog_rows.test",
         "test/sql/branches/branch_chain_corrupt.test",
         "test/sql/branches/branch_expire_dry_run.test",
         "test/sql/branches/branch_gap_tag_commit.test",
@@ -203,6 +212,7 @@
         "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_only_file_attach.test",
         "test/sql/branches/branch_refork_historical.test",
+        "test/sql/branches/branch_remove_data_files.test",
         "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",
         "test/sql/branches/branch_tag_above_fork.test",
@@ -222,12 +232,17 @@
       "reason": "Queries the 2.0 visibility tables, which a 1.0 catalog does not have",
       "paths": [
         "test/sql/add_files/add_files_after_reset_partitioned_by.test",
+        "test/sql/general/long_name_paths.test",
+        "test/sql/issues/issue_1332.test",
+        "test/sql/partitioning/partition_rename_in_transaction.test",
+        "test/sql/view/view_schema_cache_eviction.test_slow",
         "test/sql/benchmark/flush_inlined_data.test",
         "test/sql/benchmark/merge_adjacent_partitioned.test",
         "test/sql/checkpoint/checkpoint_ducklake.test",
         "test/sql/compaction/compaction_session_target_file_size.test",
         "test/sql/compaction/compaction_table_size_stats.test",
         "test/sql/compaction/compaction_transient_partition_spec.test",
+        "test/sql/compaction/expire_snapshots_catalog_rows.test",
         "test/sql/compaction/expire_snapshots_file_ranges.test",
         "test/sql/compaction/merge_adjacent_external_hive_paths.test",
         "test/sql/compaction/merge_adjacent_file_size_filter.test",

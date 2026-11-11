@@ -73,8 +73,12 @@ optional_idx DuckLakeBranchChain::RootCap() const {
 	return segments.front().last_snapshot;
 }
 
+static string ColumnPrefix(const string &prefix) {
+	return prefix.empty() ? string() : prefix + ".";
+}
+
 string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapshot_column) const {
-	string column_prefix = prefix.empty() ? string() : prefix + ".";
+	auto column_prefix = ColumnPrefix(prefix);
 	vector<string> arms;
 	for (auto &segment : segments) {
 		auto &cap = segment.last_snapshot;
@@ -86,6 +90,13 @@ string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapsh
 		}
 	}
 	return StringUtil::Join(arms, " OR ");
+}
+
+string DuckLakeBranchChain::ViewPredicate(const string &prefix, const string &snapshot_column,
+                                          const string &read_snapshot) const {
+	// the read snapshot caps every arm of the chain predicate
+	return StringUtil::Format("(%s) AND %s%s <= %s", Predicate(prefix, snapshot_column), ColumnPrefix(prefix),
+	                          snapshot_column, read_snapshot);
 }
 
 const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) const {
