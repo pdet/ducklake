@@ -14,8 +14,8 @@ struct DuckLakeBranchData : public TableFunctionData {
 
 	DuckLakeCatalog &catalog;
 	string name;
-	//! The snapshot ducklake_create_branch forks at
-	idx_t fork_snapshot_id = DConstants::INVALID_INDEX;
+	//! The snapshot of the attached branch the new branch continues from
+	idx_t parent_branch_snapshot = DConstants::INVALID_INDEX;
 };
 
 static DuckLakeCatalog &GetBranchCatalog(ClientContext &context, TableFunctionBindInput &input,
@@ -61,8 +61,8 @@ static idx_t ForkSnapshotFromInput(ClientContext &context, TableFunctionBindInpu
 		BoundAtClause at_clause(DuckLakeTableFunctionUtil::AtClauseFromValue(timestamp));
 		return transaction.GetSnapshot(&at_clause).snapshot_id;
 	}
-	// the default fork is the newest main snapshot, not the global allocation maximum
-	return transaction.GetNewestMainSnapshotId();
+	// the default fork is the head of the attached branch as the transaction reads it
+	return transaction.GetSnapshot().snapshot_id;
 }
 
 static unique_ptr<FunctionData> CreateBranchBind(ClientContext &context, TableFunctionBindInput &input,
@@ -73,14 +73,14 @@ static unique_ptr<FunctionData> CreateBranchBind(ClientContext &context, TableFu
 		throw BinderException("A branch cannot be named like a snapshot id, got \"%s\"", result->name);
 	}
 	BranchReturnTypes(return_types, names);
-	result->fork_snapshot_id = ForkSnapshotFromInput(context, input, catalog);
+	result->parent_branch_snapshot = ForkSnapshotFromInput(context, input, catalog);
 	return std::move(result);
 }
 
 static void CreateBranchExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<DuckLakeBranchData>();
 	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-	transaction.CreateBranch(data.name, data.fork_snapshot_id);
+	transaction.CreateBranch(data.name, data.parent_branch_snapshot);
 }
 
 static unique_ptr<FunctionData> DropBranchBind(ClientContext &context, TableFunctionBindInput &input,
@@ -107,11 +107,9 @@ static unique_ptr<FunctionData> BranchesBind(ClientContext &context, TableFuncti
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("branch_name");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	names.emplace_back("fork_snapshot_id");
+	names.emplace_back("parent_id");
 	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("created_snapshot_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("ended_snapshot_id");
+	names.emplace_back("parent_branch_snapshot");
 	return_types.emplace_back(LogicalType::BIGINT);
 	if (!catalog.SupportsBranching()) {
 		return std::move(result);
@@ -122,16 +120,15 @@ static unique_ptr<FunctionData> BranchesBind(ClientContext &context, TableFuncti
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	for (auto &branch : transaction.GetBranches()) {
 		vector<Value> row;
-		if (branch.IsValid()) {
-			row.push_back(Value::BIGINT(NumericCast<int64_t>(branch.branch_id)));
-		} else {
+		if (branch.branch_id == DConstants::INVALID_INDEX) {
 			// a branch this transaction created has no id until its commit
 			row.emplace_back(LogicalType::BIGINT);
+		} else {
+			row.push_back(Value::BIGINT(NumericCast<int64_t>(branch.branch_id)));
 		}
 		row.emplace_back(branch.name);
-		row.push_back(bigint_or_null(branch.fork_snapshot_id));
-		row.push_back(bigint_or_null(branch.begin_snapshot));
-		row.push_back(bigint_or_null(branch.end_snapshot));
+		row.push_back(bigint_or_null(branch.parent_id));
+		row.push_back(bigint_or_null(branch.parent_branch_snapshot));
 		result->rows.push_back(std::move(row));
 	}
 	return std::move(result);

@@ -318,21 +318,16 @@ struct DuckLakeSnapshotInfo {
 	Value author;
 	Value commit_message;
 	Value commit_extra_info;
+	//! The branch that owns the id, 0 before branches existed
+	idx_t branch_id = 0;
 };
 
 struct DuckLakeBranchInfo {
-	idx_t branch_id = DConstants::INVALID_INDEX;
+	idx_t branch_id = 0;
 	string name;
-	//! The parent branch and the snapshot the branch forked at, unset on main
-	optional_idx fork_branch_id;
-	optional_idx fork_snapshot_id;
-	//! The snapshots that created and ended the branch, the latter unset while it lives
-	optional_idx begin_snapshot;
-	optional_idx end_snapshot;
-
-	bool IsValid() const {
-		return branch_id != DConstants::INVALID_INDEX;
-	}
+	//! The parent branch and the snapshot of it the branch continues from, unset on main
+	optional_idx parent_id;
+	optional_idx parent_branch_snapshot;
 };
 
 struct DuckLakeSnapshotTagInfo {

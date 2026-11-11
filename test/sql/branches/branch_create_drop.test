@@ -25,12 +25,12 @@ DELETE FROM dl.t WHERE i = 1
 statement ok
 CALL ducklake_create_branch('dl', 'dev')
 
-# the branch is one ref row and inherits the files and deletes visible at its fork
-query IIII
-SELECT branch_name, fork_snapshot_id, created_snapshot_id, ended_snapshot_id FROM ducklake_branches('dl') ORDER BY branch_id
+# the branch is one row that continues from the snapshot of main at its fork and inherits the files and deletes visible there
+query III
+SELECT branch_name, parent_id, parent_branch_snapshot FROM ducklake_branches('dl') ORDER BY branch_id
 ----
-main	NULL	0	NULL
-dev	3	4	NULL
+main	NULL	NULL
+dev	0	3
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
@@ -136,14 +136,30 @@ SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'gone'
 ----
 0
 
-# dropping a branch ends its ref and removes its events
+# dropping a branch removes its row, its snapshots and its events
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
+
 statement ok
 CALL ducklake_drop_branch('dl', 'dev')
 
 query I
-SELECT ended_snapshot_id IS NULL FROM ducklake_branches('dl') WHERE branch_name = 'dev'
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'dev'
 ----
-false
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot WHERE branch_id = 1
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_changes WHERE branch_id = 1
+----
+0
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
@@ -178,11 +194,11 @@ statement ok
 COMMIT
 
 query I
-SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'redo' AND ended_snapshot_id IS NULL
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'redo'
 ----
 1
 
-# a pending drop hides only the live incarnation, the ended history stays listed
+# a pending drop hides the branch
 statement ok
 BEGIN
 
@@ -192,10 +208,22 @@ CALL ducklake_drop_branch('dl', 'redo')
 query I
 SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'redo'
 ----
-1
+0
 
 statement ok
 ROLLBACK
+
+# a branch that another branch continues from cannot be dropped
+statement ok
+INSERT INTO meta.ducklake_branch SELECT 50, 'child', branch_id, 1 FROM meta.ducklake_branch WHERE branch_name = 'redo'
+
+statement error
+CALL ducklake_drop_branch('dl', 'redo')
+----
+continues from it
+
+statement ok
+DELETE FROM meta.ducklake_branch WHERE branch_id = 50
 
 # a fork created in this transaction is protected from its own expiry
 statement ok

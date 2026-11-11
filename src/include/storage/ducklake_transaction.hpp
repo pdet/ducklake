@@ -315,11 +315,13 @@ public:
 
 	void CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at);
 	void DropSnapshotTag(const string &name);
-	void CreateBranch(const string &name, idx_t fork_snapshot_id);
+	//! Creates a branch that continues from the snapshot of the attached branch
+	void CreateBranch(const string &name, idx_t parent_branch_snapshot);
 	void DropBranch(const string &name);
+	//! The committed branches without the drops of this transaction, and the branches it creates
 	vector<DuckLakeBranchInfo> GetBranches();
+	//! The snapshot a branch name reads, unset when no branch has the name
 	optional_idx TryResolveBranchFork(const string &name);
-	idx_t GetNewestMainSnapshotId();
 	//! Moves a live tag to the snapshot, when it names the expected snapshot if one is given
 	void ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id);
 	//! Gives a live tag another expiry time, NULL when it does not expire
@@ -417,6 +419,8 @@ private:
 	TransactionChangeInformation GetTransactionChanges() const;
 	//! The stored name of the live snapshot tag that matches the name, empty when there is none
 	string FindSnapshotTag(const string &name);
+	//! The committed branch with the name that this transaction has not dropped
+	optional_ptr<const DuckLakeBranchInfo> FindLiveBranch(const string &name, vector<DuckLakeBranchInfo> &branches);
 	//! The committed tag that matches the name and this transaction did not drop
 	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
@@ -438,8 +442,9 @@ private:
 	void CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const;
 	//! The live tags whose expiry time has passed, which an expiry drops
 	vector<DuckLakeSnapshotTagInfo> ExpiredSnapshotTagsInternal();
-	//! What the commit attempt expires, what the statements expired for the first attempt
-	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	//! What the commit attempt expires, what the statements expired for the first attempt when the head the
+	//! commit read is the head they read
+	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t head_snapshot_id);
 	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -465,9 +470,11 @@ private:
 	mutex snapshot_tag_lock;
 	//! The expiry criteria of this transaction, applied by its commit
 	vector<string> expiry_filters;
-	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
+	//! The snapshots the statements of this transaction expired
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
-	optional_idx expiry_snapshot_id;
+	//! The head of the attached branch when the statements first expired, a commit that reads another head
+	//! reselects what it expires like a retry does
+	optional_idx expiry_head_snapshot_id;
 	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
 	bool metadata_written = false;
 	bool snapshots_expired = false;

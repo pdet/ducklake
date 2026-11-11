@@ -55,7 +55,7 @@ statement ok con1
 COMMIT
 
 query I
-SELECT fork_snapshot_id = 2 FROM ducklake_branches('dl') WHERE branch_name = 'mid'
+SELECT parent_branch_snapshot = 2 FROM ducklake_branches('dl') WHERE branch_name = 'mid'
 ----
 true
 

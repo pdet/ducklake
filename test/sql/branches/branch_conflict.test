@@ -94,7 +94,7 @@ COMMIT
 Transaction conflict
 
 query I
-SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'same' AND ended_snapshot_id IS NULL
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'same'
 ----
 0
 
