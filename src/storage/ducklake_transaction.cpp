@@ -1665,6 +1665,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		// a commit that creates the first branch keeps the branch statements of its batch
 		return !state->new_branches.empty() || metadata_manager->HasBranches();
 	};
+	context.branch_root_caps = [&]() {
+		// a branch this commit drops loses its visibility rows, so it inherits nothing
+		return DuckLakeMetadataManager::BranchRootCapValues(metadata_manager->LoadBranchRootCaps(DroppedBranchIds()));
+	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;
 	if (ExpiresSnapshotsOnCommit()) {
@@ -2095,6 +2099,14 @@ optional_ptr<const DuckLakeBranchInfo> DuckLakeTransaction::FindLiveBranch(const
 	return nullptr;
 }
 
+set<idx_t> DuckLakeTransaction::DroppedBranchIds() const {
+	set<idx_t> dropped_branch_ids;
+	for (auto &branch : state->dropped_branches) {
+		dropped_branch_ids.insert(branch.second.branch_id);
+	}
+	return dropped_branch_ids;
+}
+
 bool DuckLakeTransaction::SnapshotTagExpired(const DuckLakeSnapshotTagInfo &tag) const {
 	return !tag.expires_at.IsNull() && tag.expires_at.GetValue<timestamp_tz_t>() <= start_time;
 }
@@ -2316,11 +2328,7 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 	}
 	auto attached_branch_id = ducklake_catalog.AttachedBranchId();
 	// a branch this transaction drops protects nothing, one it creates protects the snapshot it continues from
-	set<idx_t> dropped_branch_ids;
-	for (auto &branch : state->dropped_branches) {
-		dropped_branch_ids.insert(branch.second.branch_id);
-	}
-	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, dropped_branch_ids);
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, DroppedBranchIds());
 	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	for (auto &branch : state->new_branches) {
 		if (branch.second.parent_id.GetIndex() == attached_branch_id) {

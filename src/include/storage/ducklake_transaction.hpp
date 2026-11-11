@@ -421,6 +421,8 @@ private:
 	string FindSnapshotTag(const string &name);
 	//! The committed branch with the name that this transaction has not dropped
 	optional_ptr<const DuckLakeBranchInfo> FindLiveBranch(const string &name, vector<DuckLakeBranchInfo> &branches);
+	//! The ids of the committed branches this transaction drops
+	set<idx_t> DroppedBranchIds() const;
 	//! The committed tag that matches the name and this transaction did not drop
 	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
