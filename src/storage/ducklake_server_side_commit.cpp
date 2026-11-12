@@ -216,11 +216,13 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	if (table_ids.empty()) {
 		return;
 	}
-	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
-	                                "FROM %s.ducklake_column col "
-	                                "WHERE col.end_snapshot IS NULL "
-	                                "AND col.table_id IN (%s)",
-	                                schema_id, JoinIds(table_ids));
+	// the server commits on main, so the live columns are those of main at the transaction snapshot
+	auto live_columns = DuckLakeMetadataManager::LiveRows(supports_v2_0_metadata, DuckLakeBranchChain::Main(), "column",
+	                                                      "col", "{SNAPSHOT_ID}");
+	auto query = SubstitutePlaceholders(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
+	                                                       "FROM %s WHERE %s AND col.table_id IN (%s)",
+	                                                       live_columns.from, live_columns.filter, JoinIds(table_ids)),
+	                                    transaction_snapshot);
 	auto result = RunQuery(query, "read column types");
 	for (auto &row : *result) {
 		column_types.emplace(make_pair(TableIndex(AsIdx(row, 0)), FieldIndex(AsIdx(row, 1))),
@@ -597,7 +599,9 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<Identifier> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(
+	    DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
+	    transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<Identifier>(0));
@@ -610,7 +614,8 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	if (it != inlined_table_name_cache.end()) {
 		return it->second;
 	}
-	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(table_id.index),
+	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(
+	                                      table_id.index, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
 	                                  "{METADATA_CATALOG}", schema_id) +
 	              ";";
 	auto result = RunQuery(lookup, "lookup inlined table name");
@@ -709,8 +714,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(
+		                                      table_id, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
+		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
