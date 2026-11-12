@@ -2126,6 +2126,7 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 	DuckLakeSnapshotTagInfo tag;
 	tag.name = name;
 	tag.snapshot_id = snapshot_id;
+	tag.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	tag.expires_at = expires_at;
 	state->new_snapshot_tags[name] = std::move(tag);
 }
@@ -2187,6 +2188,7 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 	CheckNotExpiredInTransaction(snapshot_id);
 	auto changed = tag;
 	changed.snapshot_id = snapshot_id;
+	changed.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	ChangeSnapshotTag(tag, std::move(changed));
 	ExpireReleasedSnapshots();
 }
@@ -2295,12 +2297,12 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 	if (state->new_snapshot_tags.empty()) {
 		return result;
 	}
-	// the times of the snapshots this transaction tagged, which are snapshots of main
+	// the times of the snapshots this transaction tagged, which the view of the attached branch holds
 	map<idx_t, Value> snapshot_times;
 	if (with_snapshot_time) {
 		for (auto &snapshot : metadata_manager.GetAllSnapshots(StringUtil::Format(
 		         "snapshot_id IN (%s)%s", DuckLakeTransactionState::TaggedSnapshotIdList(state->new_snapshot_tags),
-		         metadata_manager.MainSnapshotFilter()))) {
+		         metadata_manager.BranchLineageFilter()))) {
 			snapshot_times[snapshot.id] = Value::TIMESTAMPTZ(snapshot.time);
 		}
 	}
@@ -2319,14 +2321,11 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
-	set<idx_t> protected_snapshots;
-	if (!ducklake_catalog.OnBranch()) {
-		// tags name snapshots of main until they carry a branch
-		protected_snapshots = TaggedSnapshotsInternal();
-	}
+	auto protected_snapshots = TaggedSnapshotsInternal();
 	auto attached_branch_id = ducklake_catalog.AttachedBranchId();
 	// a branch this transaction drops protects nothing, one it creates protects the snapshot it continues from
-	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, DroppedBranchIds());
+	auto branch_protected =
+	    GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, start_time, DroppedBranchIds());
 	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	for (auto &branch : state->new_branches) {
 		if (branch.second.parent_id.GetIndex() == attached_branch_id) {
@@ -2348,9 +2347,11 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 }
 
 set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
+	// an expiry removes snapshots of the attached branch, so only the tags naming those protect
 	set<idx_t> result;
+	auto branch_id = ducklake_catalog.AttachedBranchId();
 	for (auto &tag : GetSnapshotTagsInternal(false)) {
-		if (!SnapshotTagExpired(tag)) {
+		if (!SnapshotTagExpired(tag) && tag.snapshot_branch_id == branch_id) {
 			result.insert(tag.snapshot_id);
 		}
 	}
