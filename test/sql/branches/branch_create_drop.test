@@ -368,11 +368,32 @@ INSERT INTO meta.ducklake_view VALUES (1001, uuid(), getvariable('fork') + 1, 0,
 statement ok
 INSERT INTO meta.ducklake_view_visibility VALUES (getvariable('reborn'), 1001, getvariable('reborn'), getvariable('fork') + 1, getvariable('fork') + 2)
 
+# main tags the first snapshot of reborn, after moving the tag from its second snapshot
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('ghost_tag', getvariable('fork') + 2, getvariable('reborn'), 0, getvariable('fork') - 1, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (0, 'ghost_tag', 0, getvariable('fork') - 1, getvariable('fork'))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('ghost_tag', getvariable('fork') + 1, getvariable('reborn'), 0, getvariable('fork'), NULL)
+
+query III
+SELECT tag_name, snapshot_id = getvariable('fork') + 1, snapshot_time IS NULL FROM ducklake_tags('dl') WHERE tag_name = 'ghost_tag'
+----
+ghost_tag	true	true
+
 statement ok
 CALL ducklake_drop_branch('dl', 'reborn')
 
 query III
 SELECT (SELECT COUNT(*) FROM meta.ducklake_table WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_view WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_view_visibility WHERE row_branch_id = getvariable('reborn'))
+----
+0	0	0
+
+# the tag naming a snapshot of reborn is gone with both of its version rows and the end of the older one
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag WHERE snapshot_branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility WHERE tag_name = 'ghost_tag'), (SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'ghost_tag')
 ----
 0	0	0
 

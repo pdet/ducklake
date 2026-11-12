@@ -761,6 +761,8 @@ public:
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the ends whose version row is gone
 	void DeleteOrphanRowEnds(const string &kind, const vector<string> &key_columns);
+	//! The statement behind it, a branch drop runs it in its commit batch
+	static string DeleteOrphanRowEndsSql(const string &kind, const vector<string> &key_columns);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();

@@ -8125,6 +8125,10 @@ DELETE FROM {METADATA_CATALOG}.ducklake_%s_visibility WHERE branch_id = {DROPPED
 DELETE FROM {METADATA_CATALOG}.%s WHERE branch_id = {DROPPED};)",
 			                              kind.kind, RowTableName(kind.kind));
 		}
+		// a tag naming a snapshot of the branch loses its target, so it goes with the branch and its ends follow
+		deletes += R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_tag WHERE snapshot_branch_id = {DROPPED};)";
+		deletes += DeleteOrphanRowEndsSql("snapshot_tag", RowKeyColumns("snapshot_tag"));
 		deletes += R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_schema_versions WHERE branch_id = {DROPPED};
 DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes WHERE branch_id = {DROPPED};
@@ -8185,19 +8189,23 @@ static string UnreachableRowFilter(const string &kind, const vector<string> &key
 	                          alias, kind, StringUtil::Join(key_matches, " AND "), alias, alias);
 }
 
-void DuckLakeMetadataManager::DeleteOrphanRowEnds(const string &kind, const vector<string> &key_columns) {
+string DuckLakeMetadataManager::DeleteOrphanRowEndsSql(const string &kind, const vector<string> &key_columns) {
 	vector<string> key_matches;
 	for (auto &key : key_columns) {
 		key_matches.push_back(RowKeyMatch("r", "e", key));
 	}
-	auto ends = Execute(StringUtil::Format(R"(
+	return StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_%s_visibility AS e
 WHERE NOT EXISTS (
     SELECT 1
     FROM {METADATA_CATALOG}.%s r
     WHERE %s AND r.branch_id = e.row_branch_id AND r.begin_snapshot = e.row_snapshot
 );)",
-	                                       kind, RowTableName(kind), StringUtil::Join(key_matches, " AND ")));
+	                          kind, RowTableName(kind), StringUtil::Join(key_matches, " AND "));
+}
+
+void DuckLakeMetadataManager::DeleteOrphanRowEnds(const string &kind, const vector<string> &key_columns) {
+	auto ends = Execute(DeleteOrphanRowEndsSql(kind, key_columns));
 	ends->ThrowIfError(StringUtil::Format("Failed to delete from ducklake_%s_visibility in DuckLake: ", kind));
 }
 
