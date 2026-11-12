@@ -392,10 +392,15 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_table WHERE branch_id = getvariable('
 0	0	0
 
 # the tag naming a snapshot of reborn is gone with both of its version rows and the end of the older one
-query III
-SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag WHERE snapshot_branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility WHERE tag_name = 'ghost_tag'), (SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'ghost_tag')
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag WHERE snapshot_branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility WHERE tag_name = 'ghost_tag')
 ----
-0	0	0
+0	0
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'ghost_tag'
+----
+0
 
 query III
 SELECT (SELECT COUNT(*) FROM meta.ducklake_column WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_partition_info WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_partition_visibility WHERE branch_id = getvariable('reborn') OR row_branch_id = getvariable('reborn'))
