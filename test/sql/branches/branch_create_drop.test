@@ -347,7 +347,20 @@ statement ok
 INSERT INTO meta.ducklake_table SELECT 1000, uuid(), getvariable('fork') + 1, schema_id, 'ghost', path, path_is_relative, getvariable('reborn') FROM meta.ducklake_table WHERE table_name = 't'
 
 statement ok
-INSERT INTO meta.ducklake_column SELECT * REPLACE (1000 AS table_id, getvariable('fork') + 1 AS begin_snapshot) FROM meta.ducklake_column WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+INSERT INTO meta.ducklake_column SELECT * REPLACE (1000 AS table_id, getvariable('fork') + 1 AS begin_snapshot, getvariable('reborn') AS branch_id) FROM meta.ducklake_column WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+# reborn partitions ghost and adds a column to t at its first snapshot and resets the partitioning at its second
+statement ok
+INSERT INTO meta.ducklake_partition_info VALUES (1002, 1000, getvariable('fork') + 1, getvariable('reborn'))
+
+statement ok
+INSERT INTO meta.ducklake_partition_column SELECT 1002, 1000, 0, column_id, 'identity' FROM meta.ducklake_column WHERE table_id = 1000
+
+statement ok
+INSERT INTO meta.ducklake_partition_visibility VALUES (getvariable('reborn'), 1002, getvariable('reborn'), getvariable('fork') + 1, getvariable('fork') + 2)
+
+statement ok
+INSERT INTO meta.ducklake_column SELECT 1003, getvariable('fork') + 1, table_id, 1, 'ghost_col', 'int32', NULL, NULL, true, NULL, NULL, NULL, getvariable('reborn') FROM meta.ducklake_table WHERE table_name = 't'
 
 statement ok
 INSERT INTO meta.ducklake_view VALUES (1001, uuid(), getvariable('fork') + 1, 0, 'ghost_view', 'duckdb', 'SELECT 1 AS x', NULL, getvariable('reborn'))
@@ -363,6 +376,11 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_table WHERE branch_id = getvariable('
 ----
 0	0	0
 
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_column WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_partition_info WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_partition_visibility WHERE branch_id = getvariable('reborn') OR row_branch_id = getvariable('reborn'))
+----
+0	0	0
+
 # the next branch takes the id of the dropped one
 statement ok
 CALL ducklake_create_branch('dl', 'again')
@@ -374,6 +392,12 @@ true
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS again (DATA_PATH '{DATA_PATH}/branch_create_drop_files', METADATA_CATALOG 'meta', BRANCH 'again')
+
+# a surviving partition of the dead table would fail the catalog load of again, a surviving column would show on t
+query I
+SELECT column_name FROM (DESCRIBE again.t)
+----
+i
 
 statement error
 SELECT * FROM again.ghost
