@@ -2323,15 +2323,16 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
 	auto protected_snapshots = TaggedSnapshotsInternal();
 	auto attached_branch_id = ducklake_catalog.AttachedBranchId();
-	// a branch this transaction drops protects nothing, one it creates protects the snapshot it continues from
-	auto branch_protected =
-	    GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, start_time, DroppedBranchIds());
-	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
+	// a dropped branch protects nothing, a pending one its fork and the targets of the tags it reads there
+	set<idx_t> pending_forks;
 	for (auto &branch : state->new_branches) {
 		if (branch.second.parent_id.GetIndex() == attached_branch_id) {
-			protected_snapshots.insert(branch.second.parent_branch_snapshot.GetIndex());
+			pending_forks.insert(branch.second.parent_branch_snapshot.GetIndex());
 		}
 	}
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(attached_branch_id, start_time,
+	                                                                         DroppedBranchIds(), pending_forks);
+	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	string lineage_filter = filter;
 	if (ducklake_catalog.SupportsBranching()) {
 		// an expiry removes snapshots of the attached branch alone, other branches number theirs alike

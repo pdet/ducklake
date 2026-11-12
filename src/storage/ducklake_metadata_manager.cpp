@@ -1445,13 +1445,15 @@ string DuckLakeMetadataManager::BranchRootCapValues(const vector<pair<idx_t, idx
 }
 
 set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time,
-                                                                const set<idx_t> &dropped_branch_ids) {
+                                                                const set<idx_t> &dropped_branch_ids,
+                                                                const set<idx_t> &pending_forks) {
 	set<idx_t> result;
-	if (!transaction.GetCatalog().SupportsBranching() || !HasBranches()) {
+	if (!transaction.GetCatalog().SupportsBranching() || (!HasBranches() && pending_forks.empty())) {
 		return result;
 	}
 	// expiries are per branch, it keeps the snapshots other branches continue from and its head with the allocators
 	result = LoadBranchCaps(branch_id, dropped_branch_ids);
+	result.insert(pending_forks.begin(), pending_forks.end());
 	auto query = Query(StringUtil::Format(
 	    "SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %llu;", branch_id));
 	query->ThrowIfError("Failed to get branch protected snapshots from DuckLake: ");
@@ -1463,15 +1465,23 @@ set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id,
 	// a tag live in the view of another branch protects the snapshot of the branch it names until its time has passed
 	auto cutoff = Value::TIMESTAMPTZ(start_time).ToSQLString();
 	vector<string> tagged;
-	for (auto &chain : LoadBranchChains(dropped_branch_ids)) {
-		if (chain.BranchId() == branch_id) {
-			continue;
-		}
-		auto live_tags = LiveRows(true, chain, "snapshot_tag", "t", "");
+	auto tagged_in_view = [&](const DuckLakeBranchChain &chain, const string &read_snapshot) {
+		auto live_tags = LiveRows(true, chain, "snapshot_tag", "t", read_snapshot);
 		tagged.push_back(StringUtil::Format(R"(SELECT DISTINCT t.snapshot_id
 FROM %s
 WHERE t.snapshot_branch_id = %llu AND (t.expires_at IS NULL OR t.expires_at::TIMESTAMPTZ > %s) AND %s)",
 		                                    live_tags.from, branch_id, cutoff, live_tags.filter));
+	};
+	for (auto &chain : LoadBranchChains(dropped_branch_ids)) {
+		if (chain.BranchId() == branch_id) {
+			continue;
+		}
+		tagged_in_view(chain, "");
+	}
+	// a pending branch reads the attached chain up to its fork, the ends this transaction commits sit above it
+	auto &attached_chain = transaction.GetCatalog().AttachedChain();
+	for (auto &fork : pending_forks) {
+		tagged_in_view(attached_chain, to_string(fork));
 	}
 	if (tagged.empty()) {
 		return result;

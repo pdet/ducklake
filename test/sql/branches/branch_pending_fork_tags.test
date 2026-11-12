@@ -1,0 +1,115 @@
+# name: test/sql/branches/branch_pending_fork_tags.test
+# description: the tags a pending branch reads at its fork keep their targets from the expiry of its transaction
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+    (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the tag is the third snapshot of main and names the first insert
+statement ok
+CALL ducklake_create_tag('dl', 'kept', version => 2)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the branch forks at the second insert, the drop ends the tag at the commit of this transaction above the fork
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev', version => 4)
+
+statement ok
+CALL ducklake_drop_tag('dl', 'kept')
+
+# the branch still reads the tag, so the snapshot it names stays
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'kept'
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev
+    (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dev')
+----
+kept	2	3
+
+query I
+SELECT i FROM dev.t AT (VERSION => 'kept')
+----
+1
+
+statement ok
+DETACH dev
+
+# once the branch is dropped nothing reads the tag and the snapshot is free to expire
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_drop_branch('dl', 'dev')
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+2
+
+# a tag born above the fork of a pending branch is outside its view and protects nothing from it
+statement ok
+CALL ducklake_create_tag('dl', 'late', version => 1)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_branch('dl', 'early', version => 4)
+
+statement ok
+CALL ducklake_drop_tag('dl', 'late')
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)
+----
+1
+
+statement ok
+ROLLBACK
+
+statement ok
+DETACH dl

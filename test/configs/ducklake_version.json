@@ -35,6 +35,7 @@
         "test/sql/branches/branch_flush_inlined.test",
         "test/sql/branches/branch_flush_inlined_deletes.test",
         "test/sql/branches/branch_heal_inheritance.test",
+        "test/sql/branches/branch_pending_fork_tags.test",
         "test/sql/branches/branch_protection.test",
         "test/sql/branches/branch_version_gate.test",
         "test/sql/macros/null_default_version_gate.test",

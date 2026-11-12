@@ -789,8 +789,10 @@ public:
 	//! The root caps rendered as VALUES rows (branch_id, root_cap), empty without such branches
 	static string BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps);
 	//! The snapshots of a branch an expiry keeps, its head, the forks and the unexpired tag targets of other branches
+	//! The pending forks are the snapshots of the branch that the branches this transaction creates continue from
 	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time,
-	                                       const set<idx_t> &dropped_branch_ids = set<idx_t>());
+	                                       const set<idx_t> &dropped_branch_ids = set<idx_t>(),
+	                                       const set<idx_t> &pending_forks = set<idx_t>());
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
 	                           bool include_inherited = true);
 	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0
