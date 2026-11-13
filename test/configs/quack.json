@@ -71,6 +71,7 @@
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/branches/postgres_branch_read_committed.test",
+        "test/sql/catalog/postgres_native_catalog_load.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
@@ -256,6 +257,12 @@
       "reason": "A failed attach keeps the metadata catalog attached on quack, which the test attaches again under the same name to edit the old layout",
       "paths": [
         "test/sql/migration/dev1_heal_refuses_old_branches.test"
+      ]
+    },
+    {
+      "reason": "The conflict read of a server side quack commit runs in the sidecar, so the client log never shows it",
+      "paths": [
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test"
       ]
     }
   ]
