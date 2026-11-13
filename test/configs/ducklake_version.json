@@ -66,7 +66,8 @@
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
         "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test",
-        "test/sql/migration/v11_to_v20_dev1_inlined.test"
+        "test/sql/migration/v11_to_v20_dev1_inlined.test",
+        "test/sql/rest/rest_branch_functions.test"
       ]
     },
     {
