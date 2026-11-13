@@ -795,7 +795,13 @@
         "test/sql/branches/branch_version_gate.test",
         "test/sql/migration/dev1_branch_additions.test",
         "test/sql/migration/dev1_heal_keeps_current_branches.test",
-        "test/sql/migration/dev1_inline_ranges_read_only.test"
+        "test/sql/migration/dev1_inline_ranges_read_only.test",
+        "test/sql/branches/branch_conflict.test",
+        "test/sql/branches/branch_create_drop.test",
+        "test/sql/branches/branch_drop_inlined_rows.test",
+        "test/sql/branches/branch_pending_fork_tags.test",
+        "test/sql/branches/postgres_branch_drop_read_committed.test",
+        "test/sql/branches/postgres_branch_read_committed.test"
       ]
     }
   ]
