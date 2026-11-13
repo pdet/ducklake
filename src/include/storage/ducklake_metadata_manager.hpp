@@ -944,7 +944,7 @@ public:
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
 	//! Every branch of the catalog
-	vector<DuckLakeBranchInfo> LoadBranches();
+	virtual vector<DuckLakeBranchInfo> LoadBranches();
 	//! The resolved chain of every branch other than main, branches the transaction drops are left out
 	vector<DuckLakeBranchChain> LoadBranchChains(const set<idx_t> &dropped_branch_ids = set<idx_t>());
 	//! The snapshots of a branch that the chains of the other branches continue from, the root caps for main

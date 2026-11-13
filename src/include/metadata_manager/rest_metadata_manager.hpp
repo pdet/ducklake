@@ -83,6 +83,7 @@ public:
 	vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {}) override;
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) override;
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true) override;
+	vector<DuckLakeBranchInfo> LoadBranches() override;
 	vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &older_than) override;
 	unique_ptr<QueryResult> ReadMetadataTable(const string &table_name) override;
 	vector<string> GetKnownFilePaths() override;

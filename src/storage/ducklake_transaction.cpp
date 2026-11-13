@@ -2048,7 +2048,8 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 }
 
 optional_idx DuckLakeTransaction::TryResolveBranchFork(const string &name) {
-	if (!ducklake_catalog.SupportsBranching()) {
+	if (!ducklake_catalog.SupportsBranching() || metadata_manager->IsRemote()) {
+		// the server resolves the names of the lineage it serves
 		return optional_idx();
 	}
 	bool tag_dropped = state->dropped_snapshot_tags.find(name) != state->dropped_snapshot_tags.end() ||

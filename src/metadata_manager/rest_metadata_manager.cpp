@@ -690,6 +690,10 @@ vector<DuckLakeSnapshotTagInfo> RESTMetadataManager::GetSnapshotTags(bool with_s
 	throw NotImplementedException("DuckLake REST catalogs do not support snapshot tags");
 }
 
+vector<DuckLakeBranchInfo> RESTMetadataManager::LoadBranches() {
+	throw NotImplementedException("DuckLake REST catalogs do not support branches");
+}
+
 vector<DuckLakeFileForCleanup> RESTMetadataManager::GetOldFilesForCleanup(const string &older_than) {
 	ThrowMaintenanceOnServer("cleaning up files");
 }

@@ -1,0 +1,36 @@
+# name: test/sql/rest/rest_branch_functions.test
+# description: The branch functions refuse a REST catalog, branches are managed on the server
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement error
+CALL ducklake_create_branch('dl', 'dev')
+----
+DuckLake REST catalogs do not support branches
+
+statement error
+CALL ducklake_drop_branch('dl', 'dev')
+----
+DuckLake REST catalogs do not support branches
+
+statement error
+FROM ducklake_branches('dl')
+----
+DuckLake REST catalogs do not support branches
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template
