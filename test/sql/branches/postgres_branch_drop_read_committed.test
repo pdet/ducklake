@@ -47,6 +47,21 @@ SELECT table_id, (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_nam
 ----
 2	1	1
 
+# an inlined insert creates the inlined table of u, into which dev inserts a row and ends the row of main
+statement ok con2
+INSERT INTO dl.u VALUES (1000)
+
+statement ok con2
+INSERT INTO meta.ducklake_inlined_data_2_2 (_ducklake_row_id, _ducklake_begin_snapshot, i, _ducklake_branch_id) SELECT _ducklake_row_id + 1, _ducklake_begin_snapshot + 1, 1001, 1 FROM meta.ducklake_inlined_data_2_2
+
+statement ok con2
+INSERT INTO meta.ducklake_inlined_data_2_2_visibility SELECT 1, _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, _ducklake_begin_snapshot + 1 FROM meta.ducklake_inlined_data_2_2 WHERE i = 1000
+
+query II con2
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_2_2 WHERE _ducklake_branch_id = 1), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_2_2_visibility WHERE branch_id = 1)
+----
+1	1
+
 # the drop sees the newer head, the deletion table is not in the listing of the snapshot it started from
 statement ok con1
 CALL ducklake_drop_branch('dl', 'dev')
@@ -65,10 +80,16 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_2 WHERE branch_id = 1)
 ----
 0	1
 
+# so are the inlined row of the dropped branch and the end it wrote, the row of main stays
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_2_2 WHERE _ducklake_branch_id = 1), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_2_2_visibility), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_2_2)
+----
+0	0	1
+
 query I
 SELECT COUNT(*) FROM dl.u
 ----
-99
+100
 
 statement ok
 DETACH dl

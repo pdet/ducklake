@@ -752,10 +752,12 @@ public:
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Whether the listing of the snapshot's inlined deletion tables, run once per snapshot, names the table
 	bool ListedInlinedDeletionTableExists(const Identifier &table_name);
-	//! The inlined deletion tables of the metadata schema, listed live so a table another connection created is seen
-	virtual vector<Identifier> ListInlinedDeletionTables();
-	//! The inlined deletion tables a listing names, one table name per row
-	static vector<Identifier> ListedInlinedDeletionTables(QueryResult &result);
+	//! The inlined tables of the metadata schema, listed live so a table another connection created is seen
+	virtual vector<Identifier> ListInlinedTables();
+	//! The inlined deletion tables among the inlined tables of the metadata schema
+	vector<Identifier> ListInlinedDeletionTables();
+	//! The inlined tables a listing names, one table name per row
+	static vector<Identifier> ListedInlinedTables(QueryResult &result);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -990,10 +992,10 @@ public:
 	bool HasDeleteFileVisibilityTable();
 	//! Whether the branch holds snapshots of its own
 	bool BranchHasSnapshots(idx_t branch_id);
-	//! The statements that drop and create the branches of a commit, a dropped branch loses its inlined file deletions
+	//! The statements that drop and create the branches of a commit, a dropped branch loses its inlined rows too
 	static string WriteBranchChanges(const case_insensitive_map_t<DuckLakeBranchInfo> &created,
 	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped,
-	                                 const vector<Identifier> &inlined_deletion_tables);
+	                                 const vector<Identifier> &inlined_tables);
 	//! The per file ranges a branch derives from its visibility events
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const string &chain_predicate, const string &prefix);
@@ -1073,6 +1075,10 @@ public:
 	static bool IsInlinedDeletionTableName(const string &name);
 	//! Whether the name is that of an inlined data table, ducklake_inlined_data_<table id>_<schema version>
 	static bool IsInlinedDataTableName(const string &name);
+	//! Whether the name is that of the companion of an inlined data table, its name with _visibility appended
+	static bool IsInlinedCompanionName(const string &name);
+	//! Whether the name is that of an inlined data table, a companion or an inlined deletion table
+	static bool IsInlinedTableName(const string &name);
 	//! The inlined deletion tables of the catalog with their heal steps
 	vector<InlinedDeletionAdditions> ProbeInlinedDeletionTables();
 	//! Whether every inlined deletion table carries the branch column

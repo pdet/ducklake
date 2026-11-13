@@ -1776,11 +1776,11 @@ vector<DuckLakeMetadataManager::InlinedDeletionAdditions> DuckLakeMetadataManage
 	return additions;
 }
 
-vector<Identifier> DuckLakeMetadataManager::ListInlinedDeletionTables() {
-	// the deletion tables are not registered, the scan of the schema lists them by their name
+vector<Identifier> DuckLakeMetadataManager::ListInlinedTables() {
+	// the deletion tables and companions are not registered, the scan of the schema lists them by their name
 	vector<Identifier> tables;
 	bool listed = ScanMetadataTables([&](CatalogEntry &entry) {
-		if (IsInlinedDeletionTableName(entry.name.GetIdentifierName())) {
+		if (IsInlinedTableName(entry.name.GetIdentifierName())) {
 			tables.push_back(entry.name);
 		}
 	});
@@ -1796,10 +1796,29 @@ vector<Identifier> DuckLakeMetadataManager::ListInlinedDeletionTables() {
 				tables.push_back(name);
 			}
 		}
+		// the inlined data tables are registered and each is created with its companion
+		auto registered =
+		    Query("SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables ORDER BY table_name");
+		registered->ThrowIfError("Failed to list the inlined data tables of DuckLake: ");
+		for (auto &row : *registered) {
+			auto name = row.GetValue<Identifier>(0);
+			tables.push_back(InlinedCompanionName(name));
+			tables.push_back(std::move(name));
+		}
 		return tables;
 		// LCOV_EXCL_STOP
 	}
 	std::sort(tables.begin(), tables.end());
+	return tables;
+}
+
+vector<Identifier> DuckLakeMetadataManager::ListInlinedDeletionTables() {
+	vector<Identifier> tables;
+	for (auto &table : ListInlinedTables()) {
+		if (IsInlinedDeletionTableName(table.GetIdentifierName())) {
+			tables.push_back(table);
+		}
+	}
 	return tables;
 }
 
@@ -6300,6 +6319,18 @@ bool DuckLakeMetadataManager::IsInlinedDataTableName(const string &name) {
 	return StringUtil::StartsWith(name, prefix) && IsDigitRuns(name, prefix.size(), 2);
 }
 
+bool DuckLakeMetadataManager::IsInlinedCompanionName(const string &name) {
+	const string suffix = "_visibility";
+	if (!StringUtil::EndsWith(name, suffix)) {
+		return false;
+	}
+	return IsInlinedDataTableName(name.substr(0, name.size() - suffix.size()));
+}
+
+bool DuckLakeMetadataManager::IsInlinedTableName(const string &name) {
+	return IsInlinedDeletionTableName(name) || IsInlinedDataTableName(name) || IsInlinedCompanionName(name);
+}
+
 string DuckLakeMetadataManager::InlinedDeletionView(bool branch_aware, const DuckLakeBranchChain &chain,
                                                     const string &alias, const string &read_snapshot) {
 	if (!branch_aware) {
@@ -6495,12 +6526,12 @@ bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier 
 	return tables->count(table_name.GetIdentifierName()) > 0;
 }
 
-vector<Identifier> DuckLakeMetadataManager::ListedInlinedDeletionTables(QueryResult &result) {
-	result.ThrowIfError("Failed to list the inlined deletion tables of DuckLake: ");
+vector<Identifier> DuckLakeMetadataManager::ListedInlinedTables(QueryResult &result) {
+	result.ThrowIfError("Failed to list the inlined tables of DuckLake: ");
 	vector<Identifier> tables;
 	for (auto &row : result) {
 		auto name = row.GetValue<string>(0);
-		if (IsInlinedDeletionTableName(name)) {
+		if (IsInlinedTableName(name)) {
 			tables.push_back(Identifier(name));
 		}
 	}
@@ -9096,7 +9127,9 @@ string DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_m
 
 string DuckLakeMetadataManager::WriteBranchChanges(const case_insensitive_map_t<DuckLakeBranchInfo> &created,
                                                    const case_insensitive_map_t<DuckLakeBranchInfo> &dropped,
-                                                   const vector<Identifier> &inlined_deletion_tables) {
+                                                   const vector<Identifier> &inlined_tables) {
+	// every catalog that reaches 2.0 carries the prefixed names of 1.1
+	DuckLakeInlinedColNames col_names(true);
 	string result;
 	for (auto &entry : dropped) {
 		// a dropped branch loses every row keyed by its id, the version rows born on it and every row that names it
@@ -9109,9 +9142,20 @@ DELETE FROM {METADATA_CATALOG}.ducklake_%s_visibility WHERE branch_id = {DROPPED
 DELETE FROM {METADATA_CATALOG}.%s WHERE branch_id = {DROPPED};)",
 			                              kind.kind, RowTableName(kind.kind));
 		}
-		// the inlined file deletions of the branch are keyed by its id too, a reused id must not inherit them
-		for (auto &table : inlined_deletion_tables) {
-			deletes += StringUtil::Format("\nDELETE FROM {METADATA_CATALOG}.%s WHERE branch_id = {DROPPED};", table);
+		// the inlined rows born on the branch, the ends it wrote and its file deletions are keyed by its id too
+		for (auto &table : inlined_tables) {
+			auto &name = table.GetIdentifierName();
+			if (IsInlinedDataTableName(name)) {
+				deletes += StringUtil::Format("\nDELETE FROM {METADATA_CATALOG}.%s WHERE %s = {DROPPED};", table,
+				                              col_names.branch_id);
+			} else if (IsInlinedCompanionName(name)) {
+				deletes += StringUtil::Format("\nDELETE FROM {METADATA_CATALOG}.%s WHERE branch_id = {DROPPED} "
+				                              "OR row_branch_id = {DROPPED};",
+				                              table);
+			} else {
+				deletes +=
+				    StringUtil::Format("\nDELETE FROM {METADATA_CATALOG}.%s WHERE branch_id = {DROPPED};", table);
+			}
 		}
 		// a tag naming a snapshot of the branch loses its target, so it goes with the branch and its ends follow
 		deletes += R"(

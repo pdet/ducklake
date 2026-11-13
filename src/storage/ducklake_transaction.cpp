@@ -1675,8 +1675,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return metadata_manager->InlinedDeletionTableExists(
 		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
-	context.inlined_deletion_tables = [&]() {
-		return metadata_manager->ListInlinedDeletionTables();
+	context.inlined_tables = [&]() {
+		return metadata_manager->ListInlinedTables();
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();

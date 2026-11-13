@@ -32,8 +32,8 @@ struct DuckLakeCommitContext {
 	string snapshot_and_stats_query;
 	//! Whether the inlined file deletion table of a table exists, it is created lazily
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
-	//! The inlined deletion tables of the metadata schema, a branch drop clears them of the rows of the branch
-	std::function<vector<Identifier>()> inlined_deletion_tables = []() {
+	//! The inlined tables of the metadata schema, a branch drop clears them of the rows of the branch
+	std::function<vector<Identifier>()> inlined_tables = []() {
 		return vector<Identifier>();
 	};
 	//! Returns the latest snapshot for the first commit attempt.

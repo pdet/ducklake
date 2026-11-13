@@ -71,12 +71,12 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
 }
 
-vector<Identifier> QuackMetadataManager::ListInlinedDeletionTables() {
+vector<Identifier> QuackMetadataManager::ListInlinedTables() {
 	// duckdb_tables() builds a row for every table on the server, so one listing serves every table of a snapshot
 	string query = "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
 	               "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND starts_with(table_name, "
-	               "'ducklake_inlined_delete_') ORDER BY table_name";
-	return ListedInlinedDeletionTables(*Query(query));
+	               "'ducklake_inlined_') ORDER BY table_name";
+	return ListedInlinedTables(*Query(query));
 }
 
 bool QuackMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {

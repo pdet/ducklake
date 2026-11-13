@@ -1,0 +1,145 @@
+# name: test/sql/branches/branch_drop_inlined_rows.test
+# description: dropping a branch deletes the inlined rows born on it and the ends it wrote from every inlined table
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_drop_inlined_rows_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+# a second schema version supersedes the first inlined table, which keeps its rows
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (4, 40)
+
+query II
+SELECT table_name, schema_version FROM meta.ducklake_inlined_data_tables ORDER BY schema_version
+----
+ducklake_inlined_data_1_1	1
+ducklake_inlined_data_1_2	2
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev')
+
+statement ok
+SET VARIABLE dev = (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_name = 'dev')
+
+statement ok
+SET VARIABLE fork = (SELECT parent_branch_snapshot FROM ducklake_branches('dl') WHERE branch_name = 'dev')
+
+# dev commits twice after its fork
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('fork') + step, NOW(), schema_version, next_catalog_id, next_file_id, getvariable('dev') FROM meta.ducklake_snapshot, (VALUES (1), (2)) steps(step) WHERE snapshot_id = getvariable('fork') AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (getvariable('fork') + 1, NULL, NULL, NULL, NULL, getvariable('dev')), (getvariable('fork') + 2, NULL, NULL, NULL, NULL, getvariable('dev'))
+
+# dev inserts a row into each inlined table at its first snapshot
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1 (_ducklake_row_id, _ducklake_begin_snapshot, i, _ducklake_branch_id) VALUES (100, getvariable('fork') + 1, 100, getvariable('dev'))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_2 (_ducklake_row_id, _ducklake_begin_snapshot, i, j, _ducklake_branch_id) VALUES (200, getvariable('fork') + 1, 200, 2000, getvariable('dev'))
+
+# dev ends the second row of main at its first snapshot and its own row of the second table at its second snapshot
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility SELECT getvariable('dev'), _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, getvariable('fork') + 1 FROM meta.ducklake_inlined_data_1_1 WHERE i = 2
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_2_visibility VALUES (getvariable('dev'), 200, getvariable('dev'), getvariable('fork') + 1, getvariable('fork') + 2)
+
+# a stray end of main naming the row of dev, which no view of main reads
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 100, getvariable('dev'), getvariable('fork') + 1, getvariable('fork') + 2)
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+4	40
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_drop_inlined_rows_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# dev reads the row it inserted into the first table, not the row of main it ended nor its own ended row
+query II
+SELECT i, j FROM dev.t ORDER BY i
+----
+1	NULL
+3	NULL
+4	40
+100	NULL
+
+statement ok
+DETACH dev
+
+statement ok
+CALL ducklake_drop_branch('dl', 'dev')
+
+# the rows born on dev are gone from both inlined tables, the superseded one too, and the rows of main stay
+query IIII
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1 WHERE _ducklake_branch_id = getvariable('dev')), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2 WHERE _ducklake_branch_id = getvariable('dev')), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2)
+----
+0	0	3	1
+
+# the ends dev wrote and the ends naming its rows are gone from both companions
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE branch_id = getvariable('dev') OR row_branch_id = getvariable('dev')), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2_visibility WHERE branch_id = getvariable('dev') OR row_branch_id = getvariable('dev'))
+----
+0	0
+
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2_visibility)
+----
+0	0
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+4	40
+
+# the next branch takes the id of the dropped one and inherits none of its rows or ends
+statement ok
+CALL ducklake_create_branch('dl', 'again')
+
+query I
+SELECT branch_id = getvariable('dev') FROM ducklake_branches('dl') WHERE branch_name = 'again'
+----
+true
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS again (DATA_PATH '{DATA_PATH}/branch_drop_inlined_rows_files', METADATA_CATALOG 'meta', BRANCH 'again')
+
+# a surviving end of dev would hide the second row from again, a surviving row of dev would show on it
+query II
+SELECT i, j FROM again.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+4	40
+
+statement ok
+DETACH again
+
+statement ok
+DETACH dl

@@ -397,16 +397,16 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-vector<Identifier> PostgresMetadataManager::ListInlinedDeletionTables() {
+vector<Identifier> PostgresMetadataManager::ListInlinedTables() {
 	// the server lists a table another connection created, which the cached catalog of the scanner may not
 	auto remote_query =
 	    StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
-	                       "AND tablename LIKE 'ducklake^_inlined^_delete^_%%' ESCAPE '^' ORDER BY tablename",
+	                       "AND tablename LIKE 'ducklake^_inlined^_%%' ESCAPE '^' ORDER BY tablename",
 	                       SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName()));
 	auto query = StringUtil::Format(
 	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	    SQLString::ToString(remote_query));
-	return ListedInlinedDeletionTables(*DuckLakeMetadataManager::Query(query));
+	return ListedInlinedTables(*DuckLakeMetadataManager::Query(query));
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
