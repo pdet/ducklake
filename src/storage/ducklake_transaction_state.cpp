@@ -2491,7 +2491,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags,
 	                                                                  context.commit_chain);
-	batch_queries += DuckLakeMetadataManager::WriteBranchChanges(new_branches, dropped_branches);
+	vector<Identifier> inlined_deletion_tables;
+	if (!dropped_branches.empty()) {
+		inlined_deletion_tables = context.inlined_deletion_tables();
+	}
+	batch_queries +=
+	    DuckLakeMetadataManager::WriteBranchChanges(new_branches, dropped_branches, inlined_deletion_tables);
 	auto relative_paths = [&](const auto &entries) {
 		vector<DuckLakePath> result;
 		result.reserve(entries.size());

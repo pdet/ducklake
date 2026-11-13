@@ -886,9 +886,10 @@ public:
 	bool HasMainBranchRow();
 	//! Whether the branch holds snapshots of its own
 	bool BranchHasSnapshots(idx_t branch_id);
-	//! The statements that drop and create the branches of a commit
+	//! The statements that drop and create the branches of a commit, a dropped branch loses its inlined file deletions
 	static string WriteBranchChanges(const case_insensitive_map_t<DuckLakeBranchInfo> &created,
-	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped);
+	                                 const case_insensitive_map_t<DuckLakeBranchInfo> &dropped,
+	                                 const vector<Identifier> &inlined_deletion_tables);
 	//! The per file ranges a branch derives from its visibility events
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const string &chain_predicate, const string &prefix);
@@ -955,6 +956,10 @@ public:
 	static bool IsInlinedDeletionTableName(const string &name);
 	//! The inlined deletion tables of the catalog with their heal steps, from the memo of the pass when complete
 	vector<InlinedDeletionAdditions> ProbeInlinedDeletionTables();
+	//! The names the deletion tables of the catalog tables would have, the tables are not registered
+	vector<Identifier> InlinedDeletionTableCandidates();
+	//! The inlined deletion tables that exist, checked live so a table another connection created is seen
+	vector<Identifier> InlinedDeletionTables();
 	//! Whether every inlined deletion table carries the branch column
 	bool HasInlinedDeletionShapes();
 	static string InlinedDeletionMigrationSql(const InlinedDeletionAdditions &add);

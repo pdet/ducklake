@@ -368,6 +368,18 @@ INSERT INTO meta.ducklake_view VALUES (1001, uuid(), getvariable('fork') + 1, 0,
 statement ok
 INSERT INTO meta.ducklake_view_visibility VALUES (getvariable('reborn'), 1001, getvariable('reborn'), getvariable('fork') + 1, getvariable('fork') + 2)
 
+# reborn deletes the second row of the oldest file of t at its first snapshot, a deletion main never applies
+statement ok
+CREATE TABLE meta.ducklake_inlined_delete_1(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0)
+
+statement ok
+INSERT INTO meta.ducklake_inlined_delete_1 SELECT MIN(data_file_id), 1, getvariable('fork') + 1, getvariable('reborn') FROM meta.ducklake_data_file WHERE table_id = 1
+
+query I
+SELECT COUNT(*) FROM dl.t WHERE i = 2
+----
+1
+
 # main tags the first snapshot of reborn, after moving the tag from its second snapshot
 statement ok
 INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('ghost_tag', getvariable('fork') + 2, getvariable('reborn'), 0, getvariable('fork') - 1, NULL)
@@ -407,6 +419,12 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_column WHERE branch_id = getvariable(
 ----
 0	0	0
 
+# the inlined file deletions of reborn are gone with it
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_delete_1 WHERE branch_id = getvariable('reborn')
+----
+0
+
 # the next branch takes the id of the dropped one
 statement ok
 CALL ducklake_create_branch('dl', 'again')
@@ -424,6 +442,12 @@ query I
 SELECT column_name FROM (DESCRIBE again.t)
 ----
 i
+
+# a surviving deletion of reborn would hide the row from again, which reads the rows of its id up to its fork
+query I
+SELECT COUNT(*) FROM again.t WHERE i = 2
+----
+1
 
 statement error
 SELECT * FROM again.ghost
