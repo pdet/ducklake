@@ -656,8 +656,10 @@ public:
 	static string DropSchemas(const set<SchemaIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);
 	static string DropTables(const set<TableIndex> &ids, bool renamed, bool branch_aware,
 	                         const DuckLakeBranchChain &chain);
+	//! The delete events of the commit on the files the filter selects that its chain reads without an end
 	static string VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
-	                                  const string &filter_column, const string &id_list);
+	                                  const string &filter_column, const string &id_list,
+	                                  const DuckLakeBranchChain &chain);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool branch_aware,
 	                        const DuckLakeBranchChain &chain);
 	static string DropMacros(const set<MacroIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);
@@ -778,7 +780,8 @@ public:
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	//! The registration with the highest schema version in the chain view
 	static string LatestInlinedTableQuery(idx_t table_id, bool branch_aware, const DuckLakeBranchChain &chain);
-	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
+	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility,
+	                            const DuckLakeBranchChain &chain);
 	//! The deletes recorded against the given data files of the table at the snapshot, read through the chain
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
 	                                            const Identifier &inlined_deletion_table, bool branch_aware,
@@ -808,11 +811,9 @@ public:
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order
-	//! The branch root caps are the VALUES rows (branch_id, root_cap) of every branch whose chain reaches main
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
-	                                  bool write_visibility, bool include_branch_bookkeeping = true,
-	                                  const string &branch_root_caps = string());
+	                                  bool write_visibility);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros, bool branch_aware);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -822,11 +823,13 @@ public:
 	//! Caller supplies one resolved path per compaction, in the same order.
 	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
 	                                 const vector<DuckLakePath> &resolved_paths, bool write_visibility);
-	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions, bool write_visibility);
+	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions, bool write_visibility,
+	                                  const DuckLakeBranchChain &chain);
 	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
 	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
-	                               const vector<DuckLakePath> &resolved_paths, bool write_visibility);
+	                               const vector<DuckLakePath> &resolved_paths, bool write_visibility,
+	                               const DuckLakeBranchChain &chain);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
 	static string InsertSnapshotSql(bool write_branch_id);
@@ -949,10 +952,6 @@ public:
 	vector<DuckLakeBranchChain> LoadBranchChains(const set<idx_t> &dropped_branch_ids = set<idx_t>());
 	//! The snapshots of a branch that the chains of the other branches continue from, the root caps for main
 	set<idx_t> LoadBranchCaps(idx_t branch_id, const set<idx_t> &dropped_branch_ids = set<idx_t>());
-	//! Every branch whose chain reaches main with the snapshot of main it reads up to
-	vector<pair<idx_t, idx_t>> LoadBranchRootCaps(const set<idx_t> &dropped_branch_ids = set<idx_t>());
-	//! The root caps rendered as VALUES rows (branch_id, root_cap), empty without such branches
-	static string BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps);
 	//! The snapshots of a branch an expiry keeps, its head, the forks and the unexpired tag targets of other branches
 	//! The pending forks are the snapshots of the branch that the branches this transaction creates continue from
 	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time,
@@ -968,7 +967,6 @@ public:
 	string SchemaVersionsLineageFilter(const string &prefix) const;
 	//! Selects the rows of main, preceded by AND, empty before 2.0
 	string MainSnapshotFilter() const;
-	void ThrowIfPastBranchFork(DuckLakeSnapshot snapshot) const;
 	bool HasBranchTable();
 	//! Whether the branch table has parent columns rather than the fork columns of an older dev build
 	bool HasBranchTableShape();
@@ -1006,6 +1004,11 @@ public:
 	                                    const DuckLakeBranchChain &chain, const string &prefix);
 	//! The chain predicate the file sources filter the visibility events with, under the alias v, empty on main
 	static string FileSourceChain(const DuckLakeBranchChain &chain);
+	//! The delete files the filter selects, on a branch one per data file (and begin) with the writer nearest the leaf
+	static string ChosenDeleteFiles(const DuckLakeBranchChain &chain, const string &source, const string &filter,
+	                                bool per_begin_snapshot = false);
+	//! The file events the commit chain reads under the alias, branch 0 alone on main
+	static string FileEventFilter(const DuckLakeBranchChain &chain, const string &alias);
 	//! A valid table id is pushed into the file scan and the visibility aggregate
 	static string DataFileSource(bool branch_aware, const DuckLakeBranchChain &chain, const string &prefix,
 	                             optional_idx table_id = optional_idx());
@@ -1152,6 +1155,8 @@ public:
 	static string GetFileVisibilityTableStatement();
 	static string GetDeleteFileVisibilityTableStatement();
 	static string GetBranchTableStatement();
+	//! A row (b, m, w, s, n) maps the snapshot (w, s) to (b, n) for every reader whose view holds (b, m), n <= m
+	//! The merge commit alone writes rows, the readers of a merged file map its embedded ids, AT (VERSION) never does
 	static string GetSnapshotRemapTableStatement();
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
