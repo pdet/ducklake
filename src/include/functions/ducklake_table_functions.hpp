@@ -185,6 +185,11 @@ public:
 	DuckLakeOptionsFunction();
 };
 
+class DuckLakeMetadataTableFunction : public TableFunction {
+public:
+	DuckLakeMetadataTableFunction();
+};
+
 class DuckLakeLastCommittedSnapshotFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeLastCommittedSnapshotFunction();

@@ -47,6 +47,8 @@ public:
 	//! Lists the deletion tables on the server, the cached catalog of the scanner may miss a new table
 	vector<Identifier> ListInlinedDeletionTables() override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	//! The scanner lists the tables it cached, the server lists the ones a commit created since
+	bool ProbeMetadataColumns() override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 	string CommitErrorWithoutQuery(const string &message) const override;
@@ -68,8 +70,7 @@ protected:
 		return "clock_timestamp()";
 	}
 	string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                             const FilterPushdownInfo *filter_info,
-	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+	                             const FilterPushdownInfo *filter_info, const vector<DuckLakeFileListOrder> &file_order,
 	                             vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
 	                             const string &metadata_table_prefix) override;
 	bool MaterializeStatsCTEs() const override;
