@@ -71,13 +71,17 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
 }
 
-bool QuackMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
-	// duckdb_tables() builds a row for every table on the server, so one listing serves every table of the snapshot
-	// keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot can read too
+vector<Identifier> QuackMetadataManager::ListInlinedDeletionTables() {
+	// duckdb_tables() builds a row for every table on the server, so one listing serves every table of a snapshot
 	string query = "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
 	               "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND starts_with(table_name, "
-	               "'ducklake_inlined_delete_')";
-	return ListedInlinedDeletionTableExists(table_name, [&]() { return Query(query); });
+	               "'ducklake_inlined_delete_') ORDER BY table_name";
+	return ListedInlinedDeletionTables(*Query(query));
+}
+
+bool QuackMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
+	// keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot can read too
+	return ListedInlinedDeletionTableExists(table_name);
 }
 
 bool QuackMetadataManager::ProbeMetadataColumns() {

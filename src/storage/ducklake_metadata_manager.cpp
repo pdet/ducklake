@@ -1576,9 +1576,10 @@ bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
 	return HasMetadataColumn("ducklake_delete_file_visibility", "branch_id");
 }
 
-bool DuckLakeMetadataManager::ProbeMetadataColumns() {
+bool DuckLakeMetadataManager::ScanMetadataTables(const std::function<void(CatalogEntry &)> &callback) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto &context = *transaction.GetConnection().context;
+	bool listed = false;
 	try {
 		context.RunFunctionInTransaction([&]() {
 			auto &catalog = Catalog::GetCatalog(context, ducklake_catalog.MetadataDatabaseName());
@@ -1591,21 +1592,29 @@ bool DuckLakeMetadataManager::ProbeMetadataColumns() {
 				if (entry.type != CatalogType::TABLE_ENTRY) {
 					return;
 				}
-				vector<Identifier> columns;
-				for (auto &column : entry.Cast<TableCatalogEntry>().GetColumns().Logical()) {
-					columns.push_back(column.Name());
-				}
-				probed_columns[entry.name.GetIdentifierName()] = std::move(columns);
+				// a backend whose local catalog does not list the metadata schema shows none of its tables
+				listed = listed || entry.name.GetIdentifierName() == "ducklake_metadata";
+				callback(entry);
 			});
 		});
 	} catch (std::exception &) {
 		// LCOV_EXCL_START
-		probed_columns.clear();
 		return false;
 		// LCOV_EXCL_STOP
 	}
-	// a backend whose local catalog does not list the metadata schema falls back to probing table by table
-	if (probed_columns.find("ducklake_metadata") == probed_columns.end()) {
+	return listed;
+}
+
+bool DuckLakeMetadataManager::ProbeMetadataColumns() {
+	bool listed = ScanMetadataTables([&](CatalogEntry &entry) {
+		vector<Identifier> columns;
+		for (auto &column : entry.Cast<TableCatalogEntry>().GetColumns().Logical()) {
+			columns.push_back(column.Name());
+		}
+		probed_columns[entry.name.GetIdentifierName()] = std::move(columns);
+	});
+	if (!listed) {
+		// a catalog that lists no tables falls back to probing table by table
 		// LCOV_EXCL_START
 		probed_columns.clear();
 		return false;
@@ -1695,54 +1704,45 @@ DuckLakeMetadataManager::ProbeRowVisibilityAdditions(const RowVisibilityKind &ki
 }
 
 vector<DuckLakeMetadataManager::InlinedDeletionAdditions> DuckLakeMetadataManager::ProbeInlinedDeletionTables() {
-	ProbeMetadataSchema();
-	vector<string> names;
-	if (probed_all_columns) {
-		// the deletion tables are not registered, the scan of the schema lists them by their name
-		for (auto &entry : probed_columns) {
-			if (IsInlinedDeletionTableName(entry.first)) {
-				names.push_back(entry.first);
-			}
-		}
-		std::sort(names.begin(), names.end());
-	} else {
-		// a catalog that lists no tables is probed by the names of its candidates
-		for (auto &name : InlinedDeletionTableCandidates()) {
-			names.push_back(name.GetIdentifierName());
-		}
-	}
 	vector<InlinedDeletionAdditions> additions;
-	for (auto &name : names) {
-		// a missing table or one without the snapshot of its rows is left to its reader
+	for (auto &table : ListInlinedDeletionTables()) {
+		auto &name = table.GetIdentifierName();
+		// a table without the snapshot of its rows is left to its reader
 		if (!HasMetadataColumn(name, "begin_snapshot")) {
 			continue;
 		}
 		InlinedDeletionAdditions missing;
-		missing.table_name = Identifier(name);
+		missing.table_name = table;
 		missing.branch_column = !HasMetadataColumn(name, "branch_id");
 		additions.push_back(std::move(missing));
 	}
 	return additions;
 }
 
-vector<Identifier> DuckLakeMetadataManager::InlinedDeletionTableCandidates() {
-	// a catalog holds at most one deletion table per table id
-	vector<Identifier> names;
-	auto result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table ORDER BY table_id");
-	result->ThrowIfError("Failed to list the tables of DuckLake while probing the inlined deletion tables: ");
-	for (auto &row : *result) {
-		names.push_back(InlinedFileDeletionTableName(TableIndex(row.GetValue<idx_t>(0))));
-	}
-	return names;
-}
-
-vector<Identifier> DuckLakeMetadataManager::InlinedDeletionTables() {
+vector<Identifier> DuckLakeMetadataManager::ListInlinedDeletionTables() {
+	// the deletion tables are not registered, the scan of the schema lists them by their name
 	vector<Identifier> tables;
-	for (auto &name : InlinedDeletionTableCandidates()) {
-		if (InlinedDeletionTableExists(name)) {
-			tables.push_back(name);
+	bool listed = ScanMetadataTables([&](CatalogEntry &entry) {
+		if (IsInlinedDeletionTableName(entry.name.GetIdentifierName())) {
+			tables.push_back(entry.name);
 		}
+	});
+	if (!listed) {
+		// LCOV_EXCL_START
+		// a catalog that lists no tables holds at most one deletion table per table id, probed one by one
+		tables.clear();
+		auto result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table ORDER BY table_id");
+		result->ThrowIfError("Failed to list the tables of DuckLake while probing the inlined deletion tables: ");
+		for (auto &row : *result) {
+			auto name = InlinedFileDeletionTableName(TableIndex(row.GetValue<idx_t>(0)));
+			if (InlinedDeletionTableExists(name)) {
+				tables.push_back(name);
+			}
+		}
+		return tables;
+		// LCOV_EXCL_STOP
 	}
+	std::sort(tables.begin(), tables.end());
 	return tables;
 }
 
@@ -5993,18 +5993,27 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	                                             table_name) != nullptr;
 }
 
-bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name,
-                                                               const std::function<unique_ptr<QueryResult>()> &list) {
+bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name) {
 	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
-		auto result = list();
-		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 		unordered_set<string> listed;
-		for (auto &row : *result) {
-			listed.insert(row.GetValue<string>(0));
+		for (auto &table : ListInlinedDeletionTables()) {
+			listed.insert(table.GetIdentifierName());
 		}
 		return listed;
 	});
 	return tables->count(table_name.GetIdentifierName()) > 0;
+}
+
+vector<Identifier> DuckLakeMetadataManager::ListedInlinedDeletionTables(QueryResult &result) {
+	result.ThrowIfError("Failed to list the inlined deletion tables of DuckLake: ");
+	vector<Identifier> tables;
+	for (auto &row : result) {
+		auto name = row.GetValue<string>(0);
+		if (IsInlinedDeletionTableName(name)) {
+			tables.push_back(Identifier(name));
+		}
+	}
+	return tables;
 }
 
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,

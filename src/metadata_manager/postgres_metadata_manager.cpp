@@ -397,16 +397,21 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
-	// a probe per table costs a round trip each, so one listing of the schema serves every table of the snapshot
+vector<Identifier> PostgresMetadataManager::ListInlinedDeletionTables() {
+	// the server lists a table another connection created, which the cached catalog of the scanner may not
 	auto remote_query =
 	    StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
-	                       "AND tablename LIKE 'ducklake^_inlined^_delete^_%%' ESCAPE '^'",
+	                       "AND tablename LIKE 'ducklake^_inlined^_delete^_%%' ESCAPE '^' ORDER BY tablename",
 	                       SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName()));
 	auto query = StringUtil::Format(
 	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	    SQLString::ToString(remote_query));
-	return ListedInlinedDeletionTableExists(table_name, [&]() { return DuckLakeMetadataManager::Query(query); });
+	return ListedInlinedDeletionTables(*DuckLakeMetadataManager::Query(query));
+}
+
+bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
+	// a probe per table costs a round trip each, so one listing of the schema serves every table of the snapshot
+	return ListedInlinedDeletionTableExists(table_name);
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {

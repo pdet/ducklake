@@ -44,6 +44,8 @@ public:
 	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
 	//! The server runs the statements of the load, the list aggregates travel as json text
 	DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot) override;
+	//! Lists the deletion tables on the server, the cached catalog of the scanner may miss a new table
+	vector<Identifier> ListInlinedDeletionTables() override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;

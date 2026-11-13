@@ -380,6 +380,13 @@ SELECT COUNT(*) FROM dl.t WHERE i = 2
 ----
 1
 
+# the deletion table of a table that is gone from the catalog holds a deletion of reborn next to one of main
+statement ok
+CREATE TABLE meta.ducklake_inlined_delete_999(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0)
+
+statement ok
+INSERT INTO meta.ducklake_inlined_delete_999 VALUES (0, 0, getvariable('fork') + 1, getvariable('reborn')), (0, 1, getvariable('fork') - 1, 0)
+
 # main tags the first snapshot of reborn, after moving the tag from its second snapshot
 statement ok
 INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('ghost_tag', getvariable('fork') + 2, getvariable('reborn'), 0, getvariable('fork') - 1, NULL)
@@ -419,11 +426,16 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_column WHERE branch_id = getvariable(
 ----
 0	0	0
 
-# the inlined file deletions of reborn are gone with it
-query I
-SELECT COUNT(*) FROM meta.ducklake_inlined_delete_1 WHERE branch_id = getvariable('reborn')
+# the inlined file deletions of reborn are gone with it, also from the deletion table without a catalog table
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_1 WHERE branch_id = getvariable('reborn')), (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_999 WHERE branch_id = getvariable('reborn'))
 ----
-0
+0	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_delete_999
+----
+1
 
 # the next branch takes the id of the dropped one
 statement ok

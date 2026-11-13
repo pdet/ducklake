@@ -70,6 +70,7 @@
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
         "test/sql/benchmark/postgres_catalog.test",
+        "test/sql/branches/postgres_branch_drop_read_committed.test",
         "test/sql/branches/postgres_branch_read_committed.test",
         "test/sql/catalog/postgres_native_catalog_load.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",

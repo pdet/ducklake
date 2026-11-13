@@ -1,0 +1,74 @@
+# name: test/sql/branches/postgres_branch_drop_read_committed.test
+# description: a branch drop under READ COMMITTED clears a deletion table another connection created after the transaction started
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_branch_drop_read_committed', METADATA_CATALOG 'meta', META_ISOLATION_LEVEL 'READ COMMITTED', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(100)
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev')
+
+statement ok con1
+BEGIN
+
+# the read lists the deletion tables at the snapshot of the transaction, there are none yet
+query I con1
+SELECT COUNT(*) FROM dl.t
+----
+100
+
+# another connection creates a table whose inlined delete creates its deletion table, with a deletion of dev
+statement ok con2
+CREATE TABLE dl.u AS SELECT range AS i FROM range(100)
+
+statement ok con2
+DELETE FROM dl.u WHERE i = 5
+
+statement ok con2
+INSERT INTO meta.ducklake_inlined_delete_2 SELECT file_id, 6, begin_snapshot, 1 FROM meta.ducklake_inlined_delete_2
+
+query III con2
+SELECT table_id, (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_name = 'dev'), (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_2 WHERE branch_id = 1) FROM meta.ducklake_table WHERE table_name = 'u'
+----
+2	1	1
+
+# the drop sees the newer head, the deletion table is not in the listing of the snapshot it started from
+statement ok con1
+CALL ducklake_drop_branch('dl', 'dev')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('dl') WHERE branch_name = 'dev'
+----
+0
+
+# the deletion of the dropped branch is gone from the table created after the transaction started, that of main stays
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_2 WHERE branch_id = 1), (SELECT COUNT(*) FROM meta.ducklake_inlined_delete_2 WHERE branch_id = 0)
+----
+0	1
+
+query I
+SELECT COUNT(*) FROM dl.u
+----
+99
+
+statement ok
+DETACH dl

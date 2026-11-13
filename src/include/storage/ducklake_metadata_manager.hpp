@@ -41,6 +41,7 @@ struct DuckLakeRetryConfig;
 struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
+class CatalogEntry;
 class Connection;
 class SQLStatement;
 class FileSystem;
@@ -667,8 +668,11 @@ public:
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Whether the listing of the snapshot's inlined deletion tables, run once per snapshot, names the table
-	bool ListedInlinedDeletionTableExists(const Identifier &table_name,
-	                                      const std::function<unique_ptr<QueryResult>()> &list);
+	bool ListedInlinedDeletionTableExists(const Identifier &table_name);
+	//! The inlined deletion tables of the metadata schema, listed live so a table another connection created is seen
+	virtual vector<Identifier> ListInlinedDeletionTables();
+	//! The inlined deletion tables a listing names, one table name per row
+	static vector<Identifier> ListedInlinedDeletionTables(QueryResult &result);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -914,6 +918,8 @@ public:
 	void ProbeMetadataSchema();
 	//! Reads the columns of every table of the metadata schema into the memo, false when the catalog lists none
 	virtual bool ProbeMetadataColumns();
+	//! Runs the callback for every table of the metadata schema, false when the catalog does not list the schema
+	bool ScanMetadataTables(const std::function<void(CatalogEntry &)> &callback);
 	//! Drops the memo of a probe pass
 	void ResetProbedColumns();
 	bool HasAnyFileRangeColumns();
@@ -954,12 +960,8 @@ public:
 	};
 	//! Whether the name is that of an inlined deletion table, ducklake_inlined_delete_<table id>
 	static bool IsInlinedDeletionTableName(const string &name);
-	//! The inlined deletion tables of the catalog with their heal steps, from the memo of the pass when complete
+	//! The inlined deletion tables of the catalog with their heal steps
 	vector<InlinedDeletionAdditions> ProbeInlinedDeletionTables();
-	//! The names the deletion tables of the catalog tables would have, the tables are not registered
-	vector<Identifier> InlinedDeletionTableCandidates();
-	//! The inlined deletion tables that exist, checked live so a table another connection created is seen
-	vector<Identifier> InlinedDeletionTables();
 	//! Whether every inlined deletion table carries the branch column
 	bool HasInlinedDeletionShapes();
 	static string InlinedDeletionMigrationSql(const InlinedDeletionAdditions &add);
