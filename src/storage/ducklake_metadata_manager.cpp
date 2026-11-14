@@ -635,10 +635,13 @@ static string VisibilityEventRangesSql(const string &visibility_table, const str
 	    file_id_column, extra_columns, prefix, visibility_table, chain_predicate, file_id_column);
 }
 
+// the stats refresh of a commit alone passes a predicate, and a branch attach is read only until branches write
+// LCOV_EXCL_START
 string DuckLakeMetadataManager::VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
                                                       const string &chain_predicate, const string &prefix) {
 	return VisibilityEventRangesSql(visibility_table, file_id_column, chain_predicate, prefix, string());
 }
+// LCOV_EXCL_STOP
 
 string DuckLakeMetadataManager::VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
                                                       const DuckLakeBranchChain &chain, const string &prefix) {
@@ -685,7 +688,10 @@ string DuckLakeMetadataManager::FileEventFilter(const DuckLakeBranchChain &chain
 	if (!chain.OnBranch()) {
 		return alias + ".branch_id = 0";
 	}
+	// LCOV_EXCL_START
+	// the end events of a commit on a branch, and a branch attach is read only until branches write
 	return "(" + chain.Predicate(alias) + ")";
+	// LCOV_EXCL_STOP
 }
 
 string DuckLakeMetadataManager::DataFileSource(bool branch_aware, const DuckLakeBranchChain &chain,
@@ -721,11 +727,13 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, const string &
 		                          "ON v.data_file_id = f.data_file_id AND v.table_id = f.table_id)",
 		                          prefix, prefix, table_filter);
 	}
-	// the range of a file comes from the visibility events of the branch chain
+	// LCOV_EXCL_START
+	// the stats refresh of a commit alone passes a predicate, and a branch attach is read only until branches write
 	return FileSourceOverRanges(
 	    prefix, "ducklake_data_file", "data_file_id",
 	    VisibilityEventRanges("ducklake_file_visibility", "data_file_id", chain_predicate, prefix),
 	    "v.begin_snapshot, v.end_snapshot", table_id);
+	// LCOV_EXCL_STOP
 }
 
 string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, const DuckLakeBranchChain &chain,
@@ -760,10 +768,13 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, const string
 		                          "ON v.delete_file_id = f.delete_file_id AND v.table_id = f.table_id)",
 		                          prefix, prefix, table_filter);
 	}
+	// LCOV_EXCL_START
+	// the conflict scan of a commit alone passes a predicate, and a branch attach is read only until branches write
 	return FileSourceOverRanges(
 	    prefix, "ducklake_delete_file", "delete_file_id",
 	    VisibilityEventRanges("ducklake_delete_file_visibility", "delete_file_id", chain_predicate, prefix),
 	    "v.begin_snapshot, v.end_snapshot", table_id);
+	// LCOV_EXCL_STOP
 }
 
 string DuckLakeMetadataManager::DataFiles() const {
@@ -1640,7 +1651,7 @@ set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id,
                                                                 const set<idx_t> &dropped_branch_ids,
                                                                 const set<idx_t> &pending_forks) {
 	set<idx_t> result;
-	if (!transaction.GetCatalog().SupportsBranching() || (!HasBranches() && pending_forks.empty())) {
+	if (!HasBranches() && pending_forks.empty()) {
 		return result;
 	}
 	// expiries are per branch, it keeps the snapshots other branches continue from and its head with the allocators
@@ -2016,7 +2027,10 @@ identifier_map_t<Identifier> DuckLakeMetadataManager::UserTableNamesOf(const vec
 		literals.push_back(SQLString::ToString(table.GetIdentifierName()));
 	}
 	if (literals.empty()) {
+		// LCOV_EXCL_START
+		// the heal names one colliding table at a time
 		return names;
+		// LCOV_EXCL_STOP
 	}
 	// the version rows of a renamed table are read oldest first, so the latest name wins
 	auto result = Query(StringUtil::Format(R"(
@@ -4324,8 +4338,10 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		              ", data.row_id_start, data.mapping_id, " + GetDeleteFileSelectList("del") +
 		              ", del.begin_snapshot";
 		if (catalog.OnBranch()) {
-			// the segment of the add event names the writer of the delete file a replacement overwrites
+			// LCOV_EXCL_START
+			// the segment of the add event names the writer of the overwritten delete file once branches write
 			select_list += ", del.begin_segment";
+			// LCOV_EXCL_STOP
 		}
 	} else {
 		select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
@@ -5048,11 +5064,13 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_file_begin_snapshot = OptIdx(row, col_idx++);
 		if (chain.OnBranch()) {
-			// the writer of the delete file is the branch of the add event the lineage reads it through
+			// LCOV_EXCL_START
+			// the writer of the delete file is the branch of the add event it is read through, once branches write
 			auto delete_segment = OptIdx(row, col_idx++);
 			if (delete_segment.IsValid()) {
 				file_entry.delete_file_branch_id = chain.Segments()[delete_segment.GetIndex()].branch_id;
 			}
+			// LCOV_EXCL_STOP
 		}
 		files.push_back(std::move(file_entry));
 	}
@@ -7165,7 +7183,10 @@ WHERE %s
 				entry.delete_file.format = DeleteFileFormatFromString(row.GetValue<string>(10));
 			}
 			if (catalog.OnBranch()) {
+				// LCOV_EXCL_START
+				// a flush on a branch replaces the delete file of its writer once branches write
 				entry.delete_file_branch_id = chain.Segments()[row.GetValue<idx_t>(11)].branch_id;
+				// LCOV_EXCL_STOP
 			}
 		}
 		deletions.push_back(std::move(entry));
@@ -9257,9 +9278,6 @@ WHERE %s(%s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_
 //! cap of main it reads through, through inheritance
 string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_table, const string &file_id_column,
                                                     const string &alias, bool include_inherited) {
-	if (!transaction.GetCatalog().SupportsBranching()) {
-		return string();
-	}
 	if (!HasBranches()) {
 		// the guard starts from the branch table, without branches it keeps nothing
 		return string();
@@ -9529,6 +9547,9 @@ void DuckLakeMetadataManager::DeleteOrphanRowEnds(const RowVisibilityKind &kind)
 	ends->ThrowIfError(StringUtil::Format("Failed to delete from ducklake_%s_visibility in DuckLake: ", kind.kind));
 }
 
+//! The payloads of one probe of the end sweep, a union of 200 stays under the compound limit of SQLite at 500
+static constexpr idx_t SWEEP_PROBE_PAYLOADS = 200;
+
 void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads,
                                                          idx_t listed_snapshot) {
 	// the ends of a table name versions of any of its payloads, every payload names the same table id
@@ -9536,17 +9557,25 @@ void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const v
 	auto kind = InlinedRowKind(payloads[0], col_names);
 	// a row born after the listed snapshot can live in a payload the listing missed, its end waits for the next sweep
 	vector<string> predicates {StringUtil::Format("e.row_snapshot <= %llu", listed_snapshot)};
-	// one probe per payload, a union of the payloads would exceed the compound limit of SQLite at 500 versions
+	// DuckDB counts the subqueries a statement plans as expression depth, so a probe per payload fails at a thousand
 	// a payload dropped since the listing fails the statement, which the next cleanup retries
-	for (auto &payload : payloads) {
+	for (idx_t group = 0; group < payloads.size(); group += SWEEP_PROBE_PAYLOADS) {
+		auto group_end = MinValue<idx_t>(group + SWEEP_PROBE_PAYLOADS, payloads.size());
+		vector<string> versions;
+		for (idx_t i = group; i < group_end; i++) {
+			versions.push_back(StringUtil::Format("SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s", col_names.row_id,
+			                                      col_names.branch_id, col_names.begin_snapshot, payloads[i]));
+		}
 		predicates.push_back(StringUtil::Format(R"(NOT EXISTS (
     SELECT 1
-    FROM {METADATA_CATALOG}.%s r
+    FROM (
+      %s
+    ) r
     WHERE r.%s = e.row_id AND r.%s = e.row_branch_id
       AND r.%s = e.row_snapshot
   ))",
-		                                        payload, col_names.row_id, col_names.branch_id,
-		                                        col_names.begin_snapshot));
+		                                        StringUtil::Join(versions, "\n      UNION ALL "), col_names.row_id,
+		                                        col_names.branch_id, col_names.begin_snapshot));
 	}
 	auto filter = StringUtil::Join(predicates, "\n  AND ");
 	auto ends = Execute(StringUtil::Format("DELETE FROM %s;", CompanionEnds(kind, "e", filter)));

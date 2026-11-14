@@ -130,6 +130,7 @@
         "test/sql/compaction/compaction_partition_spec_time_travel.test",
         "test/sql/compaction/compaction_per_thread_output.test",
         "test/sql/compaction/compaction_twice_in_transaction.test",
+        "test/sql/data_inlining/inlined_flush_foreign_payload_name_v11.test",
         "test/sql/compaction/merge_adjacent_after_add_files_schema_evolution.test",
         "test/sql/compaction/merge_adjacent_cross_schema_isolated.test",
         "test/sql/compaction/merge_adjacent_keeps_row_ids.test",
@@ -230,6 +231,7 @@
       "paths": [
         "test/sql/alter/multi_alter_same_column_transaction.test",
         "test/sql/data_inlining/data_inlining_flush_transaction_delete.test",
+        "test/sql/data_inlining/inlined_flush_transaction_delete_v11.test",
         "test/sql/data_inlining/flush_renamed_in_transaction.test",
         "test/sql/functions/ducklake_snapshots.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_alter_table.test",
@@ -452,6 +454,7 @@
         "test/sql/partitioning/partition_rename_in_transaction.test",
         "test/sql/partitioning/spec_set_reset_set.test",
         "test/sql/quack/noop_partition_alter_data_files.test",
+        "test/sql/quack/inlined_relist_retry_limit.test",
         "test/sql/quack/server_side_commit_atomicity.test",
         "test/sql/remove_orphans/puffin_orphan.test",
         "test/sql/rewrite_data_files/rewrite_deletion_vectors.test",
@@ -590,7 +593,9 @@
         "test/sql/migration/dev1_inlined_deletes_heal.test",
         "test/sql/migration/dev1_inlined_heal_null_schema_branch.test",
         "test/sql/migration/dev1_inlined_rows_heal.test",
+        "test/sql/migration/dev1_read_only_shape_probes.test",
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
+        "test/sql/migration/dev1_heal_marker_older_generation.test",
         "test/sql/migration/dev1_missing_changes_table.test",
         "test/sql/migration/dev1_missing_column_visibility.test",
         "test/sql/migration/dev1_missing_partition_visibility.test",
@@ -611,6 +616,8 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_superseded_drop_ends.test",
         "test/sql/data_inlining/inlined_shared_expire.test",
+        "test/sql/data_inlining/inlined_expire_many_payloads.test_slow",
+        "test/sql/data_inlining/inlined_expire_payload_groups.test_slow",
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
         "test/sql/data_inlining/inlined_foreign_payload_name.test"
       ]

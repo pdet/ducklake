@@ -316,9 +316,6 @@ static void DateCopiedDeletes(ClientContext &context, const DuckLakeDeleteScanEn
 		}
 	}
 	for (auto delete_idx : current_deletes.deleted_rows) {
-		if (!rows_to_scan[delete_idx]) {
-			continue;
-		}
 		auto dated = position_to_snapshot.find(delete_idx);
 		auto snapshot = dated == position_to_snapshot.end() ? delete_scan.snapshot_id.GetIndex() : dated->second;
 		bool in_range =
