@@ -616,6 +616,8 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_superseded_drop_ends.test",
         "test/sql/data_inlining/inlined_shared_expire.test",
+        "test/sql/data_inlining/inlined_expire_many_payloads.test_slow",
+        "test/sql/data_inlining/inlined_expire_payload_groups.test_slow",
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
         "test/sql/data_inlining/inlined_foreign_payload_name.test"
       ]

@@ -9404,6 +9404,9 @@ WHERE NOT EXISTS (
 	ends->ThrowIfError(StringUtil::Format("Failed to delete from ducklake_%s_visibility in DuckLake: ", kind.kind));
 }
 
+//! The payloads of one probe of the end sweep, a union of 200 stays under the compound limit of SQLite at 500
+static constexpr idx_t SWEEP_PROBE_PAYLOADS = 200;
+
 void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads,
                                                          idx_t listed_snapshot) {
 	// the ends of a table name versions of any of its payloads, every payload names the same table id
@@ -9411,17 +9414,25 @@ void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const v
 	auto kind = InlinedRowKind(payloads[0], col_names);
 	// a row born after the listed snapshot can live in a payload the listing missed, its end waits for the next sweep
 	vector<string> predicates {StringUtil::Format("e.row_snapshot <= %llu", listed_snapshot)};
-	// one probe per payload, a union of the payloads would exceed the compound limit of SQLite at 500 versions
+	// DuckDB counts the subqueries a statement plans as expression depth, so a probe per payload fails at a thousand
 	// a payload dropped since the listing fails the statement, which the next cleanup retries
-	for (auto &payload : payloads) {
+	for (idx_t group = 0; group < payloads.size(); group += SWEEP_PROBE_PAYLOADS) {
+		auto group_end = MinValue<idx_t>(group + SWEEP_PROBE_PAYLOADS, payloads.size());
+		vector<string> versions;
+		for (idx_t i = group; i < group_end; i++) {
+			versions.push_back(StringUtil::Format("SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s", col_names.row_id,
+			                                      col_names.branch_id, col_names.begin_snapshot, payloads[i]));
+		}
 		predicates.push_back(StringUtil::Format(R"(NOT EXISTS (
     SELECT 1
-    FROM {METADATA_CATALOG}.%s r
+    FROM (
+      %s
+    ) r
     WHERE r.%s = e.row_id AND r.%s = e.row_branch_id
       AND r.%s = e.row_snapshot
   ))",
-		                                        payload, col_names.row_id, col_names.branch_id,
-		                                        col_names.begin_snapshot));
+		                                        StringUtil::Join(versions, "\n      UNION ALL "), col_names.row_id,
+		                                        col_names.branch_id, col_names.begin_snapshot));
 	}
 	auto filter = StringUtil::Join(predicates, "\n  AND ");
 	auto ends = Execute(StringUtil::Format("DELETE FROM %s;", CompanionEnds(kind, "e", filter)));
