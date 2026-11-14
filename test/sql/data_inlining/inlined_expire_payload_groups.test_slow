@@ -1,4 +1,4 @@
-# name: test/sql/data_inlining/inlined_expire_payload_groups.test
+# name: test/sql/data_inlining/inlined_expire_payload_groups.test_slow
 # description: the expiry sweeps the inlined row ends of a table whose payload versions fill two groups of the sweep and one more
 # group: [data_inlining]
 
