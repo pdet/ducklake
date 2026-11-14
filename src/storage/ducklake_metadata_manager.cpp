@@ -6897,7 +6897,7 @@ Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table
 		return table_name;
 	}
 
-	// Check catalog-level cache (persists across transactions), scoped by the heads of the view
+	// Check the cache of the catalog, which persists across transactions, scoped by the heads of the view
 	auto &catalog = transaction.GetCatalog();
 	bool keep_verdict = KeepsInlinedDeletionVerdicts();
 	if (keep_verdict && catalog.CheckInlinedDeletionTableCache(table_id, GetLineageHeads()) ==

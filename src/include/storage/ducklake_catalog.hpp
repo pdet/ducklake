@@ -493,8 +493,7 @@ public:
 		return query_callback;
 	}
 
-	//! Whether the inlined deletion table of a table is known to exist, or known absent to a view at or before the
-	//! heads
+	//! Whether the inlined deletion table of a table is known to exist, or known absent at or before the heads
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, const vector<idx_t> &heads);
 	//! Cache the result of an inlined deletion table existence check, an absent table with the heads that found it so
 	void CacheInlinedDeletionTableResult(TableIndex table_id, const vector<idx_t> &heads, bool exists);
