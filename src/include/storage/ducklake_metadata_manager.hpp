@@ -1106,7 +1106,7 @@ public:
 	static bool IsInlinedDeletionTableName(const string &name);
 	//! Whether the name is that of an inlined data table, ducklake_inlined_data_<table id>_<schema version>
 	static bool IsInlinedDataTableName(const string &name);
-	//! Whether the name is that of an inlined data table, a companion or an inlined deletion table
+	//! Whether the name is that of an inlined data table or an inlined deletion table
 	static bool IsInlinedTableName(const string &name);
 	//! The inlined deletion tables of the catalog with their heal steps
 	vector<InlinedDeletionAdditions> ProbeInlinedDeletionTables();

@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_drop_inlined_rows.test
-# description: dropping a branch deletes the inlined rows born on it and the ends it wrote from every inlined table
+# description: dropping a branch deletes the inlined rows born on it from every inlined table and its ends from the shared companion
 # group: [branches]
 
 require ducklake
@@ -25,6 +25,10 @@ ALTER TABLE dl.t ADD COLUMN j INTEGER
 
 statement ok
 INSERT INTO dl.t VALUES (4, 40)
+
+# main ends its third row, an end the drop of a branch leaves alone
+statement ok
+DELETE FROM dl.t WHERE i = 3
 
 query II
 SELECT table_name, schema_version FROM meta.ducklake_inlined_data_tables ORDER BY schema_version
@@ -57,21 +61,29 @@ INSERT INTO meta.ducklake_inlined_data_1_2 (_ducklake_row_id, _ducklake_begin_sn
 
 # dev ends the second row of main at its first snapshot and its own row of the second table at its second snapshot
 statement ok
-INSERT INTO meta.ducklake_inlined_data_1_1_visibility SELECT getvariable('dev'), _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, getvariable('fork') + 1 FROM meta.ducklake_inlined_data_1_1 WHERE i = 2
+INSERT INTO meta.ducklake_inlined_data_visibility SELECT 1, _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, getvariable('dev'), getvariable('fork') + 1 FROM meta.ducklake_inlined_data_1_1 WHERE i = 2
 
 statement ok
-INSERT INTO meta.ducklake_inlined_data_1_2_visibility VALUES (getvariable('dev'), 200, getvariable('dev'), getvariable('fork') + 1, getvariable('fork') + 2)
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 200, getvariable('dev'), getvariable('fork') + 1, getvariable('dev'), getvariable('fork') + 2)
 
 # a stray end of main naming the row of dev, which no view of main reads
 statement ok
-INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 100, getvariable('dev'), getvariable('fork') + 1, getvariable('fork') + 2)
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 100, getvariable('dev'), getvariable('fork') + 1, 0, getvariable('fork') + 2)
+
+# the ends by table id and row id, with whether the row and the end are of dev
+query IIII
+SELECT table_id, row_id, row_branch_id = getvariable('dev'), branch_id = getvariable('dev') FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	false	true
+1	2	false	false
+1	100	true	false
+1	200	true	true
 
 query II
 SELECT i, j FROM dl.t ORDER BY i
 ----
 1	NULL
 2	NULL
-3	NULL
 4	40
 
 statement ok
@@ -82,7 +94,6 @@ query II
 SELECT i, j FROM dev.t ORDER BY i
 ----
 1	NULL
-3	NULL
 4	40
 100	NULL
 
@@ -98,23 +109,22 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1 WHERE _ducklake_bran
 ----
 0	0	3	1
 
-# the ends dev wrote and the ends naming its rows are gone from both companions
-query II
-SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE branch_id = getvariable('dev') OR row_branch_id = getvariable('dev')), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2_visibility WHERE branch_id = getvariable('dev') OR row_branch_id = getvariable('dev'))
+# the ends dev wrote and the ends naming its rows are gone from the shared companion, the end of main stays
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility WHERE branch_id = getvariable('dev') OR row_branch_id = getvariable('dev')
 ----
-0	0
+0
 
-query II
-SELECT (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility), (SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2_visibility)
+query IIII
+SELECT table_id, row_id, row_branch_id = getvariable('dev'), branch_id = getvariable('dev') FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	0
+1	2	false	false
 
 query II
 SELECT i, j FROM dl.t ORDER BY i
 ----
 1	NULL
 2	NULL
-3	NULL
 4	40
 
 # the next branch takes the id of the dropped one and inherits none of its rows or ends
@@ -135,7 +145,6 @@ SELECT i, j FROM again.t ORDER BY i
 ----
 1	NULL
 2	NULL
-3	NULL
 4	40
 
 statement ok
