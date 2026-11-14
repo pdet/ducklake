@@ -147,7 +147,8 @@
         "test/sql/settings/set_option_read_committed_reset_race.test",
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
-        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
       ]
     },
     {
