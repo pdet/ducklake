@@ -1,0 +1,167 @@
+# name: test/sql/branches/branch_drop_flush_same_transaction.test
+# description: a transaction that drops a branch and flushes the inlined rows of main rehomes no end of the dropped branch, so a branch that takes its id inherits no deletion
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_table
+----
+1	t
+
+# keep forks first, so the id of dev is the highest one and the next branch takes it
+statement ok
+CALL ducklake_create_branch('dl', 'keep')
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev')
+
+query II
+SELECT branch_name, branch_id FROM ducklake_branches('dl') ORDER BY branch_id
+----
+main	0
+keep	1
+dev	2
+
+statement ok
+SET VARIABLE keep = (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_name = 'keep')
+
+statement ok
+SET VARIABLE dev = (SELECT branch_id FROM ducklake_branches('dl') WHERE branch_name = 'dev')
+
+statement ok
+SET VARIABLE keep_fork = (SELECT parent_branch_snapshot FROM ducklake_branches('dl') WHERE branch_name = 'keep')
+
+statement ok
+SET VARIABLE dev_fork = (SELECT parent_branch_snapshot FROM ducklake_branches('dl') WHERE branch_name = 'dev')
+
+# each branch commits once after its fork
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('keep_fork') + 1, NOW(), schema_version, next_catalog_id, next_file_id, getvariable('keep') FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('keep_fork') AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('dev_fork') + 1, NOW(), schema_version, next_catalog_id, next_file_id, getvariable('dev') FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('dev_fork') AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (getvariable('keep_fork') + 1, NULL, NULL, NULL, NULL, getvariable('keep')), (getvariable('dev_fork') + 1, NULL, NULL, NULL, NULL, getvariable('dev'))
+
+# keep ends the third row of main and dev the second, each at its own snapshot
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility SELECT 1, _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, getvariable('keep'), getvariable('keep_fork') + 1 FROM meta.ducklake_inlined_data_1_1 WHERE i = 3
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility SELECT 1, _ducklake_row_id, _ducklake_branch_id, _ducklake_begin_snapshot, getvariable('dev'), getvariable('dev_fork') + 1 FROM meta.ducklake_inlined_data_1_1 WHERE i = 2
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+statement ok
+DETACH dev
+
+# the drop of dev and the flush of main commit together, the flush reads the end of dev before the drop deletes it
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_branch('dl', 'dev')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+COMMIT
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT branch_name FROM ducklake_branches('dl') ORDER BY branch_id
+----
+main
+keep
+
+# the end of keep on the third row is a deletion row of keep on the flushed file, dated at its own snapshot
+query III
+SELECT row_id, branch_id = getvariable('keep'), begin_snapshot = getvariable('keep_fork') + 1 FROM meta.ducklake_inlined_delete_1
+----
+2	true	true
+
+# the deletion table holds no row of the dropped branch
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_1 WHERE branch_id = getvariable('dev')
+----
+0
+
+# the drop took the end of dev from the companion and the flush the end of keep
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# the next branch takes the id of dev
+statement ok
+CALL ducklake_create_branch('dl', 'again')
+
+query I
+SELECT branch_id = getvariable('dev') FROM ducklake_branches('dl') WHERE branch_name = 'again'
+----
+true
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS again (METADATA_CATALOG 'meta', BRANCH 'again')
+
+# a rehomed end of dev on the flushed file would hide the second row from again
+query I
+SELECT i FROM again.t ORDER BY i
+----
+1
+2
+3
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS keep (METADATA_CATALOG 'meta', BRANCH 'keep')
+
+query I
+SELECT i FROM keep.t ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH keep
+
+statement ok
+DETACH again
+
+statement ok
+DETACH dl

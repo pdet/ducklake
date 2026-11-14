@@ -1797,6 +1797,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 	if (stats) {
 		dl_stats = context.build_stats_map(*stats);
 	}
+	// the ends of a dropped branch go with the drop, so none of them is rehomed onto a flushed file
+	set<idx_t> dropped_branch_ids;
+	for (auto &branch : dropped_branches) {
+		dropped_branch_ids.insert(branch.second.branch_id);
+	}
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		if (IsTransactionLocal(table_id)) {
@@ -1845,6 +1850,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 				delete_files.push_back(std::move(delete_file));
 			}
 			for (auto &rehomed : data_file.rehomed_deletions) {
+				if (dropped_branch_ids.count(rehomed.branch_id)) {
+					continue;
+				}
 				// the end of another branch on a row of this flushed file, keyed by the file id of this commit
 				rehomed_deletions.push_back({data_file.id, rehomed.position, rehomed.snapshot_id, rehomed.branch_id});
 			}

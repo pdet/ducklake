@@ -838,7 +838,8 @@
         "test/sql/branches/branch_drop_inlined_rows.test",
         "test/sql/branches/branch_pending_fork_tags.test",
         "test/sql/branches/postgres_branch_drop_read_committed.test",
-        "test/sql/branches/postgres_branch_read_committed.test"
+        "test/sql/branches/postgres_branch_read_committed.test",
+        "test/sql/branches/branch_drop_flush_same_transaction.test"
       ]
     }
   ]
