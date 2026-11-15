@@ -69,6 +69,7 @@
     {
       "reason": "Expires snapshots or deletes files, which is maintenance of the REST server and not part of the REST API",
       "paths": [
+        "test/sql/cleanup/expire_reads_head_once.test",
         "test/sql/add_files/add_files_compaction.test",
         "test/sql/cleanup/cleanup_old_files.test",
         "test/sql/compaction/cleanup_old_files_global_option.test",
@@ -616,6 +617,7 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_superseded_drop_ends.test",
         "test/sql/data_inlining/inlined_shared_expire.test",
+        "test/sql/cleanup/expire_skips_empty_companions.test",
         "test/sql/data_inlining/inlined_expire_many_payloads.test_slow",
         "test/sql/data_inlining/inlined_expire_payload_groups.test_slow",
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
@@ -790,6 +792,7 @@
         "test/sql/branches/branch_inlined_after_rename.test",
         "test/sql/branches/branch_inlined_delete_after_fork.test",
         "test/sql/branches/branch_inlined_end_row.test",
+        "test/sql/branches/branch_expire_inlined_end_only.test",
         "test/sql/branches/branch_inlined_file_delete_row.test",
         "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/branches/branch_listing_after_main_flush.test",

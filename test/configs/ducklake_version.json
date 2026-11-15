@@ -246,6 +246,7 @@
         "test/sql/branches/branch_inlined_file_delete_row.test",
         "test/sql/branches/branch_inlined_delete_after_fork.test",
         "test/sql/branches/branch_inlined_end_row.test",
+        "test/sql/branches/branch_expire_inlined_end_only.test",
         "test/sql/branches/branch_nested_inlined.test",
         "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/rest/rest_serve_branch_refused.test",
@@ -280,6 +281,7 @@
     {
       "reason": "Reads or writes the branch column of the 2.0 snapshot and schema versions tables, which a 1.0 catalog does not have",
       "paths": [
+        "test/sql/cleanup/expire_reads_head_once.test",
         "test/sql/branches/schema_versions_branch_column.test",
         "test/sql/time_travel/at_timestamp_gap_without_expiry.test"
       ]
@@ -408,6 +410,7 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_superseded_drop_ends.test",
         "test/sql/data_inlining/inlined_shared_expire.test",
+        "test/sql/cleanup/expire_skips_empty_companions.test",
         "test/sql/data_inlining/inlined_expire_many_payloads.test_slow",
         "test/sql/data_inlining/inlined_expire_payload_groups.test_slow",
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
