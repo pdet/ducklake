@@ -754,7 +754,8 @@
         "test/sql/data_inlining/postgres_inlined_visibility_rows.test",
         "test/sql/metadata/postgres_read_committed_branch_memo.test",
         "test/sql/metadata/postgres_read_committed_listing_cache.test",
-        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test",
+        "test/sql/catalog/sqlite_native_catalog_load.test"
       ]
     },
     {
@@ -852,7 +853,8 @@
         "test/sql/branches/branch_pending_fork_tags.test",
         "test/sql/branches/postgres_branch_drop_read_committed.test",
         "test/sql/branches/postgres_branch_read_committed.test",
-        "test/sql/branches/branch_drop_flush_same_transaction.test"
+        "test/sql/branches/branch_drop_flush_same_transaction.test",
+        "test/sql/alter/float_widening_live_rows_shape.test"
       ]
     }
   ]
