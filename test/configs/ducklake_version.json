@@ -276,7 +276,8 @@
         "test/sql/quack/branch_read_during_main_flush.test",
         "test/sql/quack/branch_read_across_main_flush.test",
         "test/sql/branches/branch_drop_flush_same_transaction.test",
-        "test/sql/alter/float_widening_live_rows_shape.test"
+        "test/sql/alter/float_widening_live_rows_shape.test",
+        "test/sql/branches/branch_time_travel_listing_cache.test"
       ]
     },
     {

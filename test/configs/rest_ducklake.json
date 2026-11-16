@@ -624,7 +624,9 @@
         "test/sql/data_inlining/inlined_expire_many_payloads.test_slow",
         "test/sql/data_inlining/inlined_expire_payload_groups.test_slow",
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
-        "test/sql/data_inlining/inlined_foreign_payload_name.test"
+        "test/sql/data_inlining/inlined_foreign_payload_name.test",
+        "test/sql/time_travel/time_travel_listing_cache.test",
+        "test/sql/time_travel/time_travel_listing_cache_transaction.test"
       ]
     },
     {
@@ -854,7 +856,8 @@
         "test/sql/branches/postgres_branch_drop_read_committed.test",
         "test/sql/branches/postgres_branch_read_committed.test",
         "test/sql/branches/branch_drop_flush_same_transaction.test",
-        "test/sql/alter/float_widening_live_rows_shape.test"
+        "test/sql/alter/float_widening_live_rows_shape.test",
+        "test/sql/branches/branch_time_travel_listing_cache.test"
       ]
     }
   ]
