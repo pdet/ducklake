@@ -101,14 +101,34 @@ static bool IsNativeStatement(const string &query) {
 	return StringUtil::StartsWith(query, "SELECT ") && StringUtil::Contains(query, " FROM sqlite_query(");
 }
 
+//! Separates the error of a failing native statement from the statement that follows it
+static constexpr const char *STATEMENT_MARKER = "\nStatement: ";
+
 unique_ptr<QueryResult> SQLiteMetadataManager::Query(string &query) {
 	auto result = DuckLakeMetadataManager::Query(query);
 	if (result->HasError() && IsNativeStatement(query)) {
 		// SQLite names the failing column or table, the statement shows where it stands
 		auto &error = result->GetErrorObject();
-		result->SetError(ErrorData(error.Type(), StringUtil::Format("%s\nStatement: %s", error.RawMessage(), query)));
+		result->SetError(ErrorData(error.Type(), error.RawMessage() + STATEMENT_MARKER + query));
 	}
 	return result;
+}
+
+string SQLiteMetadataManager::CommitErrorWithoutQuery(const string &message) const {
+	// the end anchored rules of the profile match the error, which Query puts the statement after
+	// the suffix starts at the last marker a native statement follows, a value or the statement may hold the text
+	const string marker = STATEMENT_MARKER;
+	auto statement = message.rfind(marker);
+	while (statement != string::npos) {
+		if (IsNativeStatement(message.substr(statement + marker.size()))) {
+			return message.substr(0, statement);
+		}
+		if (statement == 0) {
+			break;
+		}
+		statement = message.rfind(marker, statement - 1);
+	}
+	return message;
 }
 
 DuckLakeCatalogInfo SQLiteMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
