@@ -1031,6 +1031,8 @@ void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
 		metadata_transaction_released = true;
+		// a reopened connection reads a newer view, so the cached reads do not hold
+		metadata_manager->InvalidateFileListCache();
 	}
 }
 

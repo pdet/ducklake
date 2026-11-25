@@ -2259,16 +2259,29 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 }
 
 optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	// every filtered count of a statement reads this again, so reuse it until the transaction writes
+	bool cacheable = !ShowsConcurrentCommits();
+	auto cache_key = StringUtil::Format("rowcount/%d/%d", table_id.index, snapshot.snapshot_id);
+	if (cacheable) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		auto cached = row_count_cache.Find(cache_key);
+		if (cached) {
+			return *cached;
+		}
+	}
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot),
 	                                       WritesFileVisibilityEvents(), true);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get exact data file row count from DuckLake: ");
+	optional_idx count;
 	for (auto &row : *result) {
-		return OptIdx(row, 0);
+		count = OptIdx(row, 0);
 	}
-	// LCOV_EXCL_START
-	return optional_idx();
-	// LCOV_EXCL_STOP
+	if (cacheable) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		row_count_cache.Store(cache_key, make_shared_ptr<optional_idx>(count), 1);
+	}
+	return count;
 }
 
 string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
@@ -3886,11 +3899,23 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 
 	auto query = GenerateFileListQuery(table, snapshot, filter_info, file_order, runtime_filter_stats_columns);
+	// reused until the transaction writes
+	bool cacheable = !ShowsConcurrentCommits();
+	auto cache_key = to_string(snapshot.snapshot_id) + "/" + to_string(snapshot.schema_version) + "\n" + query;
+	if (cacheable) {
+		shared_ptr<vector<DuckLakeFileListEntry>> listing;
+		{
+			lock_guard<mutex> guard(listing_cache_lock);
+			listing = file_list_cache.Find(cache_key);
+		}
+		if (listing) {
+			auto files = *listing;
+			AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
+			return files;
+		}
+	}
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get data file list from DuckLake: ");
-
-	// Query inlined file deletions for this table
-	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot, include_local_changes);
 
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
@@ -3917,19 +3942,32 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			column_stats.has_contains_nan = TryReadValue(row, col_idx++, column_stats.contains_nan);
 			file_entry.column_min_max.emplace(column_field_index, std::move(column_stats));
 		}
-
-		// Populate inlined file deletions for this file
-		auto del_entry = inlined_deletions.find(file_entry.file_id.index);
-		if (del_entry != inlined_deletions.end()) {
-			file_entry.inlined_file_deletions = std::move(del_entry->second);
-		}
-
 		files.push_back(std::move(file_entry));
 	}
 	if (WritesFileVisibilityEvents() && !OrdersByStats(file_order)) {
 		RestoreFileIdOrder(files);
 	}
+	if (cacheable && file_list_cache.Admits(files.size())) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		file_list_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeFileListEntry>>(files), files.size());
+	}
+	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 	return files;
+}
+
+void DuckLakeMetadataManager::AttachInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
+                                                         bool include_local_changes,
+                                                         vector<DuckLakeFileListEntry> &files) {
+	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot, include_local_changes);
+	if (inlined_deletions.empty()) {
+		return;
+	}
+	for (auto &file_entry : files) {
+		auto del_entry = inlined_deletions.find(file_entry.file_id.index);
+		if (del_entry != inlined_deletions.end()) {
+			file_entry.inlined_file_deletions = std::move(del_entry->second);
+		}
+	}
 }
 
 vector<DuckLakeFileListEntry>
@@ -3937,6 +3975,17 @@ DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table, DuckLakeS
                                             DuckLakeSnapshot end_snapshot,
                                             optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
 	auto table_id = table.GetTableId();
+	// table_changes executes the same insertion scan twice, so reuse the parsed rows
+	bool cacheable = !ShowsConcurrentCommits();
+	auto cache_key =
+	    StringUtil::Format("insertions/%d/%d/%d", table_id.index, start_snapshot.snapshot_id, end_snapshot.snapshot_id);
+	if (cacheable) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		auto cached = file_list_cache.Find(cache_key);
+		if (cached) {
+			return *cached;
+		}
+	}
 	string select_list = GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetDeleteFileSelectList("del");
@@ -3998,6 +4047,10 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		files.push_back(std::move(file_entry));
 	}
+	if (cacheable && file_list_cache.Admits(files.size())) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		file_list_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeFileListEntry>>(files), files.size());
+	}
 	return files;
 }
 
@@ -4005,6 +4058,36 @@ vector<DuckLakeDeleteScanEntry>
 DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
                                            DuckLakeSnapshot end_snapshot, bool include_local_changes,
                                            optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
+	// table_changes executes the same deletion scan twice, local changes stay uncached
+	if (include_local_changes || ShowsConcurrentCommits()) {
+		return ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
+	}
+	auto cache_key = StringUtil::Format("deletions/%d/%d/%d", table.GetTableId().index, start_snapshot.snapshot_id,
+	                                    end_snapshot.snapshot_id);
+	{
+		lock_guard<mutex> guard(listing_cache_lock);
+		auto cached = delete_scan_cache.Find(cache_key);
+		if (cached) {
+			return *cached;
+		}
+	}
+	auto files = ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
+	// the inlined deletions of the files are rows of the scan as well
+	idx_t rows = files.size();
+	for (auto &file : files) {
+		rows += file.inlined_file_deletions.size();
+	}
+	if (delete_scan_cache.Admits(rows)) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), rows);
+	}
+	return files;
+}
+
+vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::ReadTableDeletions(DuckLakeTableEntry &table,
+                                                                            DuckLakeSnapshot start_snapshot,
+                                                                            DuckLakeSnapshot end_snapshot,
+                                                                            bool include_local_changes) {
 	auto table_id = table.GetTableId();
 	string insert_snapshot = "CASE WHEN data.partial_max IS NULL THEN data.begin_snapshot END";
 	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
@@ -4731,10 +4814,12 @@ void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	InvalidateFileListCache();
 	return Query(snapshot, query);
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(string &query) {
+	InvalidateFileListCache();
 	return Query(query);
 }
 
@@ -4743,6 +4828,7 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteDropInTransaction(string
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &query) {
+	InvalidateFileListCache();
 	auto batch = "BEGIN TRANSACTION;\n" + query + "\nCOMMIT;";
 	auto result = Query(batch);
 	if (result->HasError()) {
@@ -5725,6 +5811,14 @@ void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 	insert_inlined_table_name_cache.clear();
 	delete_inlined_table_cache.clear();
 	committed_inlined_deletion_tables.reset();
+	InvalidateFileListCache();
+}
+
+void DuckLakeMetadataManager::InvalidateFileListCache() {
+	lock_guard<mutex> guard(listing_cache_lock);
+	file_list_cache.Clear();
+	delete_scan_cache.Clear();
+	row_count_cache.Clear();
 }
 
 map<idx_t, DuckLakeOverwrittenDeleteFile> DuckLakeMetadataManager::GetDeleteFiles(DuckLakeTableEntry &table,
