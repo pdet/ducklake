@@ -47,7 +47,9 @@ public:
 	}
 	unordered_set<string> ListInlinedDeletionTables() override;
 	void MigrateInlinedDataTypes() override;
-	bool IsRetryableCommitError(const string &message) const override;
+	bool IsRetryableCommitError(const ErrorData &error) const override;
+	//! The error without the batch, the error object variant of the base stays visible beside it
+	using DuckLakeMetadataManager::CommitErrorWithoutQuery;
 	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;

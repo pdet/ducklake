@@ -126,6 +126,7 @@
         "test/sql/comments/comment_on_view_column_update.test",
         "test/sql/comments/copy_database_view_column_comments.test",
         "test/sql/comments/drop_view_expires_view_column_tags.test",
+        "test/sql/catalog/catalog_load_grouped_aggregates.test",
         "test/sql/rest/rest_view_column_comment.test"
       ]
     },
@@ -260,6 +261,8 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
         "test/sql/data_inlining/inlined_ends_expire.test",
+        "test/sql/catalog/sqlite_native_catalog_load.test",
+        "test/sql/catalog/sqlite_native_head_and_stats.test",
         "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
         "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
       ]

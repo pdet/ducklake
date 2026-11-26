@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/set.hpp"
 #include "duckdb/common/unordered_set.hpp"
@@ -40,6 +41,7 @@ struct DuckLakeRetryConfig;
 struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
+class DatabaseInstance;
 class SQLStatement;
 class FileSystem;
 struct CreateTableInfo;
@@ -290,15 +292,20 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether a rule of the profile retries the error of a failed commit
+	virtual bool IsRetryableCommitError(const ErrorData &error) const;
 	//! Whether the catalog rejected the commit with the error: it rolled back, so the commit is not in it
-	bool IsCatalogRejection(const string &message) const;
+	bool IsCatalogRejection(const ErrorData &error) const;
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;
 	}
+	//! The same for an error object, exact where the object carries the error under ERROR_WITHOUT_STATEMENT_KEY
+	string CommitErrorWithoutQuery(const ErrorData &error) const;
 	//! Advice added to the error of a commit that failed for good
-	virtual string CommitErrorHint(const string &message) const;
+	virtual string CommitErrorHint(const ErrorData &error) const;
+	//! The key under which a manager that appends the statement to an error keeps the error alone
+	static constexpr const char *ERROR_WITHOUT_STATEMENT_KEY = "ducklake_error_without_statement";
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();
@@ -488,6 +495,31 @@ public:
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
+	//! A result column of a catalog load statement with the type the parser reads it as
+	struct CatalogLoadColumn {
+		string name;
+		LogicalType type;
+	};
+	//! The SQL of a catalog load, DuckDB SQL run as rendered unless a backend supplies its own
+	struct CatalogLoadDialect {
+		std::function<string(const vector<pair<string, string>> &, const string &)> render_list_aggregation;
+		std::function<string(const vector<pair<string, string>> &, const string &, const string &, const string &)>
+		    render_ordered_list_subquery;
+		std::function<string(const string &, const vector<CatalogLoadColumn> &)> wrap_statement;
+
+		//! The aggregate of the fields as a list of structs, in the order when one is given
+		string ListAggregation(const vector<pair<string, string>> &fields, const string &order = string()) const;
+		//! The scalar subquery aggregating the rows of the source that pass the filter, in the given order
+		string OrderedListSubquery(const vector<pair<string, string>> &fields, const string &order, const string &from,
+		                           const string &filter) const;
+		//! The statement the executor runs, which returns the columns with the given types
+		string Statement(const string &statement, const vector<CatalogLoadColumn> &columns) const;
+	};
+	//! The json extension casts the list aggregates of a native load back, a linked copy loads without autoloading
+	static bool JsonExtensionAvailable(DatabaseInstance &db);
+	//! The select list that casts the list columns of a native result back from their json text
+	static string ListColumnsFromJson(const vector<CatalogLoadColumn> &columns);
+
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
@@ -497,7 +529,7 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
-	                        bool row_visibility = false);
+	                        bool row_visibility = false, const CatalogLoadDialect &dialect = CatalogLoadDialect());
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -1010,6 +1042,8 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
 	string MainSnapshotFilter() const;
+	//! The statement of the global table stats read, of the given tables alone when ids are given
+	virtual string GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 

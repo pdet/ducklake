@@ -3183,7 +3183,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
-				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
+				retryable_metadata_error = context.is_retryable_metadata_error(commit_error);
 				commit_error.Throw("Failed to flush changes into DuckLake: ");
 			}
 			if (!expired_snapshots.empty()) {
@@ -3199,13 +3199,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			RollbackKeepingError(context);
-			retryable_metadata_error =
-			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
-			auto error_without_query = context.commit_error_without_query(error.RawMessage());
+			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error);
+			auto error_without_query = context.commit_error_without_query(error);
 			bool retryable =
 			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query));
 			// a rejection is an answer of the catalog: it rolled back, so nothing was published
-			bool rejected = retryable || context.is_catalog_rejection(error.RawMessage());
+			bool rejected = retryable || context.is_catalog_rejection(error);
 			if (commit_sent && (!rejected || CommitMayHaveBeenPublished(error))) {
 				// sent and not rejected, as after a lost connection: the commit may have been published
 				context.report_commit_outcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
@@ -3241,7 +3240,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 					    "Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
 					    retry_config.max_retry_count, suggested_count);
 				}
-				error_message += context.commit_error_hint(error.Message());
+				error_message += context.commit_error_hint(error);
 				error.Throw(error_message);
 			}
 
