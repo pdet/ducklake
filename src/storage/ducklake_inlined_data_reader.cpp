@@ -1,6 +1,7 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
@@ -174,6 +175,12 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		if (committed_rows) {
 			data = ProjectCommittedRows(context, *committed_rows, columns_to_read);
 		}
+		if (!data && read_info.scan_type == DuckLakeScanType::SCAN_TABLE &&
+		    transaction->GetCatalog().InlinedTableIsEmpty(*transaction, table_name, read_info.snapshot.snapshot_id)) {
+			// an earlier scan found no live rows at this snapshot
+			data = make_shared_ptr<DuckLakeInlinedData>();
+			data->data = make_uniq<ColumnDataCollection>(context, expected_types);
+		}
 		if (!data) {
 			unique_ptr<QueryResult> query_result;
 			switch (read_info.scan_type) {
@@ -196,6 +203,9 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				throw InternalException("Unknown DuckLake scan type");
 			}
 			data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
+		}
+		if (read_info.scan_type == DuckLakeScanType::SCAN_TABLE && data->data->Count() == 0) {
+			transaction->GetCatalog().SetInlinedTableEmpty(*transaction, table_name, read_info.snapshot.snapshot_id);
 		}
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();

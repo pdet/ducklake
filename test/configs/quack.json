@@ -270,6 +270,12 @@
         "test/sql/stats/stats_reads_filter_table.test",
         "test/sql/stats/null_first_bounds_unrelated_commits.test"
       ]
+    },
+    {
+      "reason": "Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent compaction already lists the merged file instead of its own view",
+      "paths": [
+        "test/sql/time_travel/time_travel_listing_cache_transaction.test"
+      ]
     }
   ]
 }

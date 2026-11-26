@@ -1,0 +1,58 @@
+# name: test/sql/data_inlining/postgres_empty_inlined_cache_rollback.test
+# description: a transaction that expired snapshots and rolls back records no empty inlined table for the others
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DATA_INLINING_ROW_LIMIT 10,
+    META_ISOLATION_LEVEL 'READ COMMITTED')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT i FROM dl.t
+----
+42
+
+statement ok con2
+DELETE FROM dl.t
+
+# the expiry of con1 removes the version its own reads still see, until the rollback brings it back
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+# a later head read of the transaction shares nothing either
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [999])
+
+query I con1
+SELECT i FROM dl.t
+----
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT i FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1
+----
+42
+
+query I
+SELECT i FROM dl.t AT (VERSION => 1)
+----
+42

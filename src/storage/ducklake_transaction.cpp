@@ -1031,8 +1031,8 @@ void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
 		metadata_transaction_released = true;
-		// a reopened connection reads a newer view, so the cached reads do not hold
-		metadata_manager->InvalidateFileListCache();
+		// a reopened connection reads a newer view than the head, so the transaction shares no read any more
+		metadata_manager->DropSharedReads();
 	}
 }
 
@@ -2473,6 +2473,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
+		ducklake_catalog.ObserveListingHead(snapshot->snapshot_id);
 	}
 	return *snapshot;
 }

@@ -3899,7 +3899,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 
 	auto query = GenerateFileListQuery(table, snapshot, filter_info, file_order, runtime_filter_stats_columns);
-	// reused until the transaction writes
+	// reused until the transaction writes, and by other transactions under the same head
 	bool cacheable = !ShowsConcurrentCommits();
 	auto cache_key = to_string(snapshot.snapshot_id) + "/" + to_string(snapshot.schema_version) + "\n" + query;
 	if (cacheable) {
@@ -3907,6 +3907,13 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		{
 			lock_guard<mutex> guard(listing_cache_lock);
 			listing = file_list_cache.Find(cache_key);
+		}
+		if (!listing && listing_head.IsValid()) {
+			listing = transaction.GetCatalog().TryGetCachedListing(cache_key, listing_head.GetIndex());
+			if (listing) {
+				lock_guard<mutex> guard(listing_cache_lock);
+				file_list_cache.Store(cache_key, listing, listing->size());
+			}
 		}
 		if (listing) {
 			auto files = *listing;
@@ -3948,8 +3955,12 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		RestoreFileIdOrder(files);
 	}
 	if (cacheable && file_list_cache.Admits(files.size())) {
+		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
+		if (listing_head.IsValid()) {
+			transaction.GetCatalog().StoreCachedListing(cache_key, listing_head.GetIndex(), parsed);
+		}
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeFileListEntry>>(files), files.size());
+		file_list_cache.Store(cache_key, std::move(parsed), files.size());
 	}
 	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 	return files;
@@ -5815,10 +5826,20 @@ void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 }
 
 void DuckLakeMetadataManager::InvalidateFileListCache() {
-	lock_guard<mutex> guard(listing_cache_lock);
-	file_list_cache.Clear();
-	delete_scan_cache.Clear();
-	row_count_cache.Clear();
+	// the reads of a transaction that wrote metadata show its own changes, so it shares none of them
+	DropSharedReads();
+	transaction.GetCatalog().InvalidateListingCache();
+}
+
+void DuckLakeMetadataManager::DropSharedReads() {
+	{
+		lock_guard<mutex> guard(listing_cache_lock);
+		file_list_cache.Clear();
+		delete_scan_cache.Clear();
+		row_count_cache.Clear();
+	}
+	shares_reads = false;
+	listing_head = optional_idx();
 }
 
 map<idx_t, DuckLakeOverwrittenDeleteFile> DuckLakeMetadataManager::GetDeleteFiles(DuckLakeTableEntry &table,
@@ -7221,6 +7242,9 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 		throw InvalidInputException("The catalog was migrated by another connection from version %s to %s, reattach "
 		                            "to pick up the new version",
 		                            attached_version, catalog_version);
+	}
+	if (shares_reads) {
+		listing_head = snapshot->snapshot_id;
 	}
 	return snapshot;
 }

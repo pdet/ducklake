@@ -1,0 +1,57 @@
+# name: test/sql/compaction/compaction_release_shares_no_empty_table.test
+# description: a compaction that released its metadata transaction records no empty inlined table under the head it left
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DATA_INLINING_ROW_LIMIT 1)
+
+statement ok
+CREATE TABLE dl.a AS SELECT i::INTEGER i FROM range(10) r(i)
+
+statement ok
+INSERT INTO dl.a SELECT i::INTEGER FROM range(10, 20) r(i)
+
+statement ok
+CREATE TABLE dl.b AS SELECT 42::INTEGER i
+
+# the sort keeps the compaction busy while the other connection flushes b
+statement ok
+ALTER TABLE dl.a SET SORTED BY (COALESCE(sleep_ms(50), i))
+
+statement ok old
+BEGIN
+
+query I old
+SELECT sum(i) FROM dl.b
+----
+42
+
+# the compaction releases its metadata transaction after planning, its scan of b reopens a newer view
+concurrentloop i 0 2
+
+statement ok
+SELECT sleep_ms({i} * 350)
+
+statement ok
+SELECT * FROM query(CASE WHEN {i} = 0 THEN
+    'WITH c AS MATERIALIZED (SELECT * FROM ducklake_merge_adjacent_files(''dl'', ''a'')) SELECT sum(b.i) FROM c CROSS JOIN dl.b b'
+    ELSE 'SELECT * FROM ducklake_flush_inlined_data(''dl'', table_name => ''b'')' END)
+
+endloop
+
+# the transaction that started before the flush still reads the rows of the inlined table
+query I old
+SELECT sum(i) FROM dl.b
+----
+42
+
+statement ok old
+ROLLBACK

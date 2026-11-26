@@ -1858,4 +1858,72 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 	return metadata_catalog_unused;
 }
 
+void DuckLakeCatalog::ObserveListingHead(idx_t head) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (listing_cache_head.IsValid() && listing_cache_head.GetIndex() == head) {
+		return;
+	}
+	listing_cache.Clear();
+	listing_cache_head = head;
+}
+
+shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t head) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
+		return nullptr;
+	}
+	return listing_cache.Find(key);
+}
+
+void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t head,
+                                         shared_ptr<vector<DuckLakeFileListEntry>> entries) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
+		return;
+	}
+	auto rows = entries->size();
+	listing_cache.Store(key, std::move(entries), rows);
+}
+
+void DuckLakeCatalog::InvalidateListingCache() {
+	lock_guard<mutex> guard(listing_cache_lock);
+	listing_cache.Clear();
+	listing_cache_head = optional_idx();
+}
+
+bool DuckLakeCatalog::InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                          idx_t snapshot_id) {
+	auto head = transaction.GetMetadataManager().GetListingHead();
+	if (!head.IsValid()) {
+		return false;
+	}
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		return false;
+	}
+	// a transaction whose view predates the flush that emptied the table may not see the flushed file yet
+	auto entry = empty_inlined_tables.find(table_name);
+	return entry != empty_inlined_tables.end() && head.GetIndex() >= entry->second;
+}
+
+void DuckLakeCatalog::SetInlinedTableEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                           idx_t snapshot_id) {
+	auto head = transaction.GetMetadataManager().GetListingHead();
+	if (!head.IsValid()) {
+		return;
+	}
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		empty_inlined_tables.clear();
+		empty_inlined_tables_snapshot = snapshot_id;
+	}
+	auto entry = empty_inlined_tables.find(table_name);
+	if (entry == empty_inlined_tables.end()) {
+		empty_inlined_tables.emplace(table_name, head.GetIndex());
+	} else if (entry->second > head.GetIndex()) {
+		// the earliest view that found the table empty lets the most transactions skip it
+		entry->second = head.GetIndex();
+	}
+}
+
 } // namespace duckdb

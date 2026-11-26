@@ -752,6 +752,12 @@ public:
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	//! Drops the cached listings, deletion scans and row counts, called when the transaction writes metadata
 	void InvalidateFileListCache();
+	//! Drops the cached reads and the sharing of reads, the view of the transaction is its own from here on
+	void DropSharedReads();
+	//! The head snapshot the transaction loaded, the reads it cached hold under it
+	optional_idx GetListingHead() const {
+		return listing_head;
+	}
 	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
 	static bool IsDuckDBMetadataType(const string &metadata_type);
 	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
@@ -1170,7 +1176,10 @@ private:
 	                                               const Identifier &snapshot_column);
 
 	unordered_map<idx_t, Identifier> insert_inlined_table_name_cache;
-	//! Parsed reads a statement repeats, kept until the transaction writes or releases its view
+	//! Parsed reads a statement repeats, kept until the transaction writes, with the head they were read under
+	optional_idx listing_head;
+	//! Whether the reads may use the shared caches, false once the transaction wrote metadata or released its view
+	bool shares_reads = true;
 	mutex listing_cache_lock;
 	DuckLakeListingCache<vector<DuckLakeFileListEntry>> file_list_cache;
 	DuckLakeListingCache<vector<DuckLakeDeleteScanEntry>> delete_scan_cache;

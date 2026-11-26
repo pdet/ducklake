@@ -1,0 +1,102 @@
+# name: test/sql/data_inlining/empty_inlined_table_scan_cache.test
+# description: a scan skips the inlined tables an earlier scan found without live rows at the same snapshot
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+# the first scan reads the inlined table, the second one knows it has no live rows at this snapshot
+query I
+SELECT i FROM dl.t
+----
+
+query I
+SELECT i FROM dl.t
+----
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+statement ok
+CALL disable_logging()
+
+# a catalog whose reads show the commits of others keeps no head to record the empty table under
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM%ducklake_inlined_data_1_1%')
+    ELSE 1 END
+----
+1
+
+# the rows of a later snapshot are read, and the snapshot without live rows stays empty
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT i FROM dl.t
+----
+3
+
+query I
+SELECT count(*) FROM dl.t
+----
+1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3)
+----
+
+query I
+SELECT i FROM dl.t
+----
+3
+
+# a transaction that started before a flush still reads the rows of the inlined table
+statement ok con1
+BEGIN
+
+query I con1
+SELECT i FROM dl.t
+----
+3
+
+statement ok con2
+CALL ducklake_flush_inlined_data('dl')
+
+query I con2
+SELECT i FROM dl.t
+----
+3
+
+query I con1
+SELECT i FROM dl.t
+----
+3
+
+statement ok con1
+COMMIT
