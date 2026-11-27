@@ -2478,12 +2478,23 @@ LEFT JOIN (
 	                          StringUtil::Join(group_keys, ", "), name, StringUtil::Join(join_keys, " AND "));
 }
 
+DuckLakeMetadataManager::CatalogLoadDialect::CatalogLoadDialect() : ships_column_rows(true) {
+}
+
 string DuckLakeMetadataManager::CatalogLoadDialect::ListAggregation(const vector<pair<string, string>> &fields,
                                                                     const string &order) const {
 	if (render_list_aggregation) {
 		return render_list_aggregation(fields, order);
 	}
 	return DuckLakeMetadataManager::ListAggregation(fields, order);
+}
+
+string DuckLakeMetadataManager::CatalogLoadDialect::ColumnRowsListAggregation(
+    const vector<pair<string, string>> &fields) const {
+	if (!ships_column_rows) {
+		return DuckLakeMetadataManager::ListAggregation(fields);
+	}
+	return ListAggregation(fields);
 }
 
 string DuckLakeMetadataManager::CatalogLoadDialect::OrderedListSubquery(const vector<pair<string, string>> &fields,
@@ -2501,8 +2512,9 @@ string DuckLakeMetadataManager::CatalogLoadDialect::OrderedListSubquery(const ve
 }
 
 string DuckLakeMetadataManager::CatalogLoadDialect::Statement(const string &statement,
-                                                              const vector<CatalogLoadColumn> &columns) const {
-	if (wrap_statement) {
+                                                              const vector<CatalogLoadColumn> &columns,
+                                                              bool native) const {
+	if (wrap_statement && native) {
 		return wrap_statement(statement, columns);
 	}
 	return statement;
@@ -2538,8 +2550,8 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     const CatalogLoadDialect &dialect) {
 	DuckLakeCatalogInfo catalog;
 	// the statements go to the executor in the SQL of the dialect, with the columns and types the parser reads
-	auto run = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
-		return query_executor(snapshot, dialect.Statement(statement, columns));
+	auto run = [&](const string &statement, const vector<CatalogLoadColumn> &columns, bool native = true) {
+		return query_executor(snapshot, dialect.Statement(statement, columns, native));
 	};
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
@@ -2660,12 +2672,13 @@ ORDER BY tbl.table_id ASC
 	}
 
 	// load the column information, the rows of a table follow their table id
-	auto column_tags_join = GroupedListJoin(
-	    "column_tags", dialect.ListAggregation(tag_fields("col_tag")), "{METADATA_CATALOG}.ducklake_column_tag col_tag",
-	    LiveRowFilter(row_visibility, "col_tag", "column_tag",
-	                  "{SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < "
-	                  "col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)"),
-	    {{"col_tag.table_id", "col.table_id"}, {"col_tag.column_id", "col.column_id"}});
+	auto column_tags_join =
+	    GroupedListJoin("column_tags", dialect.ColumnRowsListAggregation(tag_fields("col_tag")),
+	                    "{METADATA_CATALOG}.ducklake_column_tag col_tag",
+	                    LiveRowFilter(row_visibility, "col_tag", "column_tag",
+	                                  "{SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} < "
+	                                  "col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)"),
+	                    {{"col_tag.table_id", "col.table_id"}, {"col_tag.column_id", "col.column_id"}});
 	const vector<CatalogLoadColumn> column_columns {{"table_id", LogicalType::BIGINT},
 	                                                {"column_id", LogicalType::BIGINT},
 	                                                {"column_name", LogicalType::VARCHAR},
@@ -2692,7 +2705,7 @@ ORDER BY col.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 	                                LiveRowFilter(row_visibility, "col", "column",
 	                                              "{SNAPSHOT_ID} >= col.begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                              "col.end_snapshot OR col.end_snapshot IS NULL)")),
-	             column_columns);
+	             column_columns, dialect.ships_column_rows);
 	result->ThrowIfError("Failed to get column information from DuckLake: ");
 	// child indexes from the root column to each column, stable since children are only appended
 	unordered_map<idx_t, vector<idx_t>> column_paths;

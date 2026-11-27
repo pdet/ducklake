@@ -540,9 +540,42 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
-static string PostgresQuery(const string &remote_query) {
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+static string PostgresQuery(const string &remote_query, const string &select_list = "*") {
+	return StringUtil::Format("SELECT %s FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)", select_list,
 	                          SQLString(remote_query));
+}
+
+//! The list aggregate of the server, a json array of objects
+static string JsonAggregation(const vector<pair<string, string>> &fields, const string &order) {
+	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
+		return "'" + entry.first + "', " + entry.second;
+	});
+	auto order_part = order.empty() ? string() : " ORDER BY " + order;
+	return "json_agg(json_build_object(" + fields_part + ")" + order_part + ")";
+}
+
+DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
+	auto &catalog = transaction.GetCatalog();
+	if (!JsonExtensionAvailable(catalog.GetDatabase())) {
+		// LCOV_EXCL_START
+		return DuckLakeMetadataManager::GetCatalogForSnapshot(snapshot);
+		// LCOV_EXCL_STOP
+	}
+	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
+	CatalogLoadDialect dialect;
+	dialect.render_list_aggregation = JsonAggregation;
+	// the scanner reads the column rows in parallel
+	dialect.ships_column_rows = false;
+	dialect.wrap_statement = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
+		// the server runs the statement as a whole, so only the live rows cross the wire
+		auto remote = statement;
+		SubstituteTransactionPlaceholders(snapshot, remote);
+		SubstituteCatalogPlaceholders(remote, schema);
+		return PostgresQuery(remote, ListColumnsFromJson(columns));
+	};
+	return BuildCatalogForSnapshot(
+	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, catalog.DataPath(), catalog.Separator(),
+	    catalog.SupportsV1_1Metadata(), catalog.SupportsRowVisibility(), dialect);
 }
 
 bool PostgresMetadataManager::ProbeMetadataColumns() {

@@ -509,14 +509,20 @@ public:
 		std::function<string(const vector<pair<string, string>> &, const string &, const string &, const string &)>
 		    render_ordered_list_subquery;
 		std::function<string(const string &, const vector<CatalogLoadColumn> &)> wrap_statement;
+		//! Whether the wrapper runs the column row statement too
+		bool ships_column_rows;
+
+		CatalogLoadDialect();
 
 		//! The aggregate of the fields as a list of structs, in the order when one is given
 		string ListAggregation(const vector<pair<string, string>> &fields, const string &order = string()) const;
+		//! The aggregate of the column row statement, DuckDB's own when the scanner runs that statement
+		string ColumnRowsListAggregation(const vector<pair<string, string>> &fields) const;
 		//! The scalar subquery aggregating the rows of the source that pass the filter, in the given order
 		string OrderedListSubquery(const vector<pair<string, string>> &fields, const string &order, const string &from,
 		                           const string &filter) const;
 		//! The statement the executor runs, which returns the columns with the given types
-		string Statement(const string &statement, const vector<CatalogLoadColumn> &columns) const;
+		string Statement(const string &statement, const vector<CatalogLoadColumn> &columns, bool native = true) const;
 	};
 	//! The json extension casts the list aggregates of a native load back, a linked copy loads without autoloading
 	static bool JsonExtensionAvailable(DatabaseInstance &db);
